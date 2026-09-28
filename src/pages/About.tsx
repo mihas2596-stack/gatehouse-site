@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Heart, BadgeCheck, Shield } from "lucide-react";
 import SEO from "@/components/SEO";
 import { Check } from "lucide-react";
-import nikFounder from "@/assets/nik-founder.jpeg.asset.json";
+import nikFounder from "@/assets/nik-founder.jpeg";
 
 const MANIFESTO_ROWS: { good: string }[] = [
   { good: "Most homes get a price online; larger homes can email us for a custom quote" },
@@ -38,7 +38,7 @@ const About = () => {
           <div className="grid md:grid-cols-2 gap-8 items-center">
             <div className="aspect-[4/5] overflow-hidden rounded-2xl max-w-sm w-full max-h-[360px] md:max-h-none mx-auto md:mx-0">
               <img
-                src={nikFounder.url}
+                src={nikFounder}
                 alt="Nick, founder of Gatehouse Home Cleaning"
                 className="w-full h-full object-cover object-top"
               />

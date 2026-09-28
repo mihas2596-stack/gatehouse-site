@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import IncludedRooms from "@/components/IncludedRooms";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
-import founderAsset from "@/assets/nik-founder.jpeg.asset.json";
+import founderAsset from "@/assets/nik-founder.jpeg";
 import { OFFER_TEXT } from "@/config/offer";
 import { PRICES, TIERS, FOUNDING_FIRST_CLEAN } from "@/config/calculator";
 
@@ -120,7 +120,7 @@ const Index = () => (
 
     <div className="border-b border-border/60 bg-background py-4">
       <div className="container flex items-center justify-center gap-3">
-        <img src={founderAsset.url} alt="Nick, owner of Gatehouse Home Cleaning" className="h-11 w-11 shrink-0 rounded-full object-cover" />
+        <img src={founderAsset} alt="Nick, owner of Gatehouse Home Cleaning" className="h-11 w-11 shrink-0 rounded-full object-cover" />
         <div className="text-sm text-foreground">
           <p className="font-semibold">You can reach a real person</p>
           <p>Nick, owner — <a className="text-primary underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a></p>
@@ -257,7 +257,7 @@ const Index = () => (
               {number === "3" && (
                 <figure className="mt-1 flex items-start gap-3 border-t border-border/60 pt-3">
                   <img
-                    src={founderAsset.url}
+                    src={founderAsset}
                     alt="Nick, owner of Gatehouse Home Cleaning"
                     loading="lazy"
                     className="h-12 w-12 shrink-0 rounded-full object-cover"
