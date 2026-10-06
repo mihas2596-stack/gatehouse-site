@@ -7,7 +7,7 @@ import { FOUNDING_FIRST_CLEAN } from "@/config/calculator";
 
 const Reviews = () => {
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="Founding Clients | Gatehouse Home Cleaning"
         description="The first 10 households in our seven-city area book at a founding price and keep it for six months."

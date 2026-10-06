@@ -9,6 +9,7 @@ interface SEOProps {
   twitterDescription?: string;
   metaDescription?: string;
   image?: string;
+  noindex?: boolean;
 }
 
 const SEO = ({
@@ -20,16 +21,19 @@ const SEO = ({
   twitterDescription,
   metaDescription,
   image = "https://gatehousehomecleaning.com/og-image.png",
+  noindex = false,
 }: SEOProps) => {
   const finalOgTitle = ogTitle ?? title;
+  const canonical = url?.replace("https://gatehousehomecleaning.com", "https://www.gatehousehomecleaning.com");
   return (
     <Helmet>
       <title>{title}</title>
       <meta name="description" content={metaDescription ?? description} />
-      {url && <link rel="canonical" href={url} />}
+      {canonical && <link rel="canonical" href={canonical} />}
+      <meta name="robots" content={noindex ? "noindex, follow" : "index, follow"} />
       <meta property="og:title" content={finalOgTitle} />
       <meta property="og:description" content={ogDescription ?? description} />
-      {url && <meta property="og:url" content={url} />}
+      {canonical && <meta property="og:url" content={canonical} />}
       <meta property="og:image" content={image} />
       <meta property="og:image:secure_url" content={image} />
       <meta name="twitter:title" content={finalOgTitle} />

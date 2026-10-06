@@ -14,7 +14,7 @@ export default {
     },
     extend: {
       screens: {
-        nav: "1440px",
+        nav: "1024px",
       },
       fontFamily: {
         heading: ['"Playfair Display"', 'Georgia', 'serif'],

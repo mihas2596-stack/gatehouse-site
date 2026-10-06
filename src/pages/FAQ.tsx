@@ -6,7 +6,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { FAQS } from "@/config/faqs";
 
 const FAQ = () => (
-  <div className="pt-24">
+  <div className="page-shell">
     <SEO
       title="House Cleaning FAQ | Gatehouse Home Cleaning"
       description="Answers about payment, home access, pets, pausing visits and cancellation for cleaning in North Atlanta."
@@ -53,7 +53,7 @@ const FAQ = () => (
 
         <div className="mt-10 text-center">
           <Button asChild variant="hero" size="lg" className="rounded-full px-8">
-            <Link to="/quote">See My Exact Price</Link>
+            <Link to="/quote">See My Price</Link>
           </Button>
         </div>
       </div>

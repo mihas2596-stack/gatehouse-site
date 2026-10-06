@@ -1,1 +1,14 @@
-{"rewrites":[{"destination":"/","source":"/(.*)"}]}
+{
+  "buildCommand": "npm run build",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ],
+  "functions": {
+    "api/send-contact-email.ts": {
+      "maxDuration": 40
+    }
+  }
+}

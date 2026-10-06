@@ -1,8 +1,15 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      function onTermlyLoaded() {
+        function changed() { document.dispatchEvent(new Event("gh-consent")); }
+        Termly.on("initialized", changed);
+        Termly.on("consent", changed);
+      }
+    </script>
     <!-- Termly Consent Banner (must load before any tracking scripts) -->
-    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on"></script>
+    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on" onload="onTermlyLoaded()"></script>
     <!-- Google Tag Manager (deferred until idle/interaction to reduce TBT) -->
     <script>
       (function(){
@@ -48,11 +55,11 @@
     <!-- Open Graph -->
     <meta property="og:site_name" content="Gatehouse Home Cleaning">
     <meta property="og:locale" content="en_US">
-    <meta property="og:url" content="https://gatehousehomecleaning.com/">
+    <meta property="og:url" content="https://www.gatehousehomecleaning.com/">
     <meta property="og:title" content="Every-Other-Week House Cleaning in North Atlanta | Gatehouse">
     <meta property="og:description" content="Same day, same time, every other week in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online. No long-term commitment.">
-    <meta property="og:image" content="https://gatehousehomecleaning.com/og-image.png">
-    <meta property="og:image:secure_url" content="https://gatehousehomecleaning.com/og-image.png">
+    <meta property="og:image" content="https://www.gatehousehomecleaning.com/og-image.png">
+    <meta property="og:image:secure_url" content="https://www.gatehousehomecleaning.com/og-image.png">
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
@@ -62,7 +69,7 @@
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Every-Other-Week House Cleaning in North Atlanta | Gatehouse">
     <meta name="twitter:description" content="Same day, same time, every other week in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online. No long-term commitment.">
-    <meta name="twitter:image" content="https://gatehousehomecleaning.com/og-image.png">
+    <meta name="twitter:image" content="https://www.gatehousehomecleaning.com/og-image.png">
     <meta name="twitter:image:alt" content="Gatehouse Home Cleaning">
   </head>
 

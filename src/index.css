@@ -304,7 +304,7 @@
   /* Tighten small uppercase eyebrow labels and the gap to the heading below */
   .uppercase.tracking-wider,
   .uppercase.tracking-widest,
-  .font-script {
+  section .font-script {
     font-size: 0.95rem !important;
     letter-spacing: 0.04em !important;
   }
@@ -389,4 +389,22 @@
 /* Hide the mobile quick-actions bar while the mobile menu is open */
 body[data-menu-open="true"] .mobile-quick-actions {
   display: none;
+}
+
+/* Shared page framing stays independent of section-spacing utilities. */
+.page-shell { padding-top: 88px; }
+.skip-link { position: fixed; top: -100px; left: 1rem; z-index: 200; background: white; padding: .75rem 1rem; color: hsl(var(--primary)); }
+.skip-link:focus { top: .5rem; }
+a:focus-visible, button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 4px; }
+.quote-price-bar { bottom: calc(56px + env(safe-area-inset-bottom)); }
+body[data-menu-open="true"] .quote-price-bar { display: none; }
+@media (max-width: 767px) {
+  .page-shell { padding-top: 64px; }
+  header .font-script { font-size: clamp(1.125rem, 5.2vw, 1.4rem); letter-spacing: normal; }
+  footer .font-script { font-size: 1.75rem; letter-spacing: normal; }
+  input, select, textarea { font-size: 1rem; }
+  #booking-request { padding-bottom: 6rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

@@ -52,7 +52,7 @@ const faqs = [
 
 const Areas = () => {
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="Service Area: 7 North Atlanta Cities | Gatehouse"
         description="We clean homes in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell, Georgia. See your price online."

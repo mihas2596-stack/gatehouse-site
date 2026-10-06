@@ -13,4 +13,4 @@ Allow: /
 User-agent: *
 Allow: /
 
-Sitemap: https://gatehousehomecleaning.com/sitemap.xml
+Sitemap: https://www.gatehousehomecleaning.com/sitemap.xml

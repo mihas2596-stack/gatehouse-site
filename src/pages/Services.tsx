@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Home, CalendarClock, ArrowRight } from "lucide-react";
+import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -32,9 +32,14 @@ const mainService: ServiceCard = {
 
 const alsoAvailable: ServiceCard[] = [
   {
+    icon: Sparkles, title: "Deep clean", link: "/quote?service=deep", serviceKey: "deep",
+    desc: "A more detailed reset, including appliance and cabinet interiors. Recommended when your home needs more than regular upkeep.",
+    includes: ["All standard-clean checklist items", "Detailed cleaning for a fresh start", "Inside oven, fridge and cabinets", "See the full checklist before requesting a visit"],
+  },
+  {
     icon: Sparkles,
     title: "One-time clean",
-    link: "/quote?service=standard",
+    link: "/quote?service=standard&frequency=onetime",
     serviceKey: "standard",
     desc: "A single thorough refresh that dusts, vacuums, mops, and sanitizes bathrooms and kitchens throughout your home.",
     includes: ["All rooms dusted & vacuumed", "Bathrooms sanitized & polished", "Kitchen counters & appliances wiped", "Floors mopped throughout", "Trash removed & bins lined"],
@@ -44,17 +49,17 @@ const alsoAvailable: ServiceCard[] = [
     title: "Move-in / Move-out",
     link: "/quote?service=moveinout",
     serviceKey: "moveinout",
-    desc: "For moving in or out — every inch made spotless, from empty closets to clean window tracks.",
-    includes: ["Complete deep clean of all rooms", "Inside all cabinets & drawers", "All appliances cleaned inside/out", "Windows & tracks cleaned", "Garage sweeping (if needed)"],
+    desc: "A thorough clean for an empty home, including appliance interiors and cabinets.",
+    includes: ["Complete deep clean of all rooms", "Inside all cabinets & drawers", "All appliances cleaned inside/out", "Interior windows available as an add-on"],
   },
 ];
 
 const Services = () => {
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="House Cleaning Services | Gatehouse Home Cleaning"
-        description="Every-other-week house cleaning, plus one-time and move-in or move-out cleans in North Atlanta. Prices online."
+        description="Every-other-week house cleaning, plus one-time, deep and move-in or move-out cleans in North Atlanta. Prices online."
         url="https://gatehousehomecleaning.com/services"
       />
       {/* Hero */}
@@ -74,7 +79,7 @@ const Services = () => {
 
           <div className="mt-12">
             <h2 className="font-heading text-2xl font-bold mb-6 text-center">Also available</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {alsoAvailable.map((s) => (
                 <ServiceCardBlock key={s.title} service={s} headingLevel="h3" compact />
               ))}
@@ -106,7 +111,7 @@ const ServiceCardBlock = ({
         <Heading className={`font-heading font-bold mb-2 ${compact ? "text-xl md:text-2xl" : "text-2xl md:text-3xl"}`}>{s.title}</Heading>
         <p className="text-foreground leading-relaxed mb-6">{s.desc}</p>
         <Button variant="hero" size="lg" asChild>
-          <Link to={s.link}>See your exact price <ArrowRight className="w-4 h-4" /></Link>
+          <Link to={s.link}>See your price</Link>
         </Button>
       </div>
       <div className="flex-1 w-full">

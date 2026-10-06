@@ -11,7 +11,7 @@ const CityPage = () => {
   if (!city) return <Navigate to="/areas" replace />;
 
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title={city.title}
         description={city.description}
@@ -26,7 +26,7 @@ const CityPage = () => {
           </h1>
           <p className="text-foreground text-lg">{city.description}</p>
           <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
-            <Link to="/quote">See My Exact Price</Link>
+            <Link to="/quote">See My Price</Link>
           </Button>
         </div>
       </section>

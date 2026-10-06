@@ -11,7 +11,7 @@ import { OFFER_TEXT } from "@/config/offer";
 import { PRICES, TIERS, FOUNDING_FIRST_CLEAN } from "@/config/calculator";
 
 const heroTrust = [
-  { Icon: Tag, label: "See your exact price" },
+  { Icon: Tag, label: "See your price" },
   { Icon: ShieldCheck, label: "Same day, same time, every other week" },
 ];
 
@@ -62,10 +62,10 @@ const Index = () => (
     <Helmet>
       <script type="application/ld+json">{JSON.stringify({
         "@context": "https://schema.org",
-        "@type": "LocalBusiness",
-        "@id": "https://gatehousehomecleaning.com/#business",
+        "@type": "Organization",
+        "@id": "https://www.gatehousehomecleaning.com/#business",
         name: "Gatehouse Home Cleaning",
-        url: "https://gatehousehomecleaning.com/",
+        url: "https://www.gatehousehomecleaning.com/",
         image: "https://gatehousehomecleaning.com/og-image.png",
         email: "hello@gatehousehomecleaning.com",
         areaServed: cities.map((name) => ({
@@ -77,7 +77,7 @@ const Index = () => (
     </Helmet>
 
     {/* 1. HERO */}
-    <section className="hero-section border-b border-border/60 bg-background pt-[88px] pb-10 md:max-h-[80vh] md:pt-24 md:pb-12">
+    <section className="hero-section border-b border-border/60 bg-background pt-[88px] pb-10 md:pt-24 md:pb-12">
       <div className="container">
         <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-8 md:grid-cols-2 md:gap-10">
           <figure className="order-2 md:order-2">
@@ -91,19 +91,19 @@ const Index = () => (
           </figure>
           <div className="order-1 animate-fade-up text-center md:order-1 md:text-left">
             <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[44px] lg:text-[50px]">
-              House Cleaning Every Other Week — Same Day, Same Time
+              A Clean Home, Every Other Week
             </h1>
             <p className="mt-4 text-base font-medium leading-relaxed text-foreground md:text-lg">
-              Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
+              Less cleaning on your to-do list. Serving Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
             </p>
             <p className="mt-2 text-base font-semibold text-sage-foreground md:text-lg">
-              No promo codes. No membership fee. No long-term commitment.
+              A fixed weekday and arrival window. No membership fee or long-term commitment.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
-              <Link to="/quote">See My Exact Price</Link>
+              <Link to="/quote">See My Price</Link>
             </Button>
             <p className="mt-3 text-sm font-medium text-muted-foreground">
-              You approve the clean before we charge your card.
+              Review your photo report before we charge your card. No response within 24 hours counts as approval.
             </p>
             <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2 md:justify-start">
               {heroTrust.map(({ Icon, label }) => (
@@ -201,7 +201,7 @@ const Index = () => (
             <p className="eyebrow mt-3 text-primary">Published, not hidden behind a phone call.</p>
           </div>
           <p className="mt-4 text-left text-base leading-relaxed text-foreground md:mt-5 md:text-lg">
-            Your price depends on home size, bedrooms, full and half bathrooms, the type of clean, how often we visit, whether a professional cleaned the home in the last 3 months, and any add-ons you pick.
+            Your price is based on bedrooms, full bathrooms, the type of clean, how often we visit, your cleaning history and add-ons. We collect square footage and half bathrooms to plan the visit; they do not change the calculator price.
           </p>
           <ul className="mt-5 space-y-3 text-left md:mt-6 md:space-y-4">
             {pricingPoints.map((point) => (
@@ -232,7 +232,7 @@ const Index = () => (
                 ))}
               </tbody>
             </table>
-            <p className="mt-3 text-sm text-foreground">Most homes get an exact price online. Larger homes — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
+            <p className="mt-3 text-sm text-foreground">Most homes can see an estimate online. Larger homes — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
           </div>
         </div>
       </div>
@@ -263,7 +263,7 @@ const Index = () => (
                     className="h-12 w-12 shrink-0 rounded-full object-cover"
                   />
                   <figcaption className="text-sm leading-relaxed text-muted-foreground">
-                    “I run Gatehouse myself, and my brother handles everything on the ground here in North Atlanta.” — Nick, owner
+                    “I manage your request and coordinate the visit. If you have a question, you can email me directly.” — Nick, owner
                   </figcaption>
                 </figure>
               )}

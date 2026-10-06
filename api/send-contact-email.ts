@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SERVICE_ZIPS, earliestServiceDate, validServiceDate } from "../src/config/service-area";
 
 // Vercel serverless function — replaces the Lovable Cloud edge function
 // "send-contact-email". Sends via Resend's public API directly; no Lovable
@@ -32,9 +33,11 @@ type Res = {
 };
 
 const ContactSchema = z.object({
-  name: z.string().min(1).max(255),
+  request_id: z.string().uuid().optional(),
+  website: z.string().max(300).optional(),
+  name: z.string().trim().min(1).max(255),
   phone: z.string().max(50).optional().or(z.literal("")),
-  email: z.string().max(255).optional().or(z.literal("")),
+  email: z.string().trim().max(255).optional().or(z.literal("")),
   service: z.string().max(255).optional().or(z.literal("")),
   date: z.string().max(50).optional().or(z.literal("")),
   time: z.string().max(50).optional().or(z.literal("")),
@@ -45,7 +48,13 @@ const ContactSchema = z.object({
   zip: z.string().max(20).optional().or(z.literal("")),
   address: z.string().max(200).optional().or(z.literal("")),
   price: z.string().max(20).optional().or(z.literal("")),
-  source: z.string().max(20).optional(),
+  attribution: z.object({
+    utm_source: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
+    utm_medium: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
+    utm_campaign: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
+    utm_content: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
+  }).optional(),
+  source: z.enum(["quote", "contact"]).default("contact"),
   terms_consent: z.boolean().optional(),
   photo_consent: z.boolean().optional(),
   sms_consent: z.boolean().optional(),
@@ -60,9 +69,9 @@ const bookingErrors = (d: z.infer<typeof ContactSchema>): Record<string, string>
   let digits = (d.phone || "").replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
   if (digits.length !== 10) errors.phone = "Enter a 10-digit US phone number.";
-  if (!/^\d{5}$/.test((d.zip || "").trim())) errors.zip = "Enter a 5-digit ZIP code.";
+  if (!SERVICE_ZIPS.has((d.zip || "").trim())) errors.zip = "Enter a ZIP in our North Atlanta service area.";
   if (!d.address || d.address.trim().length < 5) errors.address = "Enter your street address.";
-  if (!d.date || !/^\d{4}-\d{2}-\d{2}$/.test(d.date) || Number.isNaN(new Date(`${d.date}T12:00:00`).getTime()) || new Date(`${d.date}T12:00:00`).toISOString().slice(0, 10) !== d.date) errors.date = "Enter a valid preferred date as YYYY-MM-DD.";
+  if (!d.date || !validServiceDate(d.date) || d.date < earliestServiceDate()) errors.date = "Choose a valid preferred date at least 3 days ahead.";
   if (d.terms_consent !== true) errors.terms_consent = "Please agree to the Terms of Service and Privacy Policy.";
   if (d.photo_consent !== true) errors.photo_consent = "Please agree to the photo report.";
   return errors;
@@ -94,14 +103,16 @@ const corsHeaders = (origin: string | string[] | undefined): Record<string, stri
   return headers;
 };
 
-async function sendEmail(apiKey: string, payload: Record<string, unknown>) {
+async function sendEmail(apiKey: string, payload: Record<string, unknown>, idempotencyKey?: string) {
   const response = await fetch(RESEND_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15000),
   });
   let data: { name?: string; message?: string } = {};
   try {
@@ -113,7 +124,12 @@ async function sendEmail(apiKey: string, payload: Record<string, unknown>) {
 }
 
 export default async function handler(req: Req, res: Res) {
-  const headers = corsHeaders(req.headers["origin"]);
+  const origin = req.headers["origin"];
+  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+    res.status(403).json({ ok: false, error: "origin_not_allowed" });
+    return;
+  }
+  const headers = corsHeaders(origin);
   for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
 
   if (req.method === "OPTIONS") {
@@ -164,14 +180,16 @@ export default async function handler(req: Req, res: Res) {
       const errors: Record<string, string> =
         parsed.data.source === "quote"
           ? bookingErrors(parsed.data)
-          : parsed.data.email && !EMAIL_RE.test(parsed.data.email.trim())
-            ? { email: "Enter a valid email, like name@example.com." }
-            : {};
+          : {
+              ...(!parsed.data.email || !EMAIL_RE.test(parsed.data.email) ? { email: "Enter a valid email, like name@example.com." } : {}),
+              ...(!parsed.data.message?.trim() ? { message: "Enter your question." } : {}),
+            };
       if (Object.keys(errors).length) {
         log("validate", { fields: Object.keys(errors) });
         return json(400, { ok: false, errors });
       }
     }
+    if (parsed.data.website) return json(400, { ok: false, error: "invalid_request" });
     log("validate", "ok");
 
     const {
@@ -190,31 +208,33 @@ export default async function handler(req: Req, res: Res) {
       price,
     } = parsed.data;
 
+    const isQuote = parsed.data.source === "quote";
     const row = (label: string, value: string) =>
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background:${founding ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${founding ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${founding ? "#8B4513" : "#444"};">
-          ${founding ? "🌟 FOUNDING CLIENT: YES — Apply 30% discount to first clean" : "FOUNDING CLIENT: NO — Standard pricing applies"}
+          ${isQuote ? (founding ? "FOUNDING CLIENT REQUEST — Verify offer eligibility before confirming" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
-          New Cleaning Request from ${name}
+          ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
         </h2>
         <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
-          <tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Name:</td><td style="padding: 8px 0;">${name}</td></tr>
-          ${phone ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Phone:</td><td style="padding: 8px 0;"><a href="tel:${phone}">${phone}</a></td></tr>` : ""}
-          ${email ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Email:</td><td style="padding: 8px 0;"><a href="mailto:${email}">${email}</a></td></tr>` : ""}
-          ${service ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Service Type:</td><td style="padding: 8px 0;">${service}</td></tr>` : ""}
+          <tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Name:</td><td style="padding: 8px 0;">${escapeHtml(name)}</td></tr>
+          ${phone ? row("Phone", escapeHtml(phone)) : ""}
+          ${email ? row("Email", escapeHtml(email)) : ""}
+          ${service ? row("Service Type", escapeHtml(service)) : ""}
           ${zip ? row("ZIP", escapeHtml(zip)) : ""}
           ${address ? row("Street address", escapeHtml(address)) : ""}
           ${bedrooms ? row("Bedrooms", escapeHtml(bedrooms)) : ""}
           ${bathrooms ? row("Bathrooms", escapeHtml(bathrooms)) : ""}
-          ${price ? row("Quoted total", `$${escapeHtml(price)}`) : ""}
-          ${date ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Preferred Date:</td><td style="padding: 8px 0;">${date}</td></tr>` : ""}
-          ${time ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">Preferred Time:</td><td style="padding: 8px 0;">${time}</td></tr>` : ""}
-          ${message ? `<tr><td style="padding: 8px 0; font-weight: bold; color: #555; vertical-align: top;">Notes from client:</td><td style="padding: 8px 0;">${message.replace(/\n/g, "<br>")}</td></tr>` : ""}
-        ${row("First-clean discount", founding ? "YES" : "NO")}
+          ${price ? row("Client-side estimate — verify", `$${escapeHtml(price)}`) : ""}
+          ${date ? row("Preferred Date", escapeHtml(date)) : ""}
+          ${time ? row("Preferred Time", escapeHtml(time)) : ""}
+          ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
+${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
+          ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
         <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form</p>
       </div>
@@ -226,9 +246,9 @@ export default async function handler(req: Req, res: Res) {
         from: FROM_OWNER,
         to: [OWNER_EMAIL],
         reply_to: email || undefined,
-        subject: `New quote request — ${name}${zip ? `, ${zip}` : ""}`,
+        subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
         html: htmlContent,
-      });
+      }, parsed.data.request_id ? `owner/${parsed.data.request_id}` : undefined);
       if (!sent.ok) {
         logErr("owner_notification", `provider ${sent.status}: ${sent.data?.name ?? ""} ${sent.data?.message ?? ""}`);
         return json(500, { ok: false, error: "server_error" });
@@ -260,7 +280,7 @@ export default async function handler(req: Req, res: Res) {
           : "";
         const priceDisplay = price ? `$${price}` : "—";
 
-        const textBody = `Hi ${firstName},
+        const textBody = isQuote ? `Hi ${firstName},
 
 Thanks for reaching out. Here's what you sent:
 
@@ -272,7 +292,7 @@ Your estimate: ${priceDisplay} per visit.
 ${deepPara}
 What happens next:
 
-I'll confirm your price and send you two open dates by the end of the next business day. Nothing is charged when you book.
+I'll confirm your estimate, date and arrival window by the end of the next business day. Your request is not a confirmed booking yet. No payment is taken by this form.
 
 How payment works:
 
@@ -284,15 +304,21 @@ Nick
 
 Gatehouse Home Cleaning
 
+hello@gatehousehomecleaning.com` : `Hi ${firstName},
+
+Thanks for your question. I received your message and will reply within one business day. This is a general inquiry, not a booking request.
+
+Nick
+Gatehouse Home Cleaning
 hello@gatehousehomecleaning.com`;
 
         const auto = await sendEmail(RESEND_API_KEY, {
           from: FROM_AUTO,
           to: [email],
           reply_to: REPLY_TO_AUTO,
-          subject: "Got your request — here's your estimate",
+          subject: isQuote ? "Got your cleaning request — next steps" : "Got your question — I’ll reply within one business day",
           text: textBody,
-        });
+        }, parsed.data.request_id ? `customer/${parsed.data.request_id}` : undefined);
         if (auto.ok) {
           customerEmailSent = true;
           log("customer_confirmation", "sent");

@@ -2,7 +2,7 @@ import SEO from "@/components/SEO";
 
 const Terms = () => {
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="Terms of Service | Gatehouse Home Cleaning"
         description="Booking, payment, cancellation and service-concern terms for Gatehouse Home Cleaning in North Atlanta, Georgia."

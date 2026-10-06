@@ -23,7 +23,7 @@ const MobileStickyCTA = () => {
           to="/quote"
           className="w-1/2 min-h-[44px] flex items-center justify-center gap-2 text-sm font-bold text-primary-foreground no-underline"
         >
-          Exact Price
+          See Price
         </Link>
       )}
     </nav>

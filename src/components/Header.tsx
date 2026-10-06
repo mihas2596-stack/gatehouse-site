@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,15 @@ const Header = () => {
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setIsOpen(false); toggleRef.current?.focus(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen]);
 
   const handleLogoClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -88,11 +97,12 @@ const Header = () => {
           </span>
         </Link>
 
-        <nav className="hidden nav:flex items-center gap-1 xl:gap-1">
-          {navLinks.map((link) => (
+        <nav aria-label="Main navigation" className="hidden nav:flex items-center gap-1 xl:gap-1">
+          {navLinks.filter((link) => ["/services", "/whats-included", "/areas", "/faq"].includes(link.to)).map((link) => (
             <Link
               key={link.to}
               to={link.to}
+              aria-current={location.pathname === link.to ? "page" : undefined}
               className={`px-3 py-1.5 rounded-lg text-[15px] font-semibold whitespace-nowrap transition-colors ${
                 location.pathname === link.to
                   ? "text-primary bg-peach/40"
@@ -106,14 +116,15 @@ const Header = () => {
 
         <div className="hidden nav:flex items-center gap-3">
           <Button variant="hero" size="sm" asChild>
-            <Link to="/quote">See My Exact Price</Link>
+            <Link to="/quote">See My Price</Link>
           </Button>
         </div>
 
         <div className="flex nav:hidden items-center gap-2">
           <button
+            ref={toggleRef}
             onClick={() => setIsOpen(!isOpen)}
-            className="p-1.5 min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center"
             style={{ color: '#2E2C29' }}
             aria-label="Toggle menu"
             aria-expanded={isOpen}
@@ -125,7 +136,7 @@ const Header = () => {
       </div>
 
       {isOpen && (
-        <div id="mobile-menu" className="nav:hidden bg-background border-t border-border animate-fade-in">
+        <div id="mobile-menu" className="nav:hidden bg-background border-t border-border animate-fade-in max-h-[calc(100dvh-72px)] overflow-y-auto">
           <div className="container py-4 flex flex-col gap-1">
             {navLinks.map((link) => (
               <Link
@@ -134,7 +145,7 @@ const Header = () => {
                 className={`px-4 py-3 rounded-lg text-xl font-semibold transition-colors min-h-[44px] flex items-center ${
                   location.pathname === link.to
                     ? "text-primary bg-peach/40"
-                    : "text-amber-600 hover:text-primary hover:bg-peach/20"
+                    : "text-foreground hover:text-primary hover:bg-peach/20"
                 }`}
               >
                 {link.label}
@@ -142,7 +153,7 @@ const Header = () => {
             ))}
             <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-border">
               <Button variant="hero" size="lg" asChild>
-                <Link to="/quote">See My Exact Price</Link>
+                <Link to="/quote">See My Price</Link>
               </Button>
             </div>
           </div>

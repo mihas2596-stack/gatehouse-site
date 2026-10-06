@@ -19,11 +19,11 @@ const NotFound = () => {
       <div className="container max-w-xl text-center">
         <h1 className="mb-4 font-heading text-4xl font-bold text-sage-foreground">404 — Page not found</h1>
         <p className="mb-6 text-lg text-muted-foreground">
-          That page doesn't exist. Try the homepage or see your exact price.
+          That page doesn't exist. Try the homepage or see your price.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Link to="/" className="text-primary underline">Back to home</Link>
-          <Link to="/quote" className="text-primary underline">See my exact price</Link>
+          <Link to="/quote" className="text-primary underline">See my price</Link>
         </div>
       </div>
     </div>

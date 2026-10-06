@@ -9,11 +9,12 @@ const addons = [
   ADDONS.insideOven,
   ADDONS.insideFridge,
   ADDONS.interiorWindow,
-  { label: "Inside cabinets", price: 45 },
+  ADDONS.insideCabinets,
+  ADDONS.pets,
 ];
 
 const WhatsIncluded = () => (
-  <div className="pt-24">
+  <div className="page-shell">
     <SEO
       title="What's Included in a House Cleaning | Gatehouse"
       description="Room-by-room task list for every visit, the add-ons you can pick, and what we do not do."
@@ -27,7 +28,7 @@ const WhatsIncluded = () => (
           What's Included in Every Visit
         </h1>
         <p className="text-foreground text-lg">
-          Everything in the room lists below is included in every visit. Add-ons are listed separately with their prices.
+          Everything in the room lists below is included in every visit. Add-ons are listed separately with their prices. Deep and move-in/out cleans already include oven, fridge and cabinet interiors; these are not charged twice.
         </p>
       </div>
     </section>
@@ -77,7 +78,7 @@ const WhatsIncluded = () => (
 
         <div className="mt-10 text-center">
           <Button asChild variant="hero" size="lg" className="rounded-full px-8">
-            <Link to="/quote">See My Exact Price</Link>
+            <Link to="/quote">See My Price</Link>
           </Button>
         </div>
       </div>

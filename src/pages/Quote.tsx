@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
-import { ArrowRight, Calculator, Sparkles, Send } from "lucide-react";
+import { campaignAttribution, trackFunnel } from "@/lib/measurement";
+import { Calculator, Sparkles, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
@@ -28,16 +29,7 @@ import {
   type SizeBandKey,
 } from "@/config/calculator";
 
-// In-service ZIP set for North Atlanta service area
-// (Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta, Roswell).
-const SERVICE_ZIPS = new Set<string>([
-  "30024", // Suwanee
-  "30518", "30519", // Sugar Hill / Buford
-  "30097", // Johns Creek
-  "30096", "30099", // Duluth
-  "30004", "30005", "30009", "30022", // Alpharetta
-  "30075", "30076", "30077", // Roswell
-]);
+import { SERVICE_ZIPS, earliestServiceDate, validServiceDate } from "@/config/service-area";
 
 const resolveService = (param: string | null): CalcServiceKey => {
   const p = (param ?? "").toLowerCase();
@@ -54,13 +46,14 @@ const PHOTO_CONSENT_TEXT =
 
 const Quote = () => {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
 
   const [sizeBand, setSizeBand] = useState<SizeBandKey>("under2500");
   const [bedrooms, setBedrooms] = useState<number>(3);
   const [fullBaths, setFullBaths] = useState<number>(2);
   const [halfBaths, setHalfBaths] = useState<number>(0);
   const [recentlyCleaned, setRecentlyCleaned] = useState<"yes" | "no" | "">("");
-  const [frequency, setFrequency] = useState<FrequencyKey>("every2weeks");
+  const [frequency, setFrequency] = useState<FrequencyKey>(params.get("frequency") === "onetime" ? "onetime" : "every2weeks");
   const [service, setService] = useState<CalcServiceKey>(resolveService(params.get("service")));
   const [zip, setZip] = useState("");
   const [isFounding, setIsFounding] = useState(params.get("founding") === "true");
@@ -78,6 +71,7 @@ const Quote = () => {
 
   const tier = tierFor(bedrooms, fullBaths);
   const answered = recentlyCleaned !== "";
+  const needsCleaningHistory = service === "standard" && !answered;
   const cleanedRecently = recentlyCleaned === "yes";
   // Frequency only applies to a standard clean.
   const isRecurring = service === "standard" && frequency === "every2weeks";
@@ -127,6 +121,7 @@ const Quote = () => {
     date: "",
     time: "",
     notes: "",
+    website: "",
     termsConsent: false,
     photoConsent: false,
   });
@@ -134,7 +129,14 @@ const Quote = () => {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [reviewReady, setReviewReady] = useState(false);
+  const requestRef = useRef<{ id: string; time: string } | null>(null);
   const reviewRef = useRef<HTMLDivElement>(null);
+  // Any quote change must be reviewed again before the request is sent.
+  useEffect(() => {
+    setReviewReady(false);
+    requestRef.current = null;
+    setSubmitError("");
+  }, [sizeBand, bedrooms, fullBaths, halfBaths, recentlyCleaned, frequency, service, zip, isFounding, addons]);
   const refs = {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
@@ -145,15 +147,12 @@ const Quote = () => {
     photoConsent: useRef<HTMLInputElement>(null),
   };
   // Preferred date: earliest is today + 3 days.
-  const minDate = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 3);
-    return d.toISOString().split("T")[0];
-  }, []);
+  const minDate = earliestServiceDate();
 
   const handleBookingChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
+    requestRef.current = null;
     const t = e.target as HTMLInputElement;
     if (t.type === "checkbox") {
       setBooking((p) => ({ ...p, [t.name]: t.checked }));
@@ -170,9 +169,7 @@ const Quote = () => {
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? "" : "Enter a valid email, like name@example.com.";
     if (field === "address") return value.trim().length < 5 ? "Enter your street address." : "";
     if (field === "date") {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "Enter a date as YYYY-MM-DD.";
-      const parsed = new Date(`${value}T12:00:00`);
-      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value || value < minDate) return `Choose a valid date on or after ${minDate}.`;
+      if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${minDate}.`;
       return "";
     }
     const digits = value.replace(/\D/g, "");
@@ -196,10 +193,15 @@ const Quote = () => {
     return errs;
   };
 
-  const canSubmit = canProceed && showPrice && !isSubmitting;
+  const canSubmit = canProceed && showPrice && !needsCleaningHistory && !isSubmitting;
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    if (needsCleaningHistory) {
+      document.getElementById("q-recent-yes")?.focus();
+      return;
+    }
     if (!canProceed) {
       toast({
         title: "Enter a ZIP in our service area",
@@ -211,12 +213,14 @@ const Quote = () => {
     const errs = validateBooking();
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
+      trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "date", "termsConsent", "photoConsent"];
       for (const f of order) if (errs[f]) { refs[f].current?.focus(); break; }
       return;
     }
     if (!reviewReady) {
       setReviewReady(true);
+      trackFunnel("gh_quote_review", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
       requestAnimationFrame(() => { reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); reviewRef.current?.focus({ preventScroll: true }); });
       return;
     }
@@ -253,14 +257,17 @@ const Quote = () => {
           : "",
         addonList ? `Add-ons (every visit): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
+      requestRef.current ??= { id: crypto.randomUUID(), time: new Date().toISOString() };
       const consentRecord = [
         "Consent record",
-        `Timestamp: ${new Date().toISOString()}`,
+        `Timestamp: ${requestRef.current.time}`,
         `sms_consent: ${booking.termsConsent} — "${TERMS_CONSENT_TEXT}"`,
         `terms_consent: ${booking.termsConsent} — "${TERMS_CONSENT_TEXT}"`,
         `photo_consent: ${booking.photoConsent} — "${PHOTO_CONSENT_TEXT}"`,
       ].join("\n");
       const payload = {
+        request_id: requestRef.current.id,
+        website: booking.website,
         name: booking.name.trim(),
         phone: booking.phone.trim(),
         email: booking.email.trim(),
@@ -275,6 +282,7 @@ const Quote = () => {
         address: booking.address.trim(),
         price: String(mainPrice ?? ""),
         source: "quote",
+        attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
         photo_consent: booking.photoConsent,
         sms_consent: booking.termsConsent,
@@ -285,7 +293,7 @@ const Quote = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      let data: { ok?: boolean; errors?: Record<string, string> } | null = null;
+      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string> } | null = null;
       try {
         data = await res.json();
       } catch {
@@ -309,12 +317,11 @@ const Quote = () => {
         throw new Error("Booking request failed");
       }
       if (!data?.ok) throw new Error("Booking request failed");
-      // eventID reserved for future Meta Conversions API deduplication
-      const eventID = crypto.randomUUID();
-      sessionStorage.setItem("gh_lead_pending", JSON.stringify({ eventID }));
-      window.location.href = "/thank-you";
+      trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
+      navigate("/thank-you", { state: { submitted: true, kind: "booking", customerEmailSent: data.customerEmailSent } });
     } catch (err) {
       console.error("Quote booking error");
+      trackFunnel("gh_form_error", { form_type: "quote", error_stage: "delivery" });
       setSubmitError("Something went wrong. Please try again or email us at hello@gatehousehomecleaning.com.");
     } finally {
       setIsSubmitting(false);
@@ -327,17 +334,17 @@ const Quote = () => {
   const includedAddons = ADDONS_INCLUDED_IN[service];
 
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="See Your Cleaning Price | Gatehouse"
         description="Enter your home size, bedrooms and bathrooms to see your cleaning price online, then pick a day."
         url="https://gatehousehomecleaning.com/quote"
       />
-      <section className="py-12 md:py-16 bg-warm-gradient">
+      <section className="py-6 md:py-8 bg-warm-gradient">
         <div className="container max-w-3xl text-center">
-          <p className="font-script text-xl text-golden mb-2">Exact Price</p>
+          <p className="font-script text-xl text-golden mb-2">See Price</p>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-3">
-            See Your <span className="text-gradient-gold">Exact Price</span>
+            See Your <span className="text-gradient-gold">Price</span>
           </h1>
           <p className="text-muted-foreground text-lg">
             No email needed to see your price.
@@ -345,7 +352,7 @@ const Quote = () => {
         </div>
       </section>
 
-      <section className="py-12 md:py-16">
+      <section className="pt-4 pb-12 md:pt-6 md:pb-16">
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
             <div className="flex items-center gap-2 mb-6">
@@ -520,8 +527,23 @@ const Quote = () => {
               </div>
             </div>
 
+            {service === "standard" && (
+              <fieldset className="mt-6">
+                <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? *</legend>
+                <p className="text-sm text-muted-foreground mb-2">This determines whether your first visit needs a deep clean.</p>
+                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                  {(["yes", "no"] as const).map((v) => (
+                    <label key={v} className="flex items-center gap-2 text-sm min-h-[44px]">
+                      <input id={`q-recent-${v}`} type="radio" name="recentlyCleaned" value={v} checked={recentlyCleaned === v} onChange={() => setRecentlyCleaned(v)} className="h-5 w-5" required />
+                      {v === "yes" ? "Yes" : "No"}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
             {/* Result */}
-            <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center">
+            <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
               {tier === null ? (
                 <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
               ) : zipOutOfArea ? (
@@ -530,20 +552,20 @@ const Quote = () => {
                 </p>
               ) : (
                 <>
-                  <p className="text-sm font-medium text-muted-foreground mb-1">Your price</p>
-                  {isRecurring ? (
+                  <p className="text-sm font-medium text-muted-foreground mb-1">{needsCleaningHistory ? "Answer the cleaning-history question above to confirm your first-visit price." : "Your price"}</p>
+                  {needsCleaningHistory && !isRecurring ? (
+                    <p className="text-base text-foreground">Select Yes or No above to see your price.</p>
+                  ) : isRecurring ? (
                     <div className="flex flex-col items-center gap-1">
                       {!answered ? (
-                        <span className="font-heading text-4xl font-bold text-primary">
-                          ${recurringPrice} per visit, every other week
-                        </span>
+                        <p className="text-base text-foreground">Regular visits: ${recurringPrice} every other week. Your first visit may cost more if a deep clean is needed.</p>
                       ) : firstVisit === recurringPrice ? (
-                        <span className="font-heading text-4xl font-bold text-primary">
+                        <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
                           ${recurringPrice} per visit, every other week
                         </span>
                       ) : (
                         <>
-                          <span className="font-heading text-4xl font-bold text-primary">
+                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
                             First visit: ${firstVisit} per visit
                           </span>
                           <p className="text-base font-semibold text-foreground mt-1.5">
@@ -581,28 +603,15 @@ const Quote = () => {
                 </>
               )}
 
-              <p className="text-xs text-muted-foreground mt-3">{EXTRA_TIME_NOTE}</p>
+              <p className="text-sm text-muted-foreground mt-3">{EXTRA_TIME_NOTE}</p>
 
               <a
                 href="#booking-request"
-                className="inline-flex items-center justify-center gap-2 rounded-full px-8 py-4 mt-5 min-h-[52px] font-bold tracking-wide shadow-warm-lg hover:scale-[1.03] transition-all bg-gradient-to-r from-primary via-primary to-golden text-primary-foreground"
+                className="inline-flex items-center justify-center gap-2 rounded-full px-8 py-4 mt-5 min-h-[52px] font-bold tracking-wide shadow-warm-lg hover:scale-[1.03] transition-all bg-primary text-primary-foreground"
               >
-                Request this booking <ArrowRight className="w-5 h-5" />
+                Request this booking
               </a>
             </div>
-
-             {/* First-visit refinement stays below the recurring price. */}
-             <fieldset className="mt-6">
-               <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? (optional)</legend>
-               <div className="flex flex-wrap gap-x-5 gap-y-1">
-                 {(["yes", "no"] as const).map((v) => (
-                   <label key={v} className="flex items-center gap-2 text-sm min-h-[44px]">
-                     <input type="radio" name="recentlyCleaned" value={v} checked={recentlyCleaned === v} onChange={() => setRecentlyCleaned(v)} className="h-5 w-5" />
-                     {v === "yes" ? "Yes" : "No"}
-                   </label>
-                 ))}
-               </div>
-             </fieldset>
 
              {/* BOOKING REQUEST STEP */}
              <form
@@ -674,7 +683,7 @@ const Quote = () => {
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date * (YYYY-MM-DD)</label>
                   <input
-                    id="b-date" name="date" type="text" inputMode="numeric" placeholder={minDate} ref={refs.date}
+                    id="b-date" name="date" type="date" min={minDate} ref={refs.date}
                     required maxLength={10} pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
                     value={booking.date} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.date} aria-describedby={bookingErrors.date ? "b-date-error" : undefined}
@@ -736,6 +745,7 @@ const Quote = () => {
               </div>
               {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
 
+              <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               {reviewReady && (
                  <div ref={reviewRef} tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
                   <div className="flex items-center justify-between gap-3">
@@ -758,6 +768,7 @@ const Quote = () => {
                   ? "Sending..."
                   : !canProceed
                     ? "Enter a ZIP in our service area"
+                    : needsCleaningHistory ? "Answer the cleaning-history question above"
                     : reviewReady ? <>Send my booking request <Send className="w-5 h-5" /></> : "Review my details"}
               </Button>
               <p className="text-xs text-foreground text-center mt-4">
@@ -769,12 +780,13 @@ const Quote = () => {
       </section>
 
       {/* Mobile price bar — hidden until a price is available */}
-      {showPrice && (
-        <div className="fixed inset-x-0 bottom-14 z-40 border-t border-border bg-card px-4 py-2 shadow-warm-lg md:hidden">
+      {showPrice && !needsCleaningHistory && (
+        <div className="quote-price-bar fixed inset-x-0 z-40 border-t border-border bg-card px-4 py-2 shadow-warm-lg md:hidden">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-semibold text-foreground">
               <span className="block text-xs font-normal text-muted-foreground">Your price</span>
-               ${isRecurring ? recurringPrice : mainPrice} per visit
+               ${mainPrice} {deepFirstVisit ? "first visit" : "per visit"}
+               {isRecurring && firstVisit !== recurringPrice && <span className="block text-xs">Then ${recurringPrice} every other week</span>}
             </p>
             <a
               href="#booking-request"

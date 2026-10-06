@@ -2,7 +2,7 @@ import SEO from "@/components/SEO";
 
 const Privacy = () => {
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="Privacy Policy | Gatehouse Home Cleaning"
         description="How Gatehouse Home Cleaning collects, uses and keeps your information, photos of your home and payment details."

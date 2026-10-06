@@ -2,11 +2,11 @@
 export const FAQS: { q: string; a: string }[] = [
   {
     q: "How much does it cost?",
-    a: "Your price depends on home size, bedrooms, full and half bathrooms, the type of clean, how often we visit, and any add-ons. Most homes get an exact price online. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
+    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. Square footage and half bathrooms help us plan your visit; they do not change the calculator price. Most homes can see an estimate online. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
   },
   {
     q: "How do I pay?",
-    a: "You add a card when you book. Nothing is charged at booking. After the clean you get a room-by-room photo report. You see the photo report before we charge your card. No response within 24 hours = approved.",
+    a: "Your online request does not collect or charge a card. We confirm your visit and arrange payment details before the clean. After the clean you get a room-by-room photo report. You see the photo report before we charge your card. No response within 24 hours = approved.",
   },
   {
     q: "Do I need to be home?",
@@ -22,7 +22,7 @@ export const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "What if the cleaner can't make it?",
-    a: "We text you as soon as we know and offer the next available day that works for you. You are never charged for a visit that doesn't happen.",
+    a: "We contact you as soon as we know and offer the next available day that works for you. You are never charged for a visit that doesn't happen.",
   },
   {
     q: "What if I'm not happy with the cleaning?",

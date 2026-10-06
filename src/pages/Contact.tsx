@@ -2,17 +2,21 @@ import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Mail, MapPin, Clock, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import SEO from "@/components/SEO";
+import { campaignAttribution, trackFunnel } from "@/lib/measurement";
 
 const Contact = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     message: "",
     privacy: false,
+    website: "",
   });
+  const requestRef = useRef<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const fieldRefs = {
@@ -23,6 +27,7 @@ const Contact = () => {
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    requestRef.current = null;
     const target = e.target as HTMLInputElement;
     if (target.type === "checkbox") {
       setFormData((prev) => ({ ...prev, [target.name]: target.checked }));
@@ -47,6 +52,7 @@ const Contact = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const errs = validate();
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -62,10 +68,13 @@ const Contact = () => {
     setIsSubmitting(true);
 
     try {
+      requestRef.current ??= crypto.randomUUID();
       const res = await fetch("/api/send-contact-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          request_id: requestRef.current,
+          website: formData.website,
           name: formData.name.trim(),
           email: formData.email.trim(),
           phone: "",
@@ -74,15 +83,20 @@ const Contact = () => {
           time: "",
           message: formData.message.trim(),
           founding: false,
+          source: "contact",
+          attribution: campaignAttribution(),
         }),
       });
 
-      if (!res.ok) throw new Error("Contact request failed");
+      const result = await res.json();
+      if (!res.ok || !result.ok) throw new Error("Contact request failed");
 
-      window.location.href = "/thank-you";
+      trackFunnel("gh_contact_submit", { form_type: "contact" });
+      navigate("/thank-you", { state: { submitted: true, kind: "contact", customerEmailSent: result.customerEmailSent } });
       return;
     } catch (err) {
-      console.error("Contact form error:", err);
+      console.error("Contact form delivery failed");
+      trackFunnel("gh_form_error", { form_type: "contact", error_stage: "delivery" });
       toast({
         title: "Something went wrong",
         description: "Please try again or email us at hello@gatehousehomecleaning.com.",
@@ -94,10 +108,10 @@ const Contact = () => {
   };
 
   return (
-    <div className="pt-24">
+    <div className="page-shell">
       <SEO
         title="Contact Gatehouse Home Cleaning"
-        description="Send your question about house cleaning in North Atlanta and we reply the same day."
+        description="Send your question about house cleaning in North Atlanta and we reply within one business day."
         url="https://gatehousehomecleaning.com/contact"
       />
       <section className="pt-12 pb-8 bg-warm-gradient">
@@ -118,7 +132,7 @@ const Contact = () => {
             <p className="text-sm md:text-base text-foreground">
               Ready to book?{" "}
               <Link to="/quote" className="font-semibold text-primary underline underline-offset-2">
-                Get a quote &amp; book →
+                See your price and request a visit
               </Link>
             </p>
           </div>
@@ -220,6 +234,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
 
       <p className="text-sm text-muted-foreground mb-4">Fields marked * are required.</p>
 
+      <div hidden aria-hidden="true"><label htmlFor="c-website">Leave this empty</label><input id="c-website" name="website" tabIndex={-1} autoComplete="off" value={String(formData.website ?? "")} onChange={handleChange} /></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div>
           <label htmlFor="name" className="block text-sm font-medium mb-1.5">Your Name *</label>

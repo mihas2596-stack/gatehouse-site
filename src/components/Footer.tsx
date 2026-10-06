@@ -19,12 +19,12 @@ const Footer = () => {
               North Atlanta, GA
             </span>
             <p className="mt-4 text-[#3D2B1F] text-sm leading-relaxed">
-              Every-other-week house cleaning. Same day, same time. Exact price online.
+              Every-other-week house cleaning. Same day, same time. Price estimate online.
             </p>
           </div>
 
           <div className="flex flex-col gap-3 text-sm md:items-start">
-            <a href="mailto:hello@gatehousehomecleaning.com" className="flex min-h-[44px] items-center gap-2 text-[#3D2B1F] hover:text-[#5C3D2E] transition-colors font-medium md:min-h-0">
+            <a href="mailto:hello@gatehousehomecleaning.com" className="flex min-h-[44px] items-center gap-2 text-[#3D2B1F] hover:text-[#5C3D2E] transition-colors font-medium break-all md:min-h-0">
               <Mail className="w-4 h-4 text-[#3D2B1F]" />
               hello@gatehousehomecleaning.com
             </a>
@@ -39,7 +39,10 @@ const Footer = () => {
           <p className="text-[#3D2B1F]/75 text-sm">
             &copy; {new Date().getFullYear()} Gatehouse Home Cleaning. All rights reserved.
           </p>
-          <div className="flex items-center gap-4">
+          <nav aria-label="Footer navigation" className="flex flex-wrap justify-center items-center gap-x-4 gap-y-1">
+            <Link to="/about" className="inline-flex min-h-[44px] items-center text-sm">About Nick</Link>
+            <Link to="/contact" className="inline-flex min-h-[44px] items-center text-sm">Contact</Link>
+            <Link to="/founding" className="inline-flex min-h-[44px] items-center text-sm">Founding Clients</Link>
             <Link to="/whats-included" className="inline-flex min-h-[44px] items-center px-1 text-[#3D2B1F]/75 hover:text-[#5C3D2E] text-sm transition-colors md:min-h-0 md:px-0">
               What's Included
             </Link>
@@ -52,7 +55,7 @@ const Footer = () => {
             <Link to="/terms" className="inline-flex min-h-[44px] items-center px-1 text-[#3D2B1F]/75 hover:text-[#5C3D2E] text-sm transition-colors md:min-h-0 md:px-0">
               Terms of Service
             </Link>
-          </div>
+          </nav>
         </div>
       </div>
     </footer>
