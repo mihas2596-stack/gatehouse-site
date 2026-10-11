@@ -119,16 +119,6 @@ const Index = () => (
       </div>
     </section>
 
-    <div className="border-b border-border/60 bg-background py-4">
-      <div className="container flex items-center justify-center gap-3">
-        <img src={founderAsset} alt="Nick, owner of Gatehouse Home Cleaning" className="h-11 w-11 shrink-0 rounded-full object-cover" />
-        <div className="text-sm text-foreground">
-          <p className="font-semibold">You can reach a real person</p>
-          <p>Nick, owner — <a className="text-primary underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a></p>
-        </div>
-      </div>
-    </div>
-
     {/* 2. THREE BADGES */}
     {/* INSURANCE CLAIM REMOVED — restore only after GL policy is active */}
     <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }} aria-label="Why choose Gatehouse">
