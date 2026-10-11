@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import IncludedRooms from "@/components/IncludedRooms";
+import ReportShowcase from "@/components/ReportShowcase";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
 import founderAsset from "@/assets/nik-founder.jpeg";
@@ -147,6 +148,9 @@ const Index = () => (
         </div>
       </div>
     </section>
+
+    {/* 2b. REPORT SHOWCASE — approve, then pay, made tangible */}
+    <ReportShowcase />
 
     {/* 3. WHAT A STANDARD CLEAN COVERS */}
     <section className={`${sectionClass} bg-background`}>

@@ -47,6 +47,16 @@ const Reviews = () => {
             <p>
               No reviews yet. We'll publish real ones after our first clients' visits.
             </p>
+            <div className="rounded-xl border border-border/70 bg-background p-5 md:p-6">
+              <p className="font-heading font-semibold text-sage-foreground mb-2">How we document every clean</p>
+              <p className="text-base leading-relaxed">
+                After each visit you get a photo report — room by room, with the checklist we followed.
+                You review it before we charge your card.
+              </p>
+              <p className="mt-3 text-base leading-relaxed">
+                And after every visit we ask for a Google review — and we reply to every single one.
+              </p>
+            </div>
           </div>
         </div>
       </section>
