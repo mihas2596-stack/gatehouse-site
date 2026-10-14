@@ -6,7 +6,15 @@ export const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "How do I pay?",
-    a: "Your online request does not collect or charge a card. We confirm your visit and arrange payment details before the clean. After the clean you get a room-by-room photo report. You see the photo report before we charge your card. No response within 24 hours = approved.",
+    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report, and your card is charged only after you approve it. No response within 24 hours = approved.",
+  },
+  {
+    q: "When exactly is my card charged?",
+    a: "Only after you approve your photo report — or 24 hours after we send it, if we don't hear from you. Never before you've seen the work.",
+  },
+  {
+    q: "Is my card safe with you?",
+    a: "Yes. When you pay, your card is processed securely through Stripe, the payment platform used by millions of businesses. We never see or store your full card number.",
   },
   {
     q: "Do I need to be home?",

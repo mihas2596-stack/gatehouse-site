@@ -28,6 +28,15 @@ const steps = [
   ["3", "We clean", "your cleaner arrives with everything needed."],
 ];
 
+// Payment story for ad traffic: $0 to book, approve first, charged after approval.
+// STRIPE TODO: when Stripe is connected, step 1 becomes "Save your card — $0 today"
+// with a Payment Element / Checkout card capture (see docs/booking-flow-card-on-file-v1.md).
+const paymentSteps = [
+  ["1", "$0 to book", "booking is free. Nothing is charged when you request your visit."],
+  ["2", "You approve first", "after every clean you get a room-by-room photo report. Approve within 24 hours — no response counts as approval."],
+  ["3", "Charged after approval", "your card is charged only once you've seen the work. That's the whole deal."],
+];
+
 const trustBadges = [
   { Icon: Tag, label: "See your price online", text: "Your price is based on the home details you enter. No in-home estimate." },
   { Icon: CalendarX, label: "Free cancellation", text: "Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. If we can't get in at the scheduled time, the full visit price is charged." },
@@ -103,9 +112,7 @@ const Index = () => (
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote">See My Price</Link>
             </Button>
-            <p className="mt-3 text-sm font-medium text-muted-foreground">
-              Review your photo report before we charge your card. No response within 24 hours counts as approval.
-            </p>
+            {/* Photo-report line lives in the "How payment works" section + trust badge below — no duplicate here. */}
             <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2 md:justify-start">
               {heroTrust.map(({ Icon, label }) => (
                 <li key={label} className="flex items-center gap-1.5 text-sm font-medium text-foreground">
@@ -141,6 +148,34 @@ const Index = () => (
 
     {/* 2b. REPORT SHOWCASE — approve, then pay, made tangible */}
     <ReportShowcase />
+
+    {/* 2c. HOW PAYMENT WORKS — card-on-file story for ad traffic */}
+    <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }} aria-label="How payment works">
+      <div className="container">
+        <div className="mx-auto mb-6 max-w-2xl text-center">
+          <p className="eyebrow mb-2 text-primary">Payment</p>
+          <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">How payment works</h2>
+          <p className="mt-3 text-base leading-relaxed text-foreground md:text-lg">
+            No surprises, no prepayment. You pay only for work you&apos;ve already seen.
+          </p>
+        </div>
+        <ol className="mx-auto grid max-w-5xl grid-cols-1 gap-3 md:grid-cols-3 md:gap-5">
+          {paymentSteps.map(([number, title, text]) => (
+            <li key={number} className="clarity-card flex h-full flex-col gap-3 rounded-lg bg-card p-5 shadow-warm">
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary font-heading font-bold text-primary-foreground" aria-hidden="true">{number}</span>
+                <p className="pt-1 text-base leading-relaxed text-foreground">
+                  <strong className="font-semibold text-sage-foreground">{title}</strong> — {text}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="mx-auto mt-5 max-w-2xl text-center text-sm leading-relaxed text-muted-foreground">
+          When you pay, your card is processed securely through Stripe. We never see or store your card number.
+        </p>
+      </div>
+    </section>
 
     {/* 3. WHAT A STANDARD CLEAN COVERS */}
     <section className={`${sectionClass} bg-background`}>
@@ -265,7 +300,7 @@ const Index = () => (
           ))}
         </ol>
         <p className="mx-auto mt-5 max-w-5xl text-left text-sm leading-relaxed text-foreground md:text-center md:text-base">
-          You can send a booking request any time. We confirm your booking within one business day and give you a one-hour arrival window.
+          You can send a booking request any time. We confirm your booking within one business day — usually much sooner — and give you a one-hour arrival window.
         </p>
       </div>
     </section>
