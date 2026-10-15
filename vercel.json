@@ -9,6 +9,9 @@
   "functions": {
     "api/send-contact-email.ts": {
       "maxDuration": 40
+    },
+    "api/create-checkout-session.ts": {
+      "maxDuration": 40
     }
   }
 }

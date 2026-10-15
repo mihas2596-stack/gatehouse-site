@@ -33,6 +33,18 @@ const ThankYou = () => {
             </ol>
           </div>
         )}
+        {received && isBooking && (
+          <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
+            <h2 className="mb-2 font-heading text-xl font-bold">Secure your booking — $0 today</h2>
+            <p className="mb-4 text-base leading-relaxed">
+              Save your card now so we can charge it only after you approve your photo report.
+              Nothing is charged today.
+            </p>
+            <Button variant="hero" size="lg" asChild>
+              <Link to="/save-card">Save my card</Link>
+            </Button>
+          </div>
+        )}
         <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "See My Price"}</Link></Button>
       </div>
     </div>
