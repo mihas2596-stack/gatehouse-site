@@ -180,3 +180,110 @@ export function firstVisitPrice(
   const base = recentlyCleaned ? PRICES.recurring[tier] : PRICES.deep[tier];
   return base + addonsTotal(addons, recentlyCleaned ? "standard" : "deep");
 }
+
+/**
+ * UNIFIED PRICE BREAKDOWN — single source of truth for what the client
+ * sees AND what goes into the booking. Replaces the scattered
+ * firstVisit/recurringPrice/foundingFirst/foundingRecurring display that
+ * showed contradictory numbers (e.g. $329 deep alongside $153 founding).
+ *
+ * Founding deep-clean rule (set by the owner):
+ * - "full": founding client pays the full deep-clean price for a deep first
+ *   visit; the founding discount applies only to standard/recurring.
+ *   (Default: matches the price actually charged today — no price change.)
+ * - "flat": flat founding first-clean price replaces the deep price.
+ * - "discounted": deep-clean price with the 30% founding discount.
+ */
+export type FoundingDeepRule = "full" | "flat" | "discounted";
+export const FOUNDING_DEEP_RULE: FoundingDeepRule = "full";
+
+export type PriceBreakdown = {
+  tier: TierKey;
+  /** What the first visit is: a deep clean or a standard clean. */
+  first_service: "deep" | "standard";
+  /** The ONE first-visit price shown and charged. No contradictions. */
+  first_total: number;
+  /** Per-visit price for recurring visits after the first. */
+  recurring_total: number;
+  founding_applies: boolean;
+  /** Founding recurring rate (only when founding_applies). */
+  founding_recurring?: number;
+  /** Human-readable note, e.g. "30% founding discount applied". */
+  note?: string;
+};
+
+export function priceBreakdown(opts: {
+  bedrooms: number;
+  fullBaths: number;
+  frequency: FrequencyKey;
+  founding: boolean;
+  recentlyCleaned: boolean;
+  addons?: AddonSelection;
+}): PriceBreakdown | null {
+  const tier = tierFor(opts.bedrooms, opts.fullBaths);
+  if (!tier) return null;
+  const deepFirst = !opts.recentlyCleaned;
+  const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
+  const recurring_total = PRICES.recurring[tier];
+
+  if (!opts.founding) {
+    const base = deepFirst ? PRICES.deep[tier] : PRICES.recurring[tier];
+    return {
+      tier,
+      first_service,
+      first_total: base + addonsTotal(opts.addons ?? {}, first_service),
+      recurring_total: recurring_total + addonsTotal(opts.addons ?? {}, "standard"),
+      founding_applies: false,
+    };
+  }
+
+  // Founding client.
+  const founding_recurring = FOUNDING_RECURRING[tier];
+  if (!deepFirst) {
+    // Standard first visit: founding first-clean price applies directly.
+    return {
+      tier,
+      first_service,
+      first_total: FOUNDING_FIRST_CLEAN[tier] + addonsTotal(opts.addons ?? {}, "standard"),
+      recurring_total: founding_recurring + addonsTotal(opts.addons ?? {}, "standard"),
+      founding_applies: true,
+      founding_recurring,
+      note: "30% founding discount applied",
+    };
+  }
+  // Founding client, deep first visit: owner decides via FOUNDING_DEEP_RULE.
+  if (FOUNDING_DEEP_RULE === "flat") {
+    return {
+      tier,
+      first_service,
+      first_total: FOUNDING_FIRST_CLEAN[tier] + addonsTotal(opts.addons ?? {}, "deep"),
+      recurring_total: founding_recurring + addonsTotal(opts.addons ?? {}, "standard"),
+      founding_applies: true,
+      founding_recurring,
+      note: "Founding flat price for the first clean",
+    };
+  }
+  if (FOUNDING_DEEP_RULE === "discounted") {
+    const discountedDeep = Math.round(PRICES.deep[tier] * (1 - FOUNDING_DISCOUNT));
+    return {
+      tier,
+      first_service,
+      first_total: discountedDeep + addonsTotal(opts.addons ?? {}, "deep"),
+      recurring_total: founding_recurring + addonsTotal(opts.addons ?? {}, "standard"),
+      founding_applies: true,
+      founding_recurring,
+      note: "30% founding discount applied to the deep clean",
+    };
+  }
+  // "full" (default): full deep-clean price; founding discount does not
+  // apply to the deep first visit. No contradictory $153 is shown.
+  return {
+    tier,
+    first_service,
+    first_total: PRICES.deep[tier] + addonsTotal(opts.addons ?? {}, "deep"),
+    recurring_total: founding_recurring + addonsTotal(opts.addons ?? {}, "standard"),
+    founding_applies: true,
+    founding_recurring,
+    note: "First deep clean at the standard deep price; founding rate applies to recurring visits",
+  };
+}

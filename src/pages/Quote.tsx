@@ -594,7 +594,14 @@ const Quote = () => {
 
                   {foundingApplies && (
                     <div className="mt-3 text-sm text-foreground">
-                      <p>Founding price, first clean: ${foundingFirst} (30% off)</p>
+                      {!deepFirstVisit && (
+                        <p>Founding price, first clean: ${foundingFirst} (30% off)</p>
+                      )}
+                      {deepFirstVisit && (
+                        <p className="text-muted-foreground">
+                          First visit is a deep clean at the standard deep-clean price.
+                        </p>
+                      )}
                       {foundingRecurring !== null && (
                         <p>Founding rate for 6 months: ${foundingRecurring} per visit</p>
                       )}
