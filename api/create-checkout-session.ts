@@ -164,24 +164,25 @@ export default async function handler(req: Req, res: Res) {
     log("validate", "ok");
 
     // Step: reuse an existing customer when the email is already known,
-    // so repeat visits don't create duplicates.
+    // so repeat visits don't create duplicates. Uses the list endpoint with
+    // an email filter (not /customers/search) so restricted API keys work.
     let customerId: string | null = null;
     try {
       const found = await stripeGet(
         STRIPE_SECRET_KEY,
-        `/customers/search?query=${encodeURIComponent(`email:'${email}'`)}&limit=1`,
+        `/customers?${new URLSearchParams({ email, limit: "1" }).toString()}`,
       );
       if (!found.ok) {
-        logErr("customer_search", `stripe ${found.status}: ${stripeErrMsg(found.data)}`);
+        logErr("customer_lookup", `stripe ${found.status}: ${stripeErrMsg(found.data)}`);
         return json(500, { ok: false, error: "server_error" });
       }
       const list = (found.data["data"] as Array<{ id?: string }> | undefined) ?? [];
       if (list.length > 0 && typeof list[0]?.id === "string") {
         customerId = list[0].id as string;
-        log("customer_search", "reused");
+        log("customer_lookup", "reused");
       }
     } catch (err) {
-      logErr("customer_search", err);
+      logErr("customer_lookup", err);
       return json(500, { ok: false, error: "server_error" });
     }
 
