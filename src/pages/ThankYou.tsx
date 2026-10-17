@@ -3,13 +3,18 @@ import { CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 
-type SubmissionState = { submitted?: boolean; kind?: "booking" | "contact"; customerEmailSent?: boolean };
+type SubmissionState = { submitted?: boolean; kind?: "booking" | "contact"; customerEmailSent?: boolean; bt?: string };
 
 const ThankYou = () => {
   const { state } = useLocation();
   const submission = (state ?? {}) as SubmissionState;
   const received = submission.submitted === true;
   const isBooking = submission.kind === "booking";
+  // Booking token survives here via navigation state; the booking email also
+  // carries a continuation link, so a refresh never strands the client.
+  const saveCardHref = submission.bt
+    ? `/save-card?bt=${encodeURIComponent(submission.bt)}`
+    : "/save-card";
   return (
     <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
       <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
@@ -41,7 +46,7 @@ const ThankYou = () => {
               Nothing is charged today.
             </p>
             <Button variant="hero" size="lg" asChild>
-              <Link to="/save-card">Save my card</Link>
+              <Link to={saveCardHref}>Save my card</Link>
             </Button>
           </div>
         )}

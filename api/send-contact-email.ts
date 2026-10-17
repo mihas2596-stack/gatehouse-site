@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { signBooking, rateLimit, clientIp } from "./_lib/booking";
 
 // Inlined from ../src/config/service-area (self-contained: the working
 // create-checkout-session function has no cross-directory imports, and the
@@ -231,6 +232,32 @@ export default async function handler(req: Req, res: Res) {
     } = parsed.data;
 
     const isQuote = parsed.data.source === "quote";
+
+    // Server-issued booking identity (quote bookings only). The HMAC-signed
+    // token binds this booking to the card-saving step (/save-card?bt=...)
+    // without a database. Signed with STRIPE_SECRET_KEY (see api/_lib/booking.ts).
+    let bookingToken: string | null = null;
+    let bookingId: string | null = null;
+    let saveCardUrl: string | null = null;
+    if (isQuote) {
+      const signingSecret = process.env["STRIPE_SECRET_KEY"];
+      if (!signingSecret) {
+        logErr("config", "STRIPE_SECRET_KEY is not configured (needed for booking token)");
+        return json(500, { ok: false, error: "server_error" });
+      }
+      const signed = signBooking(signingSecret, {
+        email: (email ?? "").trim(),
+        name: (name ?? "").trim(),
+        first: (price ?? "").trim() || undefined,
+        service: (service ?? "").trim() || undefined,
+        date: (date ?? "").trim() || undefined,
+      });
+      bookingToken = signed.token;
+      bookingId = signed.bid;
+      saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
+      log("booking", { bid: bookingId });
+    }
+
     const row = (label: string, value: string) =>
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
@@ -258,7 +285,7 @@ export default async function handler(req: Req, res: Res) {
 ${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
-        <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form</p>
+        <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form${bookingId ? ` · Booking ID: ${bookingId}` : ""}</p>
       </div>
     `;
 
@@ -316,6 +343,9 @@ What happens next:
 
 I'll confirm your estimate, date and arrival window by the end of the next business day. Your request is not a confirmed booking yet. No payment is taken by this form.
 
+Save your card now ($0 today) so we can charge it only after you approve your photo report:
+${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
+
 How payment works:
 
 After the clean, you get a photo report of every room. We charge your card only after you approve it. No response within 24 hours = approved.
@@ -354,7 +384,13 @@ hello@gatehousehomecleaning.com`;
       log("customer_confirmation", "skipped_no_email");
     }
 
-    return json(200, { ok: true, success: true, customerEmailSent });
+    return json(200, {
+      ok: true,
+      success: true,
+      customerEmailSent,
+      ...(bookingId ? { booking_id: bookingId } : {}),
+      ...(bookingToken ? { bt: bookingToken } : {}),
+    });
   } catch (error: unknown) {
     logErr("unexpected", error);
     return json(500, { ok: false, error: "server_error" });

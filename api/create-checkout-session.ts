@@ -1,11 +1,18 @@
 import { z } from "zod";
+import { signBooking, verifyBooking, rateLimit, clientIp } from "./_lib/booking";
 
 // Vercel serverless function — creates a Stripe Checkout Session in `setup`
 // mode so the client can save a card ($0 today, no charge). The saved card is
 // attached to the Stripe Customer and used later for off-session charges
 // after the client approves the photo report ("approve, then pay").
 //
+// Every card save is tied to a server-issued booking_id (HMAC-signed token).
+// The Checkout Session carries the booking_id in client_reference_id and
+// metadata; success_url includes {CHECKOUT_SESSION_ID} so /save-card can
+// verify the session server-side instead of trusting ?saved=1.
+//
 // Env required: STRIPE_SECRET_KEY (live secret key, set in Vercel dashboard)
+// The same key signs booking tokens (see api/_lib/booking.ts).
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -31,8 +38,12 @@ type Res = {
 const SessionRequestSchema = z.object({
   request_id: z.string().uuid().optional(),
   website: z.string().max(300).optional(),
-  name: z.string().trim().min(1).max(255),
-  email: z.string().trim().min(1).max(255),
+  // Either a signed booking token (preferred — from the booking flow) ...
+  bt: z.string().max(2000).optional(),
+  // ... or raw name/email (standalone /save-card visit; a booking_id is
+  // generated server-side and returned as a token).
+  name: z.string().trim().min(1).max(255).optional(),
+  email: z.string().trim().min(1).max(255).optional(),
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -62,6 +73,7 @@ async function stripePost(
   secretKey: string,
   path: string,
   params: Record<string, string>,
+  idempotencyKey?: string,
 ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
   const body = new URLSearchParams(params);
   const response = await fetch(`${STRIPE_API}${path}`, {
@@ -69,6 +81,7 @@ async function stripePost(
     headers: {
       Authorization: `Bearer ${secretKey}`,
       "Content-Type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
     },
     body,
     signal: AbortSignal.timeout(15000),
@@ -140,6 +153,12 @@ export default async function handler(req: Req, res: Res) {
       return json(500, { ok: false, error: "server_error" });
     }
 
+    // Best-effort rate limit: 20 session creations per IP per minute.
+    if (!rateLimit(clientIp(req.headers), 20)) {
+      logErr("rate_limit", "too many requests");
+      return json(429, { ok: false, error: "too_many_requests" });
+    }
+
     const body: unknown = req.body ?? null;
     if (!body || typeof body !== "object") {
       return json(400, { ok: false, errors: { form: "The request could not be read. Please try again." } });
@@ -156,11 +175,49 @@ export default async function handler(req: Req, res: Res) {
       }
       return json(400, { ok: false, errors });
     }
-    const email = parsed.data.email.trim();
-    if (!EMAIL_RE.test(email)) {
-      return json(400, { ok: false, errors: { email: "Enter a valid email, like name@example.com." } });
+
+    // Resolve booking identity. A signed token (from the booking flow) is
+    // trusted; raw name/email creates a fresh server-side booking_id.
+    // The email used for the Stripe Customer ALWAYS comes from server-verified
+    // data — never from an unverified client field alone.
+    let bookingId: string;
+    let email: string;
+    let name: string;
+    let bookingSummary: Record<string, string> = {};
+    let bt: string;
+
+    if (parsed.data.bt) {
+      const verified = verifyBooking(STRIPE_SECRET_KEY, parsed.data.bt);
+      if (!verified.ok) {
+        logErr("booking_token", verified.reason);
+        return json(400, { ok: false, error: "invalid_booking" });
+      }
+      const p = verified.payload;
+      bookingId = p.bid;
+      email = p.email;
+      name = p.name;
+      bt = parsed.data.bt;
+      if (p.first) bookingSummary.first = p.first;
+      if (p.recurring) bookingSummary.recurring = p.recurring;
+      if (p.service) bookingSummary.service = p.service;
+      if (p.date) bookingSummary.date = p.date;
+      log("booking_token", "ok");
+    } else {
+      const rawEmail = (parsed.data.email ?? "").trim();
+      const rawName = (parsed.data.name ?? "").trim();
+      if (!EMAIL_RE.test(rawEmail)) {
+        return json(400, { ok: false, errors: { email: "Enter a valid email, like name@example.com." } });
+      }
+      if (rawName.length < 2) {
+        return json(400, { ok: false, errors: { name: "Enter your name." } });
+      }
+      email = rawEmail;
+      name = rawName;
+      const signed = signBooking(STRIPE_SECRET_KEY, { email, name });
+      bt = signed.token;
+      bookingId = signed.bid;
+      log("booking_token", "issued_standalone");
     }
-    const name = parsed.data.name.trim();
     log("validate", "ok");
 
     // Step: reuse an existing customer when the email is already known,
@@ -192,7 +249,8 @@ export default async function handler(req: Req, res: Res) {
           email,
           name,
           "metadata[source]": "gatehouse_save_card",
-        });
+          "metadata[gh_booking_id]": bookingId,
+        }, `customer_${bookingId}`);
         if (!created.ok || typeof created.data["id"] !== "string") {
           logErr("customer_create", `stripe ${created.status}: ${stripeErrMsg(created.data)}`);
           return json(500, { ok: false, error: "server_error" });
@@ -203,26 +261,42 @@ export default async function handler(req: Req, res: Res) {
         logErr("customer_create", err);
         return json(500, { ok: false, error: "server_error" });
       }
+    } else {
+      // Link the existing customer to this booking (server-verified email only).
+      try {
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+          "metadata[gh_booking_id]": bookingId,
+          "metadata[gh_state]": "awaiting_card",
+        }, `customer_meta_${bookingId}`);
+      } catch (err) {
+        logErr("customer_meta", err);
+        // Non-fatal: the session below carries the booking linkage too.
+      }
     }
 
     // Step: Checkout Session in setup mode — $0 today, card saved on the
     // customer for future off-session charges after photo-report approval.
+    // The session is bound to the booking via client_reference_id + metadata.
+    // success_url carries the Stripe session id so /save-card verifies it
+    // server-side (never trusts ?saved=1 alone).
     const base = siteBase(origin);
     try {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",
         currency: "usd",
         customer: customerId,
-        success_url: `${base}/save-card?saved=1`,
-        cancel_url: `${base}/save-card?canceled=1`,
+        client_reference_id: bookingId,
+        success_url: `${base}/save-card?saved=1&session_id={CHECKOUT_SESSION_ID}&bt=${encodeURIComponent(bt)}`,
+        cancel_url: `${base}/save-card?canceled=1&bt=${encodeURIComponent(bt)}`,
         "metadata[source]": "gatehouse_save_card",
-      });
+        "metadata[gh_booking_id]": bookingId,
+      }, `setup_${bookingId}`);
       if (!session.ok || typeof session.data["url"] !== "string") {
         logErr("checkout_session", `stripe ${session.status}: ${stripeErrMsg(session.data)}`);
         return json(500, { ok: false, error: "server_error" });
       }
       log("checkout_session", "ok");
-      return json(200, { ok: true, url: session.data["url"] as string });
+      return json(200, { ok: true, url: session.data["url"] as string, bt, booking_id: bookingId });
     } catch (err) {
       logErr("checkout_session", err);
       return json(500, { ok: false, error: "server_error" });

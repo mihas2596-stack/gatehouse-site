@@ -318,7 +318,7 @@ const Quote = () => {
       }
       if (!data?.ok) throw new Error("Booking request failed");
       trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
-      navigate("/thank-you", { state: { submitted: true, kind: "booking", customerEmailSent: data.customerEmailSent } });
+      navigate("/thank-you", { state: { submitted: true, kind: "booking", customerEmailSent: data.customerEmailSent, bt: data.bt } });
     } catch (err) {
       console.error("Quote booking error");
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "delivery" });
