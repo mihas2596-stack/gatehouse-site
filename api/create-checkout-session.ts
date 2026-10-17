@@ -211,6 +211,7 @@ export default async function handler(req: Req, res: Res) {
     try {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",
+        currency: "usd",
         customer: customerId,
         success_url: `${base}/save-card?saved=1`,
         cancel_url: `${base}/save-card?canceled=1`,
