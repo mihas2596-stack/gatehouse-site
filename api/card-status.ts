@@ -167,18 +167,14 @@ export default async function handler(req: Req, res: Res) {
     const sessionId = q(query["session_id"]);
     const bt = q(query["bt"]);
 
-    if (!sessionId || !/^cs_(test|live)_/.test(sessionId)) {
-      // No (valid) session id — nothing to verify. This is the case the old
-      // UI got wrong: ?saved=1 without a session must NOT show "Card saved".
-      res.status(200).json({ requestId, ok: true, verified: false, status: "unknown", booking: null });
-      return;
-    }
-
+    // Verify the booking token FIRST (before the session branch), so that
+    // /save-card?bt=<token> without a session_id still gets its booking
+    // summary. The token alone never counts as payment verification.
     let booking: Record<string, string> | null = null;
     let bookingId: string | null = null;
     if (bt) {
       const verified = verifyBooking(STRIPE_SECRET_KEY, bt);
-      if (!verified.ok) {
+      if (verified.ok === false) {
         logErr("booking_token", verified.reason);
         res.status(200).json({ requestId, ok: true, verified: false, status: "unknown", booking: null });
         return;
@@ -190,6 +186,14 @@ export default async function handler(req: Req, res: Res) {
       if (p.recurring) booking.recurring = p.recurring;
       if (p.service) booking.service = p.service;
       if (p.date) booking.date = p.date;
+    }
+
+    if (!sessionId || !/^cs_(test|live)_/.test(sessionId)) {
+      // No (valid) session id — nothing to verify. This is the case the old
+      // UI got wrong: ?saved=1 without a session must NOT show "Card saved".
+      // The booking summary (from bt) is returned so /save-card can render it.
+      res.status(200).json({ requestId, ok: true, verified: false, status: "unknown", booking });
+      return;
     }
 
     // 1. Retrieve the Checkout Session.
