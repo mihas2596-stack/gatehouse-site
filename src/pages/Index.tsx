@@ -1,4 +1,4 @@
-import { CheckCircle2, MapPin, Tag, Wallet, CalendarX, ShieldCheck } from "lucide-react";
+import { CheckCircle2, MapPin, Tag, Wallet, CalendarX, ShieldCheck, Calculator, CreditCard, Camera } from "lucide-react";
 import { Helmet } from "react-helmet-async";
 import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
@@ -7,7 +7,6 @@ import IncludedRooms from "@/components/IncludedRooms";
 import ReportShowcase from "@/components/ReportShowcase";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
-import founderAsset from "@/assets/nik-founder.jpeg";
 import { OFFER_TEXT } from "@/config/offer";
 import { PRICES, TIERS, FOUNDING_FIRST_CLEAN } from "@/config/calculator";
 
@@ -22,10 +21,35 @@ const biweeklyRows = TIERS.map(({ key, rooms }) => ({
   price: PRICES.recurring[key],
 }));
 
-const steps = [
-  ["1", "Get your price", "tell us your ZIP, home size and service."],
-  ["2", "Pick your day", "choose a weekday and arrival window. It stays the same every other week."],
-  ["3", "We clean", "your cleaner arrives with everything needed."],
+const howItWorks = [
+  {
+    n: "1",
+    Icon: Calculator,
+    title: "See your price",
+    text: "Answer a few questions about your home. Your price appears instantly — $129, $189 or $239. No phone call needed.",
+    highlight: false,
+  },
+  {
+    n: "2",
+    Icon: CreditCard,
+    title: "Book and save your card",
+    text: "Pick your day and save your card to secure the booking. $0 is charged today.",
+    highlight: false,
+  },
+  {
+    n: "3",
+    Icon: Camera,
+    title: "We clean, you get the photos",
+    text: "After the visit, you receive a photo report of every room — before we charge a cent.",
+    highlight: false,
+  },
+  {
+    n: "4",
+    Icon: CheckCircle2,
+    title: "You approve, we charge",
+    text: "Happy with the clean? Tap Approve — only then is your card charged. No reply in 24 hours counts as approval.",
+    highlight: true,
+  },
 ];
 
 // Payment story for ad traffic: $0 to book, approve first, charged after approval.
@@ -267,41 +291,45 @@ const Index = () => (
       </div>
     </section>
 
-    {/* 5. THREE SIMPLE STEPS */}
+    {/* 5. HOW IT WORKS — FOUR STEPS */}
     <section className={`${sectionClass} bg-background`}>
       <div className="container">
-        <div className="mx-auto mb-6 max-w-2xl text-center">
+        <div className="mx-auto mb-8 max-w-2xl text-center">
           <p className="eyebrow mb-2 text-muted-foreground">How It Works</p>
-          <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">Three simple steps</h2>
+          <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">Four steps, zero surprises</h2>
+          <p className="mt-3 text-base leading-relaxed text-foreground md:text-lg">
+            Exactly what happens from your first click to the charge on your card.
+          </p>
         </div>
-        <ol className="mx-auto grid max-w-5xl grid-cols-1 gap-3 md:grid-cols-3 md:gap-5">
-          {steps.map(([number, title, text]) => (
-            <li key={number} className="clarity-card flex h-full flex-col gap-3 rounded-lg bg-card p-5 shadow-warm">
-              <div className="flex items-start gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary font-heading font-bold text-primary-foreground" aria-hidden="true">{number}</span>
-                <p className="pt-1 text-base leading-relaxed text-foreground">
-                  <strong className="font-semibold text-sage-foreground">{title}</strong> — {text}
-                </p>
+        <ol className="mx-auto grid max-w-6xl grid-cols-1 gap-4 md:grid-cols-4 md:gap-5">
+          {howItWorks.map(({ n, Icon, title, text, highlight }) => (
+            <li
+              key={n}
+              className={`flex h-full flex-col rounded-xl p-5 shadow-warm ${
+                highlight ? "border-2 border-golden bg-golden/10" : "border border-border bg-card"
+              }`}
+            >
+              <div className="mb-3 flex items-center gap-3">
+                <span
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-heading text-lg font-bold ${
+                    highlight ? "bg-golden text-white" : "bg-primary text-primary-foreground"
+                  }`}
+                  aria-hidden="true"
+                >
+                  {n}
+                </span>
+                <Icon className={`h-6 w-6 ${highlight ? "text-golden" : "text-sage-foreground"}`} aria-hidden="true" />
               </div>
-              {number === "3" && (
-                <figure className="mt-1 flex items-start gap-3 border-t border-border/60 pt-3">
-                  <img
-                    src={founderAsset}
-                    alt="Nick, founder of Gatehouse Home Cleaning"
-                    loading="lazy"
-                    className="h-12 w-12 shrink-0 rounded-full object-cover"
-                  />
-                  <figcaption className="text-sm leading-relaxed text-muted-foreground">
-                    “I manage your request and coordinate the visit. If you have a question, you can email me directly.” — Nick, owner
-                  </figcaption>
-                </figure>
-              )}
+              <p className="font-heading text-lg font-bold text-sage-foreground">{title}</p>
+              <p className="mt-1 text-sm leading-relaxed text-foreground md:text-base">{text}</p>
             </li>
           ))}
         </ol>
-        <p className="mx-auto mt-5 max-w-5xl text-left text-sm leading-relaxed text-foreground md:text-center md:text-base">
-          You can send a booking request any time. We confirm your booking within one business day — usually much sooner — and give you a one-hour arrival window.
-        </p>
+        <div className="mt-7 text-center">
+          <Button asChild variant="hero" size="lg" className="rounded-full px-8">
+            <Link to="/quote">See My Price</Link>
+          </Button>
+        </div>
       </div>
     </section>
 
