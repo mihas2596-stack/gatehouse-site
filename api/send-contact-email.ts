@@ -1,5 +1,56 @@
 import { z } from "zod";
-import { signBooking, rateLimit, clientIp } from "./_lib/booking";
+import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+
+type BookingPayload = {
+  bid: string;
+  email: string;
+  name: string;
+  ts: number;
+  first?: string;
+  recurring?: string;
+  service?: string;
+  date?: string;
+};
+
+const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
+
+const b64urlEncode = (s: string): string =>
+  Buffer.from(s, "utf8").toString("base64url");
+const b64urlDecode = (s: string): string =>
+  Buffer.from(s, "base64url").toString("utf8");
+
+function signBooking(
+  secret: string,
+  payload: Omit<BookingPayload, "bid" | "ts"> & { bid?: string; ts?: number },
+): { token: string; bid: string } {
+  const full: BookingPayload = {
+    ...payload,
+    bid: payload.bid ?? randomUUID(),
+    ts: payload.ts ?? Math.floor(Date.now() / 1000),
+  };
+  const payloadB64 = b64urlEncode(JSON.stringify(full));
+  const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return { token: `${payloadB64}.${sig}`, bid: full.bid };
+}
+
+const _rlHits = new Map<string, number[]>();
+function rateLimit(ip: string, maxPerMinute: number): boolean {
+  const now = Date.now();
+  const windowStart = now - 60_000;
+  const arr = (_rlHits.get(ip) ?? []).filter((t) => t > windowStart);
+  if (arr.length >= maxPerMinute) return false;
+  arr.push(now);
+  _rlHits.set(ip, arr);
+  if (_rlHits.size > 5000) _rlHits.clear();
+  return true;
+}
+
+function clientIp(headers: Record<string, string | string[] | undefined>): string {
+  const fwd = headers["x-forwarded-for"];
+  const first = Array.isArray(fwd) ? fwd[0] : fwd;
+  return (first ?? "unknown").split(",")[0].trim();
+}
+
 
 // Inlined from ../src/config/service-area (self-contained: the working
 // create-checkout-session function has no cross-directory imports, and the
@@ -235,7 +286,7 @@ export default async function handler(req: Req, res: Res) {
 
     // Server-issued booking identity (quote bookings only). The HMAC-signed
     // token binds this booking to the card-saving step (/save-card?bt=...)
-    // without a database. Signed with STRIPE_SECRET_KEY (see api/_lib/booking.ts).
+    // without a database. Signed with STRIPE_SECRET_KEY (inlined below, stateless).
     let bookingToken: string | null = null;
     let bookingId: string | null = null;
     let saveCardUrl: string | null = null;

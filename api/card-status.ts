@@ -1,3 +1,77 @@
+import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+
+type BookingPayload = {
+  bid: string;
+  email: string;
+  name: string;
+  ts: number;
+  first?: string;
+  recurring?: string;
+  service?: string;
+  date?: string;
+};
+
+const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
+
+const b64urlEncode = (s: string): string =>
+  Buffer.from(s, "utf8").toString("base64url");
+const b64urlDecode = (s: string): string =>
+  Buffer.from(s, "base64url").toString("utf8");
+
+function verifyBooking(
+  secret: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { ok: false, reason: "bad_format" };
+  }
+  const [payloadB64, sig] = parts;
+  let expected: string;
+  try {
+    expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  } catch {
+    return { ok: false, reason: "sign_error" };
+  }
+  const a = Buffer.from(sig, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { ok: false, reason: "bad_signature" };
+  }
+  let payload: BookingPayload;
+  try {
+    payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
+  } catch {
+    return { ok: false, reason: "bad_payload" };
+  }
+  if (!payload.bid || !payload.email || !payload.ts) {
+    return { ok: false, reason: "missing_fields" };
+  }
+  const age = Math.floor(Date.now() / 1000) - payload.ts;
+  if (age < 0 || age > TOKEN_TTL_SECONDS) {
+    return { ok: false, reason: "expired" };
+  }
+  return { ok: true, payload };
+}
+
+const _rlHits = new Map<string, number[]>();
+function rateLimit(ip: string, maxPerMinute: number): boolean {
+  const now = Date.now();
+  const windowStart = now - 60_000;
+  const arr = (_rlHits.get(ip) ?? []).filter((t) => t > windowStart);
+  if (arr.length >= maxPerMinute) return false;
+  arr.push(now);
+  _rlHits.set(ip, arr);
+  if (_rlHits.size > 5000) _rlHits.clear();
+  return true;
+}
+
+function clientIp(headers: Record<string, string | string[] | undefined>): string {
+  const fwd = headers["x-forwarded-for"];
+  const first = Array.isArray(fwd) ? fwd[0] : fwd;
+  return (first ?? "unknown").split(",")[0].trim();
+}
+
 // GET /api/card-status?session_id=cs_...&bt=...
 //
 // Server-side verification that a card was actually saved via Stripe.
@@ -15,7 +89,6 @@
 // Returns { ok, verified, status: "saved"|"pending"|"failed"|"unknown",
 //           booking: { first, recurring, service, date } | null }
 
-import { verifyBooking, rateLimit, clientIp } from "./_lib/booking";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 

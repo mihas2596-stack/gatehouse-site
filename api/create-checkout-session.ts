@@ -1,5 +1,92 @@
 import { z } from "zod";
-import { signBooking, verifyBooking, rateLimit, clientIp } from "./_lib/booking";
+import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+
+type BookingPayload = {
+  bid: string;
+  email: string;
+  name: string;
+  ts: number;
+  first?: string;
+  recurring?: string;
+  service?: string;
+  date?: string;
+};
+
+const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
+
+const b64urlEncode = (s: string): string =>
+  Buffer.from(s, "utf8").toString("base64url");
+const b64urlDecode = (s: string): string =>
+  Buffer.from(s, "base64url").toString("utf8");
+
+function signBooking(
+  secret: string,
+  payload: Omit<BookingPayload, "bid" | "ts"> & { bid?: string; ts?: number },
+): { token: string; bid: string } {
+  const full: BookingPayload = {
+    ...payload,
+    bid: payload.bid ?? randomUUID(),
+    ts: payload.ts ?? Math.floor(Date.now() / 1000),
+  };
+  const payloadB64 = b64urlEncode(JSON.stringify(full));
+  const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return { token: `${payloadB64}.${sig}`, bid: full.bid };
+}
+
+function verifyBooking(
+  secret: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { ok: false, reason: "bad_format" };
+  }
+  const [payloadB64, sig] = parts;
+  let expected: string;
+  try {
+    expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  } catch {
+    return { ok: false, reason: "sign_error" };
+  }
+  const a = Buffer.from(sig, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { ok: false, reason: "bad_signature" };
+  }
+  let payload: BookingPayload;
+  try {
+    payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
+  } catch {
+    return { ok: false, reason: "bad_payload" };
+  }
+  if (!payload.bid || !payload.email || !payload.ts) {
+    return { ok: false, reason: "missing_fields" };
+  }
+  const age = Math.floor(Date.now() / 1000) - payload.ts;
+  if (age < 0 || age > TOKEN_TTL_SECONDS) {
+    return { ok: false, reason: "expired" };
+  }
+  return { ok: true, payload };
+}
+
+const _rlHits = new Map<string, number[]>();
+function rateLimit(ip: string, maxPerMinute: number): boolean {
+  const now = Date.now();
+  const windowStart = now - 60_000;
+  const arr = (_rlHits.get(ip) ?? []).filter((t) => t > windowStart);
+  if (arr.length >= maxPerMinute) return false;
+  arr.push(now);
+  _rlHits.set(ip, arr);
+  if (_rlHits.size > 5000) _rlHits.clear();
+  return true;
+}
+
+function clientIp(headers: Record<string, string | string[] | undefined>): string {
+  const fwd = headers["x-forwarded-for"];
+  const first = Array.isArray(fwd) ? fwd[0] : fwd;
+  return (first ?? "unknown").split(",")[0].trim();
+}
+
 
 // Vercel serverless function — creates a Stripe Checkout Session in `setup`
 // mode so the client can save a card ($0 today, no charge). The saved card is
@@ -12,7 +99,7 @@ import { signBooking, verifyBooking, rateLimit, clientIp } from "./_lib/booking"
 // verify the session server-side instead of trusting ?saved=1.
 //
 // Env required: STRIPE_SECRET_KEY (live secret key, set in Vercel dashboard)
-// The same key signs booking tokens (see api/_lib/booking.ts).
+// The same key signs booking tokens (inlined below, stateless).
 
 const STRIPE_API = "https://api.stripe.com/v1";
 

@@ -19,7 +19,44 @@
 //  - 24h auto-charge is NOT implemented here (owner enables it explicitly)
 
 import { z } from "zod";
-import { rateLimit, clientIp } from "./_lib/booking";
+import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+
+type BookingPayload = {
+  bid: string;
+  email: string;
+  name: string;
+  ts: number;
+  first?: string;
+  recurring?: string;
+  service?: string;
+  date?: string;
+};
+
+const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
+
+const b64urlEncode = (s: string): string =>
+  Buffer.from(s, "utf8").toString("base64url");
+const b64urlDecode = (s: string): string =>
+  Buffer.from(s, "base64url").toString("utf8");
+
+const _rlHits = new Map<string, number[]>();
+function rateLimit(ip: string, maxPerMinute: number): boolean {
+  const now = Date.now();
+  const windowStart = now - 60_000;
+  const arr = (_rlHits.get(ip) ?? []).filter((t) => t > windowStart);
+  if (arr.length >= maxPerMinute) return false;
+  arr.push(now);
+  _rlHits.set(ip, arr);
+  if (_rlHits.size > 5000) _rlHits.clear();
+  return true;
+}
+
+function clientIp(headers: Record<string, string | string[] | undefined>): string {
+  const fwd = headers["x-forwarded-for"];
+  const first = Array.isArray(fwd) ? fwd[0] : fwd;
+  return (first ?? "unknown").split(",")[0].trim();
+}
+
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
