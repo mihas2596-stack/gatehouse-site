@@ -611,6 +611,9 @@ const Quote = () => {
               >
                 Request this booking
               </a>
+              <p className="mt-3 text-sm text-muted-foreground">
+                Your card is charged only after you approve your photo report. $0 to book.
+              </p>
             </div>
 
              {/* BOOKING REQUEST STEP */}

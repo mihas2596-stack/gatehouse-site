@@ -110,12 +110,12 @@ const Terms = () => {
           </li>
         </ul>
         <p className="mb-8">
-          To cancel or reschedule, text, call or email us.
+          To cancel or reschedule, email us.
         </p>
 
         <h2 className="font-heading text-2xl font-bold mb-4">7. Service Concerns</h2>
         <p className="mb-8">
-          Missed something on the checklist? Tell us by text or email with a photo within 24 hours after your photo report is sent. We fix it free within 72 hours.
+          Missed something on the checklist? Tell us by email with a photo within 24 hours after your photo report is sent. We fix it free within 72 hours.
         </p>
 
         <h2 className="font-heading text-2xl font-bold mb-4">8. Client Responsibilities</h2>

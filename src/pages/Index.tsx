@@ -222,7 +222,7 @@ const Index = () => (
 
 
     {/* 4. HOW OUR PRICING WORKS */}
-    <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
+    <section id="pricing" className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
       <div className="container">
         <div className="mx-auto max-w-3xl">
           <div className="text-center">
@@ -287,7 +287,7 @@ const Index = () => (
                 <figure className="mt-1 flex items-start gap-3 border-t border-border/60 pt-3">
                   <img
                     src={founderAsset}
-                    alt="Nick, owner of Gatehouse Home Cleaning"
+                    alt="Nick, founder of Gatehouse Home Cleaning"
                     loading="lazy"
                     className="h-12 w-12 shrink-0 rounded-full object-cover"
                   />

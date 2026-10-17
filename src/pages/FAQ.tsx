@@ -46,6 +46,14 @@ const FAQ = () => (
               </AccordionTrigger>
               <AccordionContent className="text-base leading-relaxed text-muted-foreground">
                 {faq.a}
+                {faq.link && (
+                  <>
+                    {" "}
+                    <Link to={faq.link.href} className="font-semibold text-primary underline">
+                      {faq.link.label}
+                    </Link>
+                  </>
+                )}
               </AccordionContent>
             </AccordionItem>
           ))}

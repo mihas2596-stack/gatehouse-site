@@ -1,8 +1,9 @@
 // All site FAQs live here so /faq and any JSON-LD stay in sync.
-export const FAQS: { q: string; a: string }[] = [
+export const FAQS: { q: string; a: string; link?: { href: string; label: string } }[] = [
   {
     q: "How much does it cost?",
     a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. Square footage and half bathrooms help us plan your visit; they do not change the calculator price. Most homes can see an estimate online. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
+    link: { href: "/#pricing", label: "See the pricing table" },
   },
   {
     q: "How do I pay?",
