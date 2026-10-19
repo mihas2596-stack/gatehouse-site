@@ -391,6 +391,14 @@ const Quote = () => {
     "w-full px-4 py-3 rounded-lg border border-border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring";
   const addonNote = "(every visit)";
   const includedAddons = ADDONS_INCLUDED_IN[service];
+  // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
+  const priceBlockAddons = [
+    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +$${ADDONS.insideOven.price}` : "",
+    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +$${ADDONS.insideFridge.price}` : "",
+    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +$${ADDONS.insideCabinets.price}` : "",
+    interiorWindows > 0 ? `${interiorWindows} interior windows +$${interiorWindows * ADDONS.interiorWindow.price}` : "",
+    pets ? `Pets +$${ADDONS.pets.price}` : "",
+  ].filter(Boolean).join(", ");
 
   return (
     <div className="page-shell">
@@ -663,6 +671,9 @@ const Quote = () => {
                             <p className="text-muted-foreground">After 6 months: ${postFounding.recurring_total} per visit.</p>
                           )}
                         </div>
+                      )}
+                      {priceBlockAddons && (
+                        <p className="text-sm text-muted-foreground mt-1">Add-ons, every visit: {priceBlockAddons}</p>
                       )}
                     </div>
                   ) : null}
