@@ -160,6 +160,28 @@ function signBooking(
   return { token: `${payloadB64}.${sig}`, bid: full.bid };
 }
 
+
+// Booking-link signing key, separate from STRIPE_SECRET_KEY so that a Stripe
+// key rotation does not invalidate outstanding booking links. Set
+// BOOKING_LINK_SECRET in Vercel; until then it falls back to the Stripe key
+// and old links keep working.
+const bookingLinkSecret = (stripeKey: string): string =>
+  process.env["BOOKING_LINK_SECRET"] || stripeKey;
+
+// Verify with the dedicated key first, then the legacy Stripe key, so links
+// issued before the dedicated key was set keep working through rotation.
+function verifyBookingLink(
+  stripeKey: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  const dedicated = process.env["BOOKING_LINK_SECRET"];
+  if (dedicated) {
+    const r = verifyBooking(dedicated, token);
+    if (r.ok) return r;
+  }
+  return verifyBooking(stripeKey, token);
+}
+
 const _rlHits = new Map<string, number[]>();
 function rateLimit(ip: string, maxPerMinute: number): boolean {
   const now = Date.now();
@@ -473,7 +495,7 @@ export default async function handler(req: Req, res: Res) {
         serverFirst = String(server.first_total);
         serverRecurring = tokenRecurring;
       }
-      const signed = signBooking(signingSecret, {
+      const signed = signBooking(bookingLinkSecret(signingSecret), {
         email: (email ?? "").trim(),
         name: (name ?? "").trim(),
         first: tokenPrice,

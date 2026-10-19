@@ -64,7 +64,7 @@ const paymentSteps = [
 const trustBadges = [
   { Icon: Tag, label: "See your price online", text: "Your price is based on the home details you enter. No in-home estimate." },
   { Icon: CalendarX, label: "Free cancellation", text: "Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. If we can't get in at the scheduled time, the full visit price is charged." },
-  { Icon: Wallet, label: "Approve, then pay", text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue." },
+  { Icon: Wallet, label: "Approve, then pay", text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. (If we can't access your home at the scheduled time, the visit price applies — see Terms.)" },
 ];
 
 const included = [
