@@ -223,7 +223,7 @@ const Privacy = () => {
           <li>E. Biometric information — NO</li>
           <li>F. Internet or network activity — YES</li>
           <li>G. Geolocation data — YES</li>
-          <li>H. Audio, electronic, sensory information — NO</li>
+          <li>H. Audio, electronic, sensory information — YES (photos of cleaned rooms for your photo report; kept 90 days, never published without your separate written permission)</li>
           <li>I. Professional or employment-related information — NO</li>
           <li>J. Education information — NO</li>
           <li>K. Inferences drawn from personal information — NO</li>

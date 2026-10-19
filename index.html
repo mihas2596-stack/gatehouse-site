@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <!-- Termly Consent Banner: the ResourceBlocker MUST be the first script on the page -->
+    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on" onload="onTermlyLoaded()"></script>
     <script>
       function onTermlyLoaded() {
         function changed() { document.dispatchEvent(new Event("gh-consent")); }
@@ -8,8 +10,6 @@
         Termly.on("consent", changed);
       }
     </script>
-    <!-- Termly Consent Banner (must load before any tracking scripts) -->
-    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on" onload="onTermlyLoaded()"></script>
     <!-- Google Tag Manager (deferred until idle/interaction to reduce TBT) -->
     <script>
       (function(){

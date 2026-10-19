@@ -221,6 +221,12 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "dispute") {
+      // A dispute after a completed charge cannot just block: the money has
+      // moved. It needs a refund flow, not a state flip.
+      if (state === "paid") {
+        logErr("dispute", "blocked: already paid, needs refund flow");
+        return json(409, { ok: false, error: "already_paid" });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "issue_open",
         "metadata[gh_issue_open]": "1",
@@ -231,6 +237,13 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "resolve") {
+      // resolve only re-opens a disputed booking. It must never move a paid
+      // (or payment_pending) booking back to approved — that would re-arm
+      // charging for an already-settled visit.
+      if (state !== "issue_open") {
+        logErr("resolve", `blocked: state=${state}, need issue_open`);
+        return json(409, { ok: false, error: "nothing_to_resolve" });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "approved",
         "metadata[gh_issue_open]": "",
@@ -275,9 +288,36 @@ export default async function handler(req: Req, res: Res) {
         logErr("charge", "blocked: no saved payment method");
         return json(409, { ok: false, error: "no_payment_method" });
       }
+      // Server-side amount check: the charge must equal the server-quoted
+      // first-visit price stored on the customer at card-save time. The
+      // request amount is never trusted on its own (fail-closed).
+      const quotedCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+      if (!Number.isFinite(quotedCents) || quotedCents <= 0) {
+        logErr("charge", "blocked: no quoted price on record");
+        return json(409, { ok: false, error: "quote_missing" });
+      }
+      if (amountCents !== quotedCents) {
+        logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
+        return json(409, { ok: false, error: "amount_mismatch" });
+      }
       // Idempotency: one payment per booking+report version, no matter how
       // many times this is called or how often Stripe redelivers webhooks.
       const idemKey = `charge_${bookingId}_v${reportVersion}`;
+      // Fresh re-read immediately before creating the PaymentIntent: a
+      // dispute (or another charge) landing concurrently must win over this
+      // charge. Metadata writes are not transactional, so this narrows —
+      // but cannot fully close — the race; the state machine above is the
+      // backstop.
+      const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+      const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
+      if (freshMeta["gh_issue_open"] === "1") {
+        logErr("charge", "blocked on re-read: issue open");
+        return json(409, { ok: false, error: "issue_open" });
+      }
+      if ((freshMeta["gh_state"] ?? "") !== "approved") {
+        logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
+        return json(409, { ok: false, error: "not_approved" });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "payment_pending",
         "metadata[gh_report_version]": String(reportVersion),

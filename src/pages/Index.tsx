@@ -47,7 +47,7 @@ const howItWorks = [
     n: "4",
     Icon: CheckCircle2,
     title: "You approve, we charge",
-    text: "Happy with the clean? Tap Approve — only then is your card charged. No reply in 24 hours counts as approval.",
+    text: "Tap Approve when you're happy with the clean. Do nothing and your card is charged automatically 24 hours after we send the report. Flag an issue and the charge waits until we fix it.",
     highlight: true,
   },
 ];
@@ -57,14 +57,14 @@ const howItWorks = [
 // with a Payment Element / Checkout card capture (see docs/booking-flow-card-on-file-v1.md).
 const paymentSteps = [
   ["1", "$0 to book", "booking is free. Nothing is charged when you request your visit."],
-  ["2", "You approve first", "after every clean you get a room-by-room photo report. Approve within 24 hours — no response counts as approval."],
-  ["3", "Charged after approval", "your card is charged only once you've seen the work. That's the whole deal."],
+  ["2", "You approve first", "after every clean you get a room-by-room photo report. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue."],
+  ["3", "Charged on approval", "no surprises: approve the report and we charge your card — or it happens automatically 24 hours after we send it, unless you flag an issue."],
 ];
 
 const trustBadges = [
   { Icon: Tag, label: "See your price online", text: "Your price is based on the home details you enter. No in-home estimate." },
   { Icon: CalendarX, label: "Free cancellation", text: "Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. If we can't get in at the scheduled time, the full visit price is charged." },
-  { Icon: Wallet, label: "Approve, then pay", text: "You see the photo report before we charge your card. No response within 24 hours = approved." },
+  { Icon: Wallet, label: "Approve, then pay", text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue." },
 ];
 
 const included = [
@@ -343,7 +343,7 @@ const Index = () => (
         </p>
         <p className="mt-3 text-base font-semibold text-sage-foreground">Founding first-clean price: ${FOUNDING_FIRST_CLEAN.S} / ${FOUNDING_FIRST_CLEAN.M} / ${FOUNDING_FIRST_CLEAN.L} for small / medium / large homes.</p>
         <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
-          Limited to the first 10 households in our service area. The founding price applies to the first booking. Founding rate is held for six months from the first clean.
+          Limited to the first 10 households in our service area. The founding price applies to the first booking. Founding rate is held for six months from the first clean. If your first visit needs a deep clean, it is priced at the standard deep-clean rate — the founding discount then applies to your recurring visits.
         </p>
       </div>
     </section>
