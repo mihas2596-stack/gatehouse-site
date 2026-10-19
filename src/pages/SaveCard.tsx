@@ -142,16 +142,26 @@ const SaveCard = () => {
           <>
             <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-              {verify.kind === "pending" ? "Almost there" : "Card not saved"}
+              {verify.kind === "pending" ? "Almost there" : verify.kind === "failed" ? "Card not saved" : "Couldn't verify card"}
             </h1>
             <p className="text-lg text-foreground mb-6">
               {verify.kind === "pending"
-                ? "Your card entry is still being confirmed. Please wait a moment and refresh, or try again below."
-                : "We couldn't confirm a saved card for this visit. Nothing was charged. Please try again below."}
+                ? "Your card entry is still being confirmed with Stripe. Wait a moment, then check again."
+                : verify.kind === "failed"
+                  ? "The card wasn't saved. Nothing was charged. You can try again with the same or a different card."
+                  : "We couldn't verify your card status with Stripe right now — this doesn't mean it failed. Nothing was charged. Check again in a moment, or try a fresh card entry below."}
             </p>
-            <Button variant="hero" size="lg" onClick={() => window.location.reload()} className="mb-4">
-              Check again
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center mb-6">
+              <Button variant="hero" size="lg" onClick={() => window.location.reload()}>
+                Check again
+              </Button>
+              <Button variant="outline" size="lg" onClick={() => setVerify({ kind: "none" })}>
+                Start a fresh card entry
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Still stuck? Email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a> — Nick will help.
+            </p>
           </>
         )}
         {verify.kind === "none" && (
@@ -173,6 +183,15 @@ const SaveCard = () => {
                   {booking!.first && <li>First visit: <strong>${booking!.first}</strong></li>}
                   {booking!.recurring && <li>Recurring visits: <strong>${booking!.recurring}</strong></li>}
                 </ul>
+                <p className="mt-4 border-t border-sage/40 pt-4 text-sm leading-relaxed">
+                  By continuing, you authorize Gatehouse to charge this card{" "}
+                  {booking!.first ? (
+                    <>${booking!.first} for the first visit{booking!.recurring ? <> and ${booking!.recurring} per recurring visit</> : null}</>
+                  ) : (
+                    <>per the prices above</>
+                  )}{" "}
+                  — each charge only after you approve that visit's photo report. $0 is charged today.
+                </p>
               </div>
             )}
             <div className="mb-8 rounded-xl bg-card p-6 text-left">

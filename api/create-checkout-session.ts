@@ -310,7 +310,16 @@ export default async function handler(req: Req, res: Res) {
     // Step: reuse an existing customer when the email is already known,
     // so repeat visits don't create duplicates. Uses the list endpoint with
     // an email filter (not /customers/search) so restricted API keys work.
+    //
+    // SECURITY: reuse is allowed ONLY when the email came from a verified
+    // booking token (bt). In standalone mode (typed email, no token) we MUST
+    // NOT look up an existing customer: the typed email is unverified, and
+    // reusing would let anyone attach to — and overwrite metadata of —
+    // someone else's Stripe Customer. Standalone always creates a fresh
+    // customer.
+    const hasVerifiedBooking = bt !== "";
     let customerId: string | null = null;
+    if (hasVerifiedBooking) {
     try {
       const found = await stripeGet(
         STRIPE_SECRET_KEY,
@@ -328,6 +337,9 @@ export default async function handler(req: Req, res: Res) {
     } catch (err) {
       logErr("customer_lookup", err);
       return json(500, { ok: false, error: "server_error" });
+    }
+    } else {
+      log("customer_lookup", "skipped_standalone");
     }
 
     if (!customerId) {
@@ -371,6 +383,9 @@ export default async function handler(req: Req, res: Res) {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",
         currency: "usd",
+        // Cards only: Klarna / Cash App / bank debit make no sense for a
+        // card-on-file setup and confuse clients on the save-card page.
+        "payment_method_types[0]": "card",
         customer: customerId,
         client_reference_id: bookingId,
         success_url: `${base}/save-card?saved=1&session_id={CHECKOUT_SESSION_ID}&bt=${encodeURIComponent(bt)}`,

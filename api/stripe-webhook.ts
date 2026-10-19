@@ -161,8 +161,9 @@ export default async function handler(req: Req, res: Res) {
     res.status(200).json({ ok: true, deduped: true });
     return;
   }
-  seenEvents.add(eventId);
-  if (seenEvents.size > 2000) seenEvents.clear();
+  // NOTE: eventId is added to seenEvents only AFTER successful processing
+  // (see bottom of handler). Marking it before would wrongly dedupe Stripe
+  // retries after a handler failure.
 
   const obj = event.data?.object ?? {};
   log("event", { type: eventType, id: eventId });
@@ -204,21 +205,38 @@ export default async function handler(req: Req, res: Res) {
       const bookingId = meta["gh_booking_id"];
       const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
       if (customerId && bookingId) {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-          "metadata[gh_state]": eventType === "payment_intent.succeeded" ? "paid" : "payment_failed",
-          "metadata[gh_last_payment]": (obj["id"] as string | undefined) ?? "",
-        });
-        log("payment", { state: eventType, booking: bookingId });
+        // Guard against out-of-order events: never regress a "paid" booking
+        // back to an earlier state. Read current state first.
+        const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
+        const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
+        const curState = curMeta["gh_state"] ?? "";
+        const newState = eventType === "payment_intent.succeeded" ? "paid" : "payment_failed";
+        if (curState === "paid" && newState !== "paid") {
+          log("payment", { state: "regression_blocked", booking: bookingId, curState, newState });
+        } else {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+            "metadata[gh_state]": newState,
+            "metadata[gh_last_payment]": (obj["id"] as string | undefined) ?? "",
+          });
+          log("payment", { state: eventType, booking: bookingId });
+        }
       }
     } else {
       log("ignored", eventType);
     }
   } catch (err) {
     logErr("handler", err);
-    // Return 500 so Stripe retries the delivery.
+    // Return 500 so Stripe retries the delivery. The event is NOT marked as
+    // seen, so the retry will be processed (not deduped).
     res.status(500).json({ ok: false, error: "server_error" });
     return;
   }
+
+  // Mark as processed only after success. In-memory Set is a best-effort
+  // guard for duplicate deliveries within one serverless instance; Stripe's
+  // own retry + idempotent state writes are the real safety net.
+  seenEvents.add(eventId);
+  if (seenEvents.size > 2000) seenEvents.clear();
 
   res.status(200).json({ ok: true });
 }

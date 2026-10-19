@@ -26,7 +26,7 @@ const ThankYou = () => {
         <p className="text-lg text-foreground mb-6">
           {received ? isBooking ? "Your booking is requested, and still needs confirmation. Nick will email you within one business day to confirm availability and next steps." : "Thanks for your question. Nick will reply by email within one business day." : "Use our quote or contact form to send a request. This page alone does not create a booking."}
         </p>
-        {received && submission.customerEmailSent === false && <p className="text-sm text-muted-foreground mb-6">Your request reached us, but the automatic confirmation email could not be sent. You do not need to submit it again.</p>}
+        {received && submission.customerEmailSent === false && <p className="text-sm text-muted-foreground mb-6">Your request reached us safely — no need to send it again. The automatic confirmation email didn't go through (check your spam folder just in case); Nick will still confirm everything by email within one business day.</p>}
         {received && isBooking && (
           <div className="mb-8 rounded-xl bg-card p-6 text-left">
             <h2 className="mb-3 font-heading text-xl font-bold">What happens next</h2>

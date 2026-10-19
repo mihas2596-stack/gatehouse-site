@@ -14,6 +14,49 @@ type BookingPayload = {
 
 const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
 
+// ---- Server-side price tables (inlined — api/ cannot import from src/
+// due to the Vercel bundler limitation). Must match src/config/calculator.ts.
+// Used to verify the browser-sent price instead of trusting it blindly.
+type TierKey = "S" | "M" | "L";
+const SERVER_PRICES: Record<string, Record<TierKey, number>> = {
+  standardOnetime: { S: 149, M: 219, L: 279 },
+  deep: { S: 249, M: 329, L: 399 },
+  moveinout: { S: 279, M: 369, L: 449 },
+  recurring: { S: 129, M: 189, L: 239 },
+};
+const SERVER_FOUNDING_FIRST: Record<TierKey, number> = {
+  S: Math.round(149 * 0.7),
+  M: Math.round(219 * 0.7),
+  L: Math.round(279 * 0.7),
+};
+function serverTierFor(bedrooms: number, fullBaths: number): TierKey | null {
+  if (!Number.isFinite(bedrooms) || !Number.isFinite(fullBaths)) return null;
+  if (bedrooms > 5 || fullBaths > 5) return null;
+  if (bedrooms >= 4 || fullBaths >= 4) return "L";
+  if (bedrooms === 3 || fullBaths === 3) return "M";
+  return "S";
+}
+// Returns the minimum legitimate first-visit price for the given home/service.
+// Add-ons only increase the price, so a browser price BELOW this floor is
+// rejected and replaced with the server value.
+function serverPriceFloor(
+  bedroomsRaw: string | undefined,
+  bathroomsRaw: string | undefined,
+  serviceRaw: string | undefined,
+  founding: boolean | undefined,
+): number | null {
+  const bedrooms = parseInt(bedroomsRaw ?? "", 10);
+  const fullBaths = parseInt((bathroomsRaw ?? "").split(".")[0], 10);
+  const tier = serverTierFor(bedrooms, fullBaths);
+  if (!tier) return null;
+  const service = (serviceRaw ?? "").toLowerCase();
+  if (founding && service === "standard") return SERVER_FOUNDING_FIRST[tier];
+  if (service === "deep") return SERVER_PRICES.deep[tier];
+  if (service === "moveinout" || service === "move-in-move-out") return SERVER_PRICES.moveinout[tier];
+  // standard: first visit could be recurring or one-time; floor is the lower.
+  return Math.min(SERVER_PRICES.recurring[tier], SERVER_PRICES.standardOnetime[tier]);
+}
+
 const b64urlEncode = (s: string): string =>
   Buffer.from(s, "utf8").toString("base64url");
 const b64urlDecode = (s: string): string =>
@@ -296,10 +339,22 @@ export default async function handler(req: Req, res: Res) {
         logErr("config", "STRIPE_SECRET_KEY is not configured (needed for booking token)");
         return json(500, { ok: false, error: "server_error" });
       }
+      // Server-side price verification: never trust the browser-sent price
+      // for the signed token. Compute the floor from bedrooms/bathrooms/
+      // service; a browser price below the floor is replaced (tamper attempt
+      // or stale calculator). Add-ons only raise the price, so higher values
+      // pass through.
+      let tokenPrice = (price ?? "").trim() || undefined;
+      const priceFloor = serverPriceFloor(bedrooms, bathrooms, service, founding);
+      const browserPriceNum = tokenPrice ? parseFloat(tokenPrice.replace(/[^0-9.]/g, "")) : NaN;
+      if (priceFloor !== null && Number.isFinite(browserPriceNum) && browserPriceNum < priceFloor) {
+        logErr("price_tamper", `browser $${browserPriceNum} < server floor $${priceFloor}; replaced`);
+        tokenPrice = String(priceFloor);
+      }
       const signed = signBooking(signingSecret, {
         email: (email ?? "").trim(),
         name: (name ?? "").trim(),
-        first: (price ?? "").trim() || undefined,
+        first: tokenPrice,
         service: (service ?? "").trim() || undefined,
         date: (date ?? "").trim() || undefined,
       });

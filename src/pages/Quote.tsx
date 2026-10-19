@@ -40,7 +40,9 @@ const resolveService = (param: string | null): CalcServiceKey => {
 
 // Exact consent wording, stored with every booking request.
 const TERMS_CONSENT_TEXT =
-  "I agree to the Terms of Service, including the arbitration clause in Section 16, and the Privacy Policy. I consent to booking texts at the number I provided, including confirmations, reminders and my photo report. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.";
+  "I agree to the Terms of Service, including the arbitration clause in Section 16, and the Privacy Policy.";
+const SMS_CONSENT_TEXT =
+  "Send me booking updates by text (confirmations, reminders, my photo report). Optional — email works too. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.";
 const PHOTO_CONSENT_TEXT =
   "I agree to photos of the cleaned rooms for the approval photo report I receive before my card is charged.";
 
@@ -124,6 +126,7 @@ const Quote = () => {
     website: "",
     termsConsent: false,
     photoConsent: false,
+    smsConsent: false,
   });
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState("");
@@ -188,7 +191,7 @@ const Quote = () => {
       const msg = fieldError(f, booking[f]);
       if (msg) errs[f] = msg;
     });
-    if (!booking.termsConsent) errs.termsConsent = "Please agree to the Terms, Privacy Policy and booking texts.";
+    if (!booking.termsConsent) errs.termsConsent = "Please agree to the Terms of Service and Privacy Policy.";
     if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
     return errs;
   };
@@ -261,7 +264,7 @@ const Quote = () => {
       const consentRecord = [
         "Consent record",
         `Timestamp: ${requestRef.current.time}`,
-        `sms_consent: ${booking.termsConsent} — "${TERMS_CONSENT_TEXT}"`,
+        `sms_consent: ${booking.smsConsent} — "${SMS_CONSENT_TEXT}"`,
         `terms_consent: ${booking.termsConsent} — "${TERMS_CONSENT_TEXT}"`,
         `photo_consent: ${booking.photoConsent} — "${PHOTO_CONSENT_TEXT}"`,
       ].join("\n");
@@ -285,7 +288,7 @@ const Quote = () => {
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
         photo_consent: booking.photoConsent,
-        sms_consent: booking.termsConsent,
+        sms_consent: booking.smsConsent,
       };
       setSubmitError("");
       const res = await fetch("/api/send-contact-email", {
@@ -595,7 +598,7 @@ const Quote = () => {
                   {foundingApplies && (
                     <div className="mt-3 text-sm text-foreground">
                       {!deepFirstVisit && (
-                        <p>Founding price, first clean: ${foundingFirst} (30% off)</p>
+                        <p>Founding price, first clean: ${foundingFirst} (30% off the ${oneTimePrice} one-time price)</p>
                       )}
                       {deepFirstVisit && (
                         <p className="text-muted-foreground">
@@ -691,7 +694,7 @@ const Quote = () => {
                   {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
                 </div>
                 <div>
-                  <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date * (YYYY-MM-DD)</label>
+                  <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
                     id="b-date" name="date" type="date" min={minDate} ref={refs.date}
                     required maxLength={10} pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
@@ -737,7 +740,7 @@ const Quote = () => {
                   I agree to the{" "}
                   <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline text-primary">Terms of Service</a>
                   , including the arbitration clause in Section 16, and the{" "}
-                   <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. I consent to booking texts at the number I provided, including confirmations, reminders and my photo report. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help. *
+                   <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. *
                 </label>
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
@@ -754,6 +757,17 @@ const Quote = () => {
                 </label>
               </div>
               {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
+
+              <div className="mt-4 flex items-start gap-3">
+                <input
+                  id="b-sms" name="smsConsent" type="checkbox"
+                  checked={booking.smsConsent} onChange={handleBookingChange}
+                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                />
+                <label htmlFor="b-sms" className="text-sm text-foreground leading-snug">
+                  Send me booking updates by text (confirmations, reminders, my photo report). Optional — email works too. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.
+                </label>
+              </div>
 
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               {reviewReady && (
