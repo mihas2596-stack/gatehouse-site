@@ -29,6 +29,21 @@ describe("booking price confirmation", () => {
     expect(screen.getByText("Then $189 per visit, every other week")).toBeInTheDocument();
   });
 
+  it("shows one unified founding total for the confirmed scenario", () => {
+    // 3bd/2ba, Standard, every other week, cleaned=Yes, founding on, oven +$35:
+    // first visit $188 (153 + 35), then $167 (132 + 35), $224 after 6 months.
+    openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByLabelText(/claiming a founding spot/));
+    fireEvent.click(screen.getByLabelText(/Inside oven/));
+    expect(screen.getByText("First visit: $188", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Then $167 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("After 6 months: $224 per visit.")).toBeInTheDocument();
+    // No contradictory numbers: the old $224 headline / $153-off-$254 lines are gone.
+    expect(screen.queryByText(/30% off the \$254/)).not.toBeInTheDocument();
+  });
+
   it("requires another review when the calculator changes after confirmation", () => {
     Element.prototype.scrollIntoView = vi.fn();
     openQuote();
