@@ -26,7 +26,7 @@ const howItWorks = [
     n: "1",
     Icon: Calculator,
     title: "See your price",
-    text: "Answer a few questions about your home. Your price appears instantly — $129, $189 or $239. No phone call needed.",
+    text: `Answer a few questions about your home. Your price appears instantly — $${PRICES.recurring.S}, $${PRICES.recurring.M} or $${PRICES.recurring.L}. No phone call needed.`,
     highlight: false,
   },
   {
@@ -53,8 +53,7 @@ const howItWorks = [
 ];
 
 // Payment story for ad traffic: $0 to book, approve first, charged after approval.
-// STRIPE TODO: when Stripe is connected, step 1 becomes "Save your card — $0 today"
-// with a Payment Element / Checkout card capture (see docs/booking-flow-card-on-file-v1.md).
+// Card capture is live via Stripe Checkout (setup mode) — see SaveCard flow.
 const paymentSteps = [
   ["1", "$0 to book", "booking is free. Nothing is charged when you request your visit."],
   ["2", "You approve first", "after every clean you get a room-by-room photo report. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue."],
