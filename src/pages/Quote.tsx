@@ -290,7 +290,23 @@ const Quote = () => {
         postFounding && isRecurring ? `After 6 months: $${postFounding.recurring_total} per visit` : "",
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
-      requestRef.current ??= { id: crypto.randomUUID(), time: new Date().toISOString() };
+      // Idempotency: one request_id per booking attempt, kept in
+      // sessionStorage so a retry — even after a page reload — reuses it and
+      // the server reproduces the same booking instead of a duplicate. The id
+      // rotates when the booking content changes or after a successful send.
+      if (!requestRef.current) {
+        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, isFounding, mainPrice]);
+        let id: string | null = null;
+        try {
+          if (sessionStorage.getItem("gh_request_sig") === sig) id = sessionStorage.getItem("gh_request_id");
+          if (!id) {
+            id = crypto.randomUUID();
+            sessionStorage.setItem("gh_request_id", id);
+            sessionStorage.setItem("gh_request_sig", sig);
+          }
+        } catch { id = crypto.randomUUID(); }
+        requestRef.current = { id, time: new Date().toISOString() };
+      }
       const consentRecord = [
         "Consent record",
         `Timestamp: ${requestRef.current.time}`,
@@ -357,6 +373,9 @@ const Quote = () => {
         throw new Error("Booking request failed");
       }
       if (!data?.ok) throw new Error("Booking request failed");
+      // Booking accepted: the next booking in this tab gets a fresh request_id.
+      try { sessionStorage.removeItem("gh_request_id"); sessionStorage.removeItem("gh_request_sig"); } catch { /* ignore */ }
+      requestRef.current = null;
       trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
       // Recap shown on /thank-you: price, date, arrival window, current
       // status and response time. Never a "confirmed" promise — the date is

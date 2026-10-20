@@ -178,6 +178,16 @@ function decryptBookingPayload(secret: string, token: string): BookingPayload | 
   }
 }
 
+// Idempotency: a retried submission carries the same request_id, so derive
+// the booking id from it deterministically. A retry after a lost response
+// then reproduces the SAME booking (same bid, Resend dedupes the emails by
+// request_id too) instead of creating a duplicate booking.
+export function bidFromRequestId(requestId: string): string {
+  const h = createHash("sha256").update(`gatehouse-bid:${requestId}`).digest("hex");
+  const variant = (parseInt(h.slice(16, 17), 16) & 0x3) | 0x8;
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant.toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 function signBooking(
   secret: string,
   payload: Omit<BookingPayload, "bid" | "ts"> & { bid?: string; ts?: number },
@@ -576,6 +586,7 @@ export default async function handler(req: Req, res: Res) {
         recurring: tokenRecurring,
         service: (service ?? "").trim() || undefined,
         date: (date ?? "").trim() || undefined,
+        bid: parsed.data.request_id ? bidFromRequestId(parsed.data.request_id) : undefined,
       });
       bookingToken = signed.token;
       bookingId = signed.bid;
