@@ -563,15 +563,15 @@ const Quote = () => {
                 cleans never carry the founding discount; say so instead of
                 showing a checkbox that silently does nothing. */}
             {service === "standard" ? (
-            <div className="mt-6 flex items-start gap-3">
+            <div className="mt-6 flex items-center gap-3">
               <input
                 id="q-founding"
                 type="checkbox"
                 checked={isFounding}
                 onChange={(e) => setIsFounding(e.target.checked)}
-                className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                className="h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
               />
-              <label htmlFor="q-founding" className="text-sm text-foreground leading-snug">
+              <label htmlFor="q-founding" className="flex min-h-[44px] items-center text-sm text-foreground leading-snug">
                 I'm claiming a founding spot (first 10 households)
               </label>
             </div>
@@ -586,24 +586,24 @@ const Quote = () => {
               <p className="block text-sm font-medium mb-2">Add-ons</p>
               <div className="flex flex-col gap-3">
                 {!includedAddons.includes("insideOven") && (
-                  <label htmlFor="q-addon-oven" className="flex items-center gap-2 text-sm">
+                  <label htmlFor="q-addon-oven" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-oven" type="checkbox" className="h-5 w-5" checked={insideOven} onChange={(e) => setInsideOven(e.target.checked)} />
                     {ADDONS.insideOven.label} (+${ADDONS.insideOven.price}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
                 {!includedAddons.includes("insideFridge") && (
-                  <label htmlFor="q-addon-fridge" className="flex items-center gap-2 text-sm">
+                  <label htmlFor="q-addon-fridge" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-fridge" type="checkbox" className="h-5 w-5" checked={insideFridge} onChange={(e) => setInsideFridge(e.target.checked)} />
                     {ADDONS.insideFridge.label} (+${ADDONS.insideFridge.price}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
                 {!includedAddons.includes("insideCabinets") && (
-                  <label htmlFor="q-addon-cabinets" className="flex items-center gap-2 text-sm">
+                  <label htmlFor="q-addon-cabinets" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-cabinets" type="checkbox" className="h-5 w-5" checked={insideCabinets} onChange={(e) => setInsideCabinets(e.target.checked)} />
                     {ADDONS.insideCabinets.label} (+${ADDONS.insideCabinets.price}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
-                <label htmlFor="q-addon-pets" className="flex items-center gap-2 text-sm">
+                <label htmlFor="q-addon-pets" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                   <input id="q-addon-pets" type="checkbox" className="h-5 w-5" checked={pets} onChange={(e) => setPets(e.target.checked)} />
                   {ADDONS.pets.label} (+${ADDONS.pets.price}) <span className="text-muted-foreground">{addonNote} — extra pet-hair cleanup</span>
                 </label>
@@ -874,7 +874,7 @@ const Quote = () => {
                  <div ref={reviewRef} tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-heading text-lg font-bold">Review your details</h3>
-                    <Button variant="outline" type="button" onClick={() => { setReviewReady(false); document.getElementById("q-size")?.focus(); }}>Edit</Button>
+                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => { setReviewReady(false); document.getElementById("q-size")?.focus(); }}>Edit</Button>
                   </div>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}</dd>

@@ -400,6 +400,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid hsl(var(--ring)); out
 body[data-menu-open="true"] .quote-price-bar { display: none; }
 @media (max-width: 767px) {
   .page-shell { padding-top: 64px; }
+  /* On /quote the price bar stacks on top of the CTA bar (~124px total):
+     keep focus-scrolled fields clear of the whole stack. */
+  html:has(.quote-price-bar) { scroll-padding-bottom: calc(124px + env(safe-area-inset-bottom)); }
   header .font-script { font-size: clamp(1.125rem, 5.2vw, 1.4rem); letter-spacing: normal; }
   footer .font-script { font-size: 1.75rem; letter-spacing: normal; }
   input, select, textarea { font-size: 1rem; }

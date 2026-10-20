@@ -357,7 +357,7 @@ const Index = () => (
             <Link
               key={slug}
               to={`/areas/${slug}`}
-              className="inline-flex items-center gap-1.5 rounded-full bg-peach/40 px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-peach/70"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full bg-peach/40 px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-peach/70"
             >
               <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden="true" /> {city}
             </Link>

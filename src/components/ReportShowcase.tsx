@@ -84,7 +84,7 @@ function PhoneDemo() {
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  className="flex-1 rounded-full text-xs"
+                  className="min-h-[40px] flex-1 rounded-full text-xs"
                   onClick={() => setState("approved")}
                 >
                   <ThumbsUp className="h-3.5 w-3.5" aria-hidden="true" /> Approve
@@ -92,7 +92,7 @@ function PhoneDemo() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="flex-1 rounded-full text-xs"
+                  className="min-h-[40px] flex-1 rounded-full text-xs"
                   onClick={() => setState("issue")}
                 >
                   <Flag className="h-3.5 w-3.5" aria-hidden="true" /> Report an issue
