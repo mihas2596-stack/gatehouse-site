@@ -40,7 +40,7 @@ const howItWorks = [
     n: "3",
     Icon: Camera,
     title: "We clean, you get the photos",
-    text: "After the visit, you receive a photo report of every room — before we charge a cent.",
+    text: "After the visit, you receive a photo report of every room. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue.",
     highlight: false,
   },
   {
@@ -343,7 +343,7 @@ const Index = () => (
         </p>
         <p className="mt-3 text-base font-semibold text-sage-foreground">Founding first-clean price: ${FOUNDING_FIRST_CLEAN.S} / ${FOUNDING_FIRST_CLEAN.M} / ${FOUNDING_FIRST_CLEAN.L} for small / medium / large homes.</p>
         <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
-          Limited to the first 10 households in our service area. The founding price applies to the first booking. Founding rate is held for six months from the first clean. If your first visit needs a deep clean, it is priced at the standard deep-clean rate — the founding discount then applies to your recurring visits.
+          Limited to the first 10 households in our service area. The founding price applies to the first booking. Founding rate is held for six months from the first clean. If your first visit needs a deep clean, it is priced at the standard deep-clean rate — the founding discount then applies to your recurring visits. After the six months, regular recurring rates apply: ${PRICES.recurring.S} / ${PRICES.recurring.M} / ${PRICES.recurring.L} per visit for small / medium / large homes.
         </p>
       </div>
     </section>

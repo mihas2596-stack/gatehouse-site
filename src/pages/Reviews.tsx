@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ShieldCheck, BadgePercent, Mail } from "lucide-react";
 import SEO from "@/components/SEO";
 import { OFFER_SHORT, OFFER_TEXT } from "@/config/offer";
-import { FOUNDING_FIRST_CLEAN } from "@/config/calculator";
+import { FOUNDING_FIRST_CLEAN, PRICES } from "@/config/calculator";
 
 const Reviews = () => {
   return (
@@ -31,6 +31,13 @@ const Reviews = () => {
             </p>
             <p>{OFFER_TEXT}</p>
             <p className="font-semibold">Founding first-clean price: ${FOUNDING_FIRST_CLEAN.S} / ${FOUNDING_FIRST_CLEAN.M} / ${FOUNDING_FIRST_CLEAN.L} for small / medium / large homes.</p>
+            <p className="text-base text-muted-foreground">
+              One exception: if your home has not been professionally cleaned in the last 3 months, the first visit is a
+              deep clean at the regular deep-clean price (${PRICES.deep.S} / ${PRICES.deep.M} / ${PRICES.deep.L} by home
+              size) — the founding discount then applies to your recurring visits. After the six founding months, regular
+              recurring rates apply: ${PRICES.recurring.S} / ${PRICES.recurring.M} / ${PRICES.recurring.L} per visit.
+              The calculator shows your exact total before you enter any contact details.
+            </p>
             <div>
               <p className="font-heading font-semibold text-foreground mb-3">As a Founding Client you get:</p>
               <ul className="space-y-3">
@@ -51,7 +58,7 @@ const Reviews = () => {
               <p className="font-heading font-semibold text-sage-foreground mb-2">How we document every clean</p>
               <p className="text-base leading-relaxed">
                 After each visit you get a photo report — room by room, with the checklist we followed.
-                You review it before we charge your card.
+                Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue.
               </p>
               <p className="mt-3 text-base leading-relaxed">
                 And after every visit we ask for a Google review — and we reply to every single one.
