@@ -155,7 +155,8 @@ const ReportShowcase = () => (
           </h2>
           <p className="mt-3 text-base leading-relaxed text-foreground md:text-lg">
             This is what lands in your inbox after every visit — photos and the checklist,
-            room by room. You review it before we charge your card.
+            room by room. Your card is charged when you approve the report, or automatically
+            24 hours after we send it if you haven't reported an issue.
           </p>
           <ol className="mt-5 space-y-4 text-left">
             {steps.map(({ title, text }, i) => (

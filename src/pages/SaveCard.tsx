@@ -114,7 +114,7 @@ const SaveCard = () => {
       <SEO
         url="https://www.gatehousehomecleaning.com/save-card"
         title="Save Your Card — $0 Today | Gatehouse Home Cleaning"
-        description="Save your card to secure your booking. No charge today — we charge only after you approve your photo report."
+        description="Save your card to secure your booking. No charge today — your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue."
         noindex
       />
       <div className="container max-w-xl py-12 text-center">
@@ -130,8 +130,9 @@ const SaveCard = () => {
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved</h1>
             <p className="text-lg text-foreground mb-6">
-              Your card is on file — confirmed with Stripe. Nothing was charged today — we charge it
-              only after you approve your photo report.
+              Your card is on file — confirmed with Stripe. Nothing was charged today. We charge it
+              when you approve your photo report, or automatically 24 hours after we send it if you
+              haven't reported an issue.
             </p>
             <Button variant="hero" size="lg" asChild>
               <Link to="/">Back to Home</Link>
@@ -171,8 +172,10 @@ const SaveCard = () => {
               Save your card — $0 today
             </h1>
             <p className="text-lg text-foreground mb-6">
-              Your card secures your booking. Your card is charged when you approve the report,
+              Your card secures your booking request. Your card is charged when you approve the report,
               or automatically 24 hours after we send it if you haven't reported an issue.
+              Saving your card doesn't confirm your cleaning time by itself — we confirm the date and
+              arrival window by email after reviewing your request.
             </p>
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">

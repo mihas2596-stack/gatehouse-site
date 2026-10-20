@@ -135,7 +135,11 @@ const Quote = () => {
   const zipPartial = zip.length > 0 && zip.length < 5;
   const zipInArea = zipEntered && SERVICE_ZIPS.has(zip);
   const zipOutOfArea = zipEntered && !SERVICE_ZIPS.has(zip);
-  const canProceed = zipInArea && tier !== null;
+  // A valid in-area ZIP is the gate. Large homes (tier null: 6+ bedrooms or
+  // 6+ full bathrooms) have no table price, but the request still goes
+  // through — as a custom-quote request, not a ZIP error.
+  const isLargeHome = tier === null;
+  const canProceed = zipInArea;
   const showPrice = !zipOutOfArea && tier !== null;
 
   // ---- Booking request form ----
@@ -221,7 +225,7 @@ const Quote = () => {
     return errs;
   };
 
-  const canSubmit = canProceed && showPrice && !needsCleaningHistory && !isSubmitting;
+  const canSubmit = canProceed && !needsCleaningHistory && !isSubmitting;
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -273,7 +277,9 @@ const Quote = () => {
          `Professionally cleaned in last 3 months: ${answered ? (cleanedRecently ? "Yes" : "No") : "Not answered"}`,
         `Street address: ${booking.address.trim()}`,
         zip ? `ZIP ${zip}` : "",
-        isRecurring && breakdown
+        isLargeHome
+          ? "Custom quote requested — home has 6+ bedrooms or 6+ full bathrooms, no table price"
+          : isRecurring && breakdown
           ? answered
             ? `First visit $${breakdown.first_total}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then $${breakdown.recurring_total} per visit, every other week`
             : `From $${breakdown.recurring_total} per visit, every other week — answer the cleaning-history question to confirm the first-visit price`
@@ -282,7 +288,7 @@ const Quote = () => {
             : `Price $${mainPrice} per visit`,
         foundingApplies && breakdown?.note ? `Founding: ${breakdown.note}` : "",
         postFounding && isRecurring ? `After 6 months: $${postFounding.recurring_total} per visit` : "",
-        addonList ? `Add-ons (every visit): ${addonList}` : "",
+        addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
       requestRef.current ??= { id: crypto.randomUUID(), time: new Date().toISOString() };
       const consentRecord = [
@@ -389,7 +395,7 @@ const Quote = () => {
 
   const selectClass =
     "w-full px-4 py-3 rounded-lg border border-border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring";
-  const addonNote = "(every visit)";
+  const addonNote = isRecurring ? "(every visit)" : "(this visit)";
   const includedAddons = ADDONS_INCLUDED_IN[service];
   // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
   const priceBlockAddons = [
@@ -534,7 +540,10 @@ const Quote = () => {
               </div>
             </div>
 
-            {/* Founding spot */}
+            {/* Founding spot — standard cleanings only. Deep and move-in/out
+                cleans never carry the founding discount; say so instead of
+                showing a checkbox that silently does nothing. */}
+            {service === "standard" ? (
             <div className="mt-6 flex items-start gap-3">
               <input
                 id="q-founding"
@@ -547,6 +556,11 @@ const Quote = () => {
                 I'm claiming a founding spot (first 10 households)
               </label>
             </div>
+            ) : (
+              <p className="mt-6 text-sm text-muted-foreground">
+                The founding discount applies to standard cleanings. Deep and move-in/out cleans are priced at their regular one-time rates.
+              </p>
+            )}
 
             {/* Add-ons */}
             <div className="mt-6">
@@ -662,6 +676,7 @@ const Quote = () => {
                         <p className="text-sm text-muted-foreground mt-1">
                           Homes not cleaned professionally in the last 3 months start with a deep clean. Inside oven,
                           fridge and cabinets are included in a deep clean — never charged twice.
+                          {isRecurring && " Your first visit is the deep clean; after that, your visits are standard cleanings at the recurring rate above."}
                         </p>
                       )}
                       {breakdown.founding_applies && (
@@ -673,7 +688,7 @@ const Quote = () => {
                         </div>
                       )}
                       {priceBlockAddons && (
-                        <p className="text-sm text-muted-foreground mt-1">Add-ons, every visit: {priceBlockAddons}</p>
+                        <p className="text-sm text-muted-foreground mt-1">Add-ons, {isRecurring ? "every visit" : "this visit"}: {priceBlockAddons}</p>
                       )}
                     </div>
                   ) : null}
@@ -845,7 +860,7 @@ const Quote = () => {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>{service === "standard" && breakdown ? <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
+                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
@@ -859,7 +874,9 @@ const Quote = () => {
                   : !canProceed
                     ? "Enter a ZIP in our service area"
                     : needsCleaningHistory ? "Answer the cleaning-history question above"
-                    : reviewReady ? <>Send my booking request <Send className="w-5 h-5" /></> : "Review my details"}
+                    : reviewReady
+                      ? (isLargeHome ? <>Send my custom quote request <Send className="w-5 h-5" /></> : <>Send my booking request <Send className="w-5 h-5" /></>)
+                      : isLargeHome ? "Request a custom quote" : "Review my details"}
               </Button>
               <p className="text-xs text-foreground text-center mt-4">
                 Your booking request goes straight to us. We confirm your booking within one business day — usually much sooner.

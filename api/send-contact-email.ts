@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
   bid: string;
@@ -146,6 +146,38 @@ const b64urlEncode = (s: string): string =>
 const b64urlDecode = (s: string): string =>
   Buffer.from(s, "base64url").toString("utf8");
 
+// v2 booking-link tokens: the payload is AES-256-GCM encrypted, so a link
+// carries nothing readable (no name, email or prices) into analytics, server
+// logs or a forwarded message. v1 tokens were signed-but-readable JSON;
+// verifiers still accept them so links already emailed keep working until
+// they expire (60 days). New v2 links live 30 days.
+const TOKEN_TTL_V2_SECONDS = 30 * 24 * 3600;
+
+function tokenKey(secret: string): Buffer {
+  return createHash("sha256").update(`gatehouse-booking-link:${secret}`).digest();
+}
+
+function encryptBookingPayload(secret: string, payload: BookingPayload): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", tokenKey(secret), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2.${Buffer.concat([iv, tag, ct]).toString("base64url")}`;
+}
+
+function decryptBookingPayload(secret: string, token: string): BookingPayload | null {
+  try {
+    const raw = Buffer.from(token.slice(3), "base64url");
+    if (raw.length < 29) return null;
+    const decipher = createDecipheriv("aes-256-gcm", tokenKey(secret), raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    const pt = Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]);
+    return JSON.parse(pt.toString("utf8")) as BookingPayload;
+  } catch {
+    return null;
+  }
+}
+
 function signBooking(
   secret: string,
   payload: Omit<BookingPayload, "bid" | "ts"> & { bid?: string; ts?: number },
@@ -155,9 +187,7 @@ function signBooking(
     bid: payload.bid ?? randomUUID(),
     ts: payload.ts ?? Math.floor(Date.now() / 1000),
   };
-  const payloadB64 = b64urlEncode(JSON.stringify(full));
-  const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
-  return { token: `${payloadB64}.${sig}`, bid: full.bid };
+  return { token: encryptBookingPayload(secret, full), bid: full.bid };
 }
 
 
@@ -170,6 +200,50 @@ const bookingLinkSecret = (stripeKey: string): string =>
 
 // Verify with the dedicated key first, then the legacy Stripe key, so links
 // issued before the dedicated key was set keep working through rotation.
+function verifyBooking(
+  secret: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  let payload: BookingPayload | null = null;
+  let ttl = TOKEN_TTL_SECONDS;
+  if (token.startsWith("v2.")) {
+    payload = decryptBookingPayload(secret, token);
+    if (!payload) return { ok: false, reason: "bad_token" };
+    ttl = TOKEN_TTL_V2_SECONDS;
+  } else {
+    // Legacy v1: HMAC-signed readable payload.
+    const parts = token.split(".");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      return { ok: false, reason: "bad_format" };
+    }
+    const [payloadB64, sig] = parts;
+    let expected: string;
+    try {
+      expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
+    } catch {
+      return { ok: false, reason: "sign_error" };
+    }
+    const a = Buffer.from(sig, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return { ok: false, reason: "bad_signature" };
+    }
+    try {
+      payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
+    } catch {
+      return { ok: false, reason: "bad_payload" };
+    }
+  }
+  if (!payload.bid || !payload.email || !payload.ts) {
+    return { ok: false, reason: "missing_fields" };
+  }
+  const age = Math.floor(Date.now() / 1000) - payload.ts;
+  if (age < 0 || age > ttl) {
+    return { ok: false, reason: "expired" };
+  }
+  return { ok: true, payload };
+}
+
 function verifyBookingLink(
   stripeKey: string,
   token: string,
