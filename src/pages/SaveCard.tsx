@@ -171,8 +171,8 @@ const SaveCard = () => {
               Save your card — $0 today
             </h1>
             <p className="text-lg text-foreground mb-6">
-              Your card secures your booking. We charge it only after you approve your photo report.
-              No response within 24 hours counts as approval.
+              Your card secures your booking. Your card is charged when you approve the report,
+              or automatically 24 hours after we send it if you haven't reported an issue.
             </p>
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
@@ -190,7 +190,7 @@ const SaveCard = () => {
                   ) : (
                     <>per the prices above</>
                   )}{" "}
-                  — each charge only after you approve that visit's photo report. $0 is charged today.
+                  — each charge when you approve that visit's photo report, or automatically 24 hours after we send it if you haven't reported an issue. $0 is charged today.
                 </p>
               </div>
             )}
@@ -202,7 +202,7 @@ const SaveCard = () => {
                 </li>
                 <li className="flex gap-3">
                   <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
-                  <span>Charged only after you approve the clean.</span>
+                  <span>Charged on your approval — or 24 hours after the report if you don't flag an issue.</span>
                 </li>
                 <li className="flex gap-3">
                   <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
@@ -215,6 +215,16 @@ const SaveCard = () => {
                   </span>
                 </li>
               </ul>
+              <p className="mt-4 text-sm text-muted-foreground">
+                Something wrong after a visit?{" "}
+                <a
+                  href="mailto:hello@gatehousehomecleaning.com?subject=Issue%20with%20my%20cleaning%20visit"
+                  className="font-semibold text-primary underline"
+                >
+                  Report an issue
+                </a>{" "}
+                within 24 hours of your photo report — the charge stays paused until we fix it.
+              </p>
             </div>
             {canceled && (
               <p className="mb-6 rounded-lg bg-muted p-4 text-sm text-muted-foreground">

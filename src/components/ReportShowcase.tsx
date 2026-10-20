@@ -26,11 +26,11 @@ const steps = [
   },
   {
     title: "You review within 24 hours",
-    text: "Approve it, or flag anything we missed. No response counts as approval.",
+    text: "Approve it, or flag anything we missed. Your card is charged on approval — or automatically 24 hours after the report if you don't flag an issue.",
   },
   {
     title: "We charge after your approval",
-    text: "Your card is charged only once you've seen the work. That's the whole deal.",
+    text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue.",
   },
 ];
 

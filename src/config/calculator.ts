@@ -227,7 +227,11 @@ export function priceBreakdown(opts: {
   const recurring_total = PRICES.recurring[tier];
 
   if (!opts.founding) {
-    const base = deepFirst ? PRICES.deep[tier] : PRICES.recurring[tier];
+    // One-time visits price from the one-time table; recurring plans price
+    // the first visit at the recurring rate (or deep when needed).
+    const standardBase =
+      opts.frequency === "onetime" ? PRICES.standardOnetime[tier] : PRICES.recurring[tier];
+    const base = deepFirst ? PRICES.deep[tier] : standardBase;
     return {
       tier,
       first_service,

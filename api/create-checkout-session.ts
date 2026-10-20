@@ -69,6 +69,28 @@ function verifyBooking(
   return { ok: true, payload };
 }
 
+
+// Booking-link signing key, separate from STRIPE_SECRET_KEY so that a Stripe
+// key rotation does not invalidate outstanding booking links. Set
+// BOOKING_LINK_SECRET in Vercel; until then it falls back to the Stripe key
+// and old links keep working.
+const bookingLinkSecret = (stripeKey: string): string =>
+  process.env["BOOKING_LINK_SECRET"] || stripeKey;
+
+// Verify with the dedicated key first, then the legacy Stripe key, so links
+// issued before the dedicated key was set keep working through rotation.
+function verifyBookingLink(
+  stripeKey: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  const dedicated = process.env["BOOKING_LINK_SECRET"];
+  if (dedicated) {
+    const r = verifyBooking(dedicated, token);
+    if (r.ok) return r;
+  }
+  return verifyBooking(stripeKey, token);
+}
+
 const _rlHits = new Map<string, number[]>();
 function rateLimit(ip: string, maxPerMinute: number): boolean {
   const now = Date.now();
@@ -205,6 +227,14 @@ const stripeErrMsg = (data: Record<string, unknown>): string => {
   return err?.message ? `${err.type ?? "api_error"}: ${err.message}` : "unknown stripe error";
 };
 
+/** Parse a "$188"-style quoted price into integer cents. Null when unusable. */
+const toCents = (raw: string | undefined): number | null => {
+  if (!raw) return null;
+  const n = parseFloat(raw.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+};
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
@@ -270,11 +300,11 @@ export default async function handler(req: Req, res: Res) {
     let bookingId: string;
     let email: string;
     let name: string;
-    let bookingSummary: Record<string, string> = {};
+    const bookingSummary: Record<string, string> = {};
     let bt: string;
 
     if (parsed.data.bt) {
-      const verified = verifyBooking(STRIPE_SECRET_KEY, parsed.data.bt);
+      const verified = verifyBookingLink(STRIPE_SECRET_KEY, parsed.data.bt);
       if (!verified.ok) {
         logErr("booking_token", verified.reason);
         return json(400, { ok: false, error: "invalid_booking" });
@@ -300,7 +330,7 @@ export default async function handler(req: Req, res: Res) {
       }
       email = rawEmail;
       name = rawName;
-      const signed = signBooking(STRIPE_SECRET_KEY, { email, name });
+      const signed = signBooking(bookingLinkSecret(STRIPE_SECRET_KEY), { email, name });
       bt = signed.token;
       bookingId = signed.bid;
       log("booking_token", "issued_standalone");
@@ -349,6 +379,14 @@ export default async function handler(req: Req, res: Res) {
           name,
           "metadata[source]": "gatehouse_save_card",
           "metadata[gh_booking_id]": bookingId,
+          // Server-quoted prices (cents) from the verified booking token.
+          // booking-action/charge will only ever charge gh_first_price_cents.
+          ...(toCents(bookingSummary.first) !== null
+            ? { "metadata[gh_first_price_cents]": String(toCents(bookingSummary.first)) }
+            : {}),
+          ...(toCents(bookingSummary.recurring) !== null
+            ? { "metadata[gh_recurring_price_cents]": String(toCents(bookingSummary.recurring)) }
+            : {}),
         }, `customer_${bookingId}`);
         if (!created.ok || typeof created.data["id"] !== "string") {
           logErr("customer_create", `stripe ${created.status}: ${stripeErrMsg(created.data)}`);
@@ -366,6 +404,12 @@ export default async function handler(req: Req, res: Res) {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
           "metadata[gh_booking_id]": bookingId,
           "metadata[gh_state]": "awaiting_card",
+          ...(toCents(bookingSummary.first) !== null
+            ? { "metadata[gh_first_price_cents]": String(toCents(bookingSummary.first)) }
+            : {}),
+          ...(toCents(bookingSummary.recurring) !== null
+            ? { "metadata[gh_recurring_price_cents]": String(toCents(bookingSummary.recurring)) }
+            : {}),
         }, `customer_meta_${bookingId}`);
       } catch (err) {
         logErr("customer_meta", err);

@@ -24,11 +24,6 @@ const SERVER_PRICES: Record<string, Record<TierKey, number>> = {
   moveinout: { S: 279, M: 369, L: 449 },
   recurring: { S: 129, M: 189, L: 239 },
 };
-const SERVER_FOUNDING_FIRST: Record<TierKey, number> = {
-  S: Math.round(149 * 0.7),
-  M: Math.round(219 * 0.7),
-  L: Math.round(279 * 0.7),
-};
 function serverTierFor(bedrooms: number, fullBaths: number): TierKey | null {
   if (!Number.isFinite(bedrooms) || !Number.isFinite(fullBaths)) return null;
   if (bedrooms > 5 || fullBaths > 5) return null;
@@ -36,25 +31,114 @@ function serverTierFor(bedrooms: number, fullBaths: number): TierKey | null {
   if (bedrooms === 3 || fullBaths === 3) return "M";
   return "S";
 }
-// Returns the minimum legitimate first-visit price for the given home/service.
-// Add-ons only increase the price, so a browser price BELOW this floor is
-// rejected and replaced with the server value.
-function serverPriceFloor(
-  bedroomsRaw: string | undefined,
-  bathroomsRaw: string | undefined,
-  serviceRaw: string | undefined,
-  founding: boolean | undefined,
-): number | null {
-  const bedrooms = parseInt(bedroomsRaw ?? "", 10);
-  const fullBaths = parseInt((bathroomsRaw ?? "").split(".")[0], 10);
+// Returns the exact first-visit and recurring totals for the given inputs.
+// Mirrors priceBreakdown() in src/config/calculator.ts — the two MUST stay
+// in sync (see src/test/calculator.test.ts). The browser-sent price is
+// verified against this, never trusted.
+type ServerAddonSel = {
+  insideOven?: boolean;
+  insideFridge?: boolean;
+  insideCabinets?: boolean;
+  interiorWindows?: number;
+  pets?: boolean;
+};
+const SERVER_ADDON_PRICES: Record<string, number> = {
+  insideOven: 35,
+  insideFridge: 35,
+  insideCabinets: 45,
+  interiorWindow: 8,
+  pets: 15,
+};
+const SERVER_ADDONS_INCLUDED: Record<string, string[]> = {
+  standard: [],
+  deep: ["insideOven", "insideFridge", "insideCabinets"],
+  moveinout: ["insideOven", "insideFridge", "insideCabinets"],
+};
+function serverAddonsTotal(a: ServerAddonSel, serviceKey: string): number {
+  const included = SERVER_ADDONS_INCLUDED[serviceKey] ?? [];
+  const charge = (key: string, on?: boolean) =>
+    on && !included.includes(key) ? SERVER_ADDON_PRICES[key] ?? 0 : 0;
+  const windows = Math.min(40, Math.max(0, a.interiorWindows ?? 0));
+  return (
+    charge("insideOven", a.insideOven) +
+    charge("insideFridge", a.insideFridge) +
+    charge("insideCabinets", a.insideCabinets) +
+    charge("pets", a.pets) +
+    windows * (SERVER_ADDON_PRICES["interiorWindow"] ?? 0)
+  );
+}
+// Owner decision: how the founding discount treats a deep first visit.
+// "full" (default) = full deep-clean price; discount applies to recurring only.
+// Must match FOUNDING_DEEP_RULE in src/config/calculator.ts.
+export const SERVER_FOUNDING_DEEP_RULE = "full";
+export function serverBreakdown(opts: {
+  bedroomsRaw: string | undefined;
+  bathroomsRaw: string | undefined;
+  serviceKey: string | undefined;
+  frequency: string | undefined;
+  founding: boolean | undefined;
+  cleanedRecently: boolean | undefined;
+  addons: ServerAddonSel;
+}): { first_total: number; recurring_total: number; first_service: "deep" | "standard" } | null {
+  const bedrooms = parseInt(opts.bedroomsRaw ?? "", 10);
+  const fullBaths = parseInt((opts.bathroomsRaw ?? "").split(".")[0], 10);
   const tier = serverTierFor(bedrooms, fullBaths);
   if (!tier) return null;
-  const service = (serviceRaw ?? "").toLowerCase();
-  if (founding && service === "standard") return SERVER_FOUNDING_FIRST[tier];
-  if (service === "deep") return SERVER_PRICES.deep[tier];
-  if (service === "moveinout" || service === "move-in-move-out") return SERVER_PRICES.moveinout[tier];
-  // standard: first visit could be recurring or one-time; floor is the lower.
-  return Math.min(SERVER_PRICES.recurring[tier], SERVER_PRICES.standardOnetime[tier]);
+  const serviceKey = opts.serviceKey ?? "standard";
+  // Deep / move-in-out are one-time; founding never applies to them.
+  if (serviceKey === "deep" || serviceKey === "moveinout") {
+    const base = SERVER_PRICES[serviceKey][tier];
+    const total = base + serverAddonsTotal(opts.addons, serviceKey);
+    return { first_total: total, recurring_total: total, first_service: "deep" };
+  }
+  const deepFirst = !(opts.cleanedRecently ?? true);
+  const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
+  const recurringBase = SERVER_PRICES.recurring[tier];
+  const recurring_total = recurringBase + serverAddonsTotal(opts.addons, "standard");
+  if (!opts.founding) {
+    // One-time visits price from the one-time table; recurring plans price
+    // the first visit at the recurring rate (or deep when needed).
+    const standardBase =
+      opts.frequency === "onetime" ? SERVER_PRICES.standardOnetime[tier] : SERVER_PRICES.recurring[tier];
+    const base = deepFirst ? SERVER_PRICES.deep[tier] : standardBase;
+    return {
+      first_total: base + serverAddonsTotal(opts.addons, first_service),
+      recurring_total,
+      first_service,
+    };
+  }
+  const foundingRecurringBase = Math.round(recurringBase * 0.7);
+  const founding_recurring = foundingRecurringBase + serverAddonsTotal(opts.addons, "standard");
+  if (!deepFirst) {
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
+    return {
+      first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "standard"),
+      recurring_total: founding_recurring,
+      first_service,
+    };
+  }
+  if (SERVER_FOUNDING_DEEP_RULE === "discounted") {
+    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7);
+    return {
+      first_total: discountedDeep + serverAddonsTotal(opts.addons, "deep"),
+      recurring_total: founding_recurring,
+      first_service,
+    };
+  }
+  if (SERVER_FOUNDING_DEEP_RULE === "flat") {
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
+    return {
+      first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "deep"),
+      recurring_total: founding_recurring,
+      first_service,
+    };
+  }
+  // "full": full deep-clean price for a founding deep first visit.
+  return {
+    first_total: SERVER_PRICES.deep[tier] + serverAddonsTotal(opts.addons, "deep"),
+    recurring_total: founding_recurring,
+    first_service,
+  };
 }
 
 const b64urlEncode = (s: string): string =>
@@ -74,6 +158,28 @@ function signBooking(
   const payloadB64 = b64urlEncode(JSON.stringify(full));
   const sig = createHmac("sha256", secret).update(payloadB64).digest("base64url");
   return { token: `${payloadB64}.${sig}`, bid: full.bid };
+}
+
+
+// Booking-link signing key, separate from STRIPE_SECRET_KEY so that a Stripe
+// key rotation does not invalidate outstanding booking links. Set
+// BOOKING_LINK_SECRET in Vercel; until then it falls back to the Stripe key
+// and old links keep working.
+const bookingLinkSecret = (stripeKey: string): string =>
+  process.env["BOOKING_LINK_SECRET"] || stripeKey;
+
+// Verify with the dedicated key first, then the legacy Stripe key, so links
+// issued before the dedicated key was set keep working through rotation.
+function verifyBookingLink(
+  stripeKey: string,
+  token: string,
+): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+  const dedicated = process.env["BOOKING_LINK_SECRET"];
+  if (dedicated) {
+    const r = verifyBooking(dedicated, token);
+    if (r.ok) return r;
+  }
+  return verifyBooking(stripeKey, token);
 }
 
 const _rlHits = new Map<string, number[]>();
@@ -165,6 +271,18 @@ const ContactSchema = z.object({
   zip: z.string().max(20).optional().or(z.literal("")),
   address: z.string().max(200).optional().or(z.literal("")),
   price: z.string().max(20).optional().or(z.literal("")),
+  // Exact quote inputs — the server recomputes the price from these and
+  // never trusts the browser-sent price for the signed booking token.
+  frequency: z.enum(["every2weeks", "onetime"]).optional(),
+  service_key: z.enum(["standard", "deep", "moveinout"]).optional(),
+  cleaned_recently: z.boolean().optional(),
+  addons: z.object({
+    insideOven: z.boolean().optional(),
+    insideFridge: z.boolean().optional(),
+    insideCabinets: z.boolean().optional(),
+    interiorWindows: z.number().int().min(0).max(40).optional(),
+    pets: z.boolean().optional(),
+  }).optional(),
   attribution: z.object({
     utm_source: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
     utm_medium: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).optional(),
@@ -333,28 +451,55 @@ export default async function handler(req: Req, res: Res) {
     let bookingToken: string | null = null;
     let bookingId: string | null = null;
     let saveCardUrl: string | null = null;
+    // Server-verified first-visit price (recomputed, never the browser value).
+    let serverFirst: string | undefined;
+    let serverRecurring: string | undefined;
     if (isQuote) {
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
       if (!signingSecret) {
         logErr("config", "STRIPE_SECRET_KEY is not configured (needed for booking token)");
         return json(500, { ok: false, error: "server_error" });
       }
-      // Server-side price verification: never trust the browser-sent price
-      // for the signed token. Compute the floor from bedrooms/bathrooms/
-      // service; a browser price below the floor is replaced (tamper attempt
-      // or stale calculator). Add-ons only raise the price, so higher values
-      // pass through.
+      // Server-side price verification: recompute the EXACT breakdown from
+      // the quote inputs (bedrooms, bathrooms, service, frequency, founding,
+      // cleaning history, add-ons). The browser-sent price is never trusted
+      // for the signed token: any mismatch is replaced and logged (tamper
+      // attempt or stale calculator).
+      const server = serverBreakdown({
+        bedroomsRaw: bedrooms,
+        bathroomsRaw: bathrooms,
+        serviceKey: parsed.data.service_key,
+        frequency: parsed.data.frequency,
+        founding,
+        cleanedRecently: parsed.data.cleaned_recently,
+        addons: {
+          insideOven: parsed.data.addons?.insideOven,
+          insideFridge: parsed.data.addons?.insideFridge,
+          insideCabinets: parsed.data.addons?.insideCabinets,
+          interiorWindows: parsed.data.addons?.interiorWindows,
+          pets: parsed.data.addons?.pets,
+        },
+      });
       let tokenPrice = (price ?? "").trim() || undefined;
-      const priceFloor = serverPriceFloor(bedrooms, bathrooms, service, founding);
-      const browserPriceNum = tokenPrice ? parseFloat(tokenPrice.replace(/[^0-9.]/g, "")) : NaN;
-      if (priceFloor !== null && Number.isFinite(browserPriceNum) && browserPriceNum < priceFloor) {
-        logErr("price_tamper", `browser $${browserPriceNum} < server floor $${priceFloor}; replaced`);
-        tokenPrice = String(priceFloor);
+      let tokenRecurring: string | undefined;
+      if (server) {
+        const browserPriceNum = tokenPrice ? parseFloat(tokenPrice.replace(/[^0-9.]/g, "")) : NaN;
+        if (!Number.isFinite(browserPriceNum) || browserPriceNum !== server.first_total) {
+          logErr(
+            "price_mismatch",
+            `browser $${Number.isFinite(browserPriceNum) ? browserPriceNum : "?"} != server $${server.first_total}; replaced`
+          );
+          tokenPrice = String(server.first_total);
+        }
+        if (parsed.data.frequency !== "onetime") tokenRecurring = String(server.recurring_total);
+        serverFirst = String(server.first_total);
+        serverRecurring = tokenRecurring;
       }
-      const signed = signBooking(signingSecret, {
+      const signed = signBooking(bookingLinkSecret(signingSecret), {
         email: (email ?? "").trim(),
         name: (name ?? "").trim(),
         first: tokenPrice,
+        recurring: tokenRecurring,
         service: (service ?? "").trim() || undefined,
         date: (date ?? "").trim() || undefined,
       });
@@ -433,7 +578,8 @@ ${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
         const deepPara = firstVisitDeep
           ? `\nBecause the home hasn't been professionally cleaned in the last 3 months, the first visit is a deep clean. Regular visits after that cost less.\n`
           : "";
-        const priceDisplay = price ? `$${price}` : "—";
+        const priceDisplay = serverFirst ? `$${serverFirst}` : price ? `$${price}` : "—";
+        const recurringDisplay = serverRecurring ? `, then $${serverRecurring} per visit` : "";
 
         const textBody = isQuote ? `Hi ${firstName},
 
@@ -443,18 +589,20 @@ ${homeDetails} · ZIP ${zip || ""}
 
 Service: ${serviceLabel}
 
-Your estimate: ${priceDisplay} per visit.
+Your estimate: ${priceDisplay} for the first visit${recurringDisplay}.
 ${deepPara}
 What happens next:
 
 I'll confirm your estimate, date and arrival window by the end of the next business day. Your request is not a confirmed booking yet. No payment is taken by this form.
 
-Save your card now ($0 today) so we can charge it only after you approve your photo report:
+Save your card now ($0 today) so we can charge it after your visit:
 ${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
 
 How payment works:
 
-After the clean, you get a photo report of every room. We charge your card only after you approve it. No response within 24 hours = approved.
+After the clean, you get a photo report of every room. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If the report email doesn't reach you, we pause and check manually — silence never triggers a charge you weren't told about.
+
+Something wrong with the visit? Reply to the report email within 24 hours — or write to hello@gatehousehomecleaning.com — and the charge stays paused until we fix it.
 
 If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.
 

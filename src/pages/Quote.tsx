@@ -7,10 +7,8 @@ import { Calculator, Sparkles, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
-  firstVisitPrice,
+  priceBreakdown,
   tierFor,
-  FOUNDING_FIRST_CLEAN,
-  FOUNDING_RECURRING,
   ADDONS,
   ADDONS_INCLUDED_IN,
   MAX_INTERIOR_WINDOWS,
@@ -26,6 +24,7 @@ import {
   SERVICE_LABEL_CALC,
   type CalcServiceKey,
   type FrequencyKey,
+  type PriceBreakdown,
   type SizeBandKey,
 } from "@/config/calculator";
 
@@ -44,7 +43,7 @@ const TERMS_CONSENT_TEXT =
 const SMS_CONSENT_TEXT =
   "Send me booking updates by text (confirmations, reminders, my photo report). Optional — email works too. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.";
 const PHOTO_CONSENT_TEXT =
-  "I agree to photos of the cleaned rooms for the approval photo report I receive before my card is charged.";
+  "I agree to photos of the cleaned rooms for the approval photo report I receive before my card is charged. Photos are kept for 90 days and never published without my separate written permission.";
 
 const Quote = () => {
   const [params] = useSearchParams();
@@ -81,29 +80,55 @@ const Quote = () => {
   // start with a deep clean.
   const deepFirstVisit = service === "standard" && recentlyCleaned === "no";
 
-  const recurringPrice = useMemo(
-    () => calcPrice({ bedrooms, fullBaths, service: "standard", frequency: "every2weeks", addons }),
-    [bedrooms, fullBaths, addons]
-  );
-  const oneTimePrice = useMemo(
-    () => calcPrice({ bedrooms, fullBaths, service, frequency: "onetime", addons }),
-    [bedrooms, fullBaths, service, addons]
-  );
-  const firstVisit = useMemo(
-    () => firstVisitPrice(bedrooms, fullBaths, cleanedRecently, addons),
-    [bedrooms, fullBaths, cleanedRecently, addons]
-  );
-  const deepOneTime = useMemo(
-    () => calcPrice({ bedrooms, fullBaths, service: "deep", frequency: "onetime", addons }),
-    [bedrooms, fullBaths, addons]
-  );
-
-  // The headline number used for the booking request.
-  const mainPrice = isRecurring ? answered ? firstVisit : recurringPrice : deepFirstVisit ? deepOneTime : oneTimePrice;
-
   const foundingApplies = isFounding && service === "standard" && tier !== null;
-  const foundingFirst = foundingApplies && tier ? FOUNDING_FIRST_CLEAN[tier] : null;
-  const foundingRecurring = foundingApplies && tier && isRecurring ? FOUNDING_RECURRING[tier] : null;
+
+  // UNIFIED PRICE BREAKDOWN — the single source of truth for every price
+  // shown on this page AND sent with the booking request. One first-visit
+  // total, one recurring total, add-ons included in both (except add-ons
+  // already covered by a deep clean). Replaces the scattered memos that
+  // showed contradictory numbers ($224 vs $153 vs $132 at the same time).
+  const breakdown = useMemo<PriceBreakdown | null>(
+    () =>
+      service === "standard"
+        ? priceBreakdown({
+            bedrooms,
+            fullBaths,
+            frequency,
+            founding: foundingApplies,
+            // Unanswered cleaning history prices as a standard clean; the UI
+            // asks the client to answer before the first-visit price is final.
+            recentlyCleaned: cleanedRecently || !answered,
+            addons,
+          })
+        : null,
+    [service, bedrooms, fullBaths, frequency, foundingApplies, cleanedRecently, answered, addons]
+  );
+  // What the same visits cost after the 6-month founding period ends.
+  const postFounding = useMemo<PriceBreakdown | null>(
+    () =>
+      service === "standard" && foundingApplies
+        ? priceBreakdown({
+            bedrooms,
+            fullBaths,
+            frequency,
+            founding: false,
+            recentlyCleaned: cleanedRecently || !answered,
+            addons,
+          })
+        : null,
+    [service, bedrooms, fullBaths, frequency, foundingApplies, cleanedRecently, answered, addons]
+  );
+  // Deep and move-in/out are one-time by nature; founding does not apply.
+  const oneTimeTotal = useMemo(
+    () =>
+      service === "deep" || service === "moveinout"
+        ? calcPrice({ bedrooms, fullBaths, service, frequency: "onetime", addons })
+        : null,
+    [service, bedrooms, fullBaths, addons]
+  );
+
+  // The headline first-visit price used for the booking request.
+  const mainPrice = service === "standard" ? breakdown?.first_total ?? null : oneTimeTotal;
 
   // ZIP eligibility: empty = neutral; 5 digits and not in set = out of area.
   const zipEntered = zip.length === 5;
@@ -248,16 +273,15 @@ const Quote = () => {
          `Professionally cleaned in last 3 months: ${answered ? (cleanedRecently ? "Yes" : "No") : "Not answered"}`,
         `Street address: ${booking.address.trim()}`,
         zip ? `ZIP ${zip}` : "",
-        isRecurring
-          ? !answered || firstVisit === recurringPrice
-            ? `Price $${recurringPrice} per visit, every other week`
-            : `First visit $${firstVisit} per visit, then $${recurringPrice} per visit, every other week`
-          : `Price $${mainPrice} per visit`,
-        foundingApplies
-          ? foundingRecurring !== null
-            ? `Founding: first clean $${foundingFirst}, then $${foundingRecurring} per visit for 6 months`
-            : `Founding: first clean $${foundingFirst}`
-          : "",
+        isRecurring && breakdown
+          ? answered
+            ? `First visit $${breakdown.first_total}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then $${breakdown.recurring_total} per visit, every other week`
+            : `From $${breakdown.recurring_total} per visit, every other week — answer the cleaning-history question to confirm the first-visit price`
+          : breakdown
+            ? `Total $${breakdown.first_total} (one visit${breakdown.first_service === "deep" ? ", deep clean" : ""})`
+            : `Price $${mainPrice} per visit`,
+        foundingApplies && breakdown?.note ? `Founding: ${breakdown.note}` : "",
+        postFounding && isRecurring ? `After 6 months: $${postFounding.recurring_total} per visit` : "",
         addonList ? `Add-ons (every visit): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
       requestRef.current ??= { id: crypto.randomUUID(), time: new Date().toISOString() };
@@ -284,6 +308,13 @@ const Quote = () => {
         zip: zip || "",
         address: booking.address.trim(),
         price: String(mainPrice ?? ""),
+        // Server recomputes the exact breakdown from these — the browser
+        // price is never trusted for the signed booking token.
+        frequency: isRecurring ? "every2weeks" : "onetime",
+        service_key: service,
+        cleaned_recently: answered ? cleanedRecently : undefined,
+        addons: { insideOven, insideFridge, insideCabinets, interiorWindows, pets },
+        recurring: isRecurring && breakdown ? String(breakdown.recurring_total) : "",
         source: "quote",
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
@@ -321,7 +352,32 @@ const Quote = () => {
       }
       if (!data?.ok) throw new Error("Booking request failed");
       trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
-      navigate("/thank-you", { state: { submitted: true, kind: "booking", customerEmailSent: data.customerEmailSent, bt: data.bt } });
+      // Recap shown on /thank-you: price, date, arrival window, current
+      // status and response time. Never a "confirmed" promise — the date is
+      // a request until Nick confirms availability by email.
+      const recapPrice =
+        service === "standard" && breakdown
+          ? isRecurring
+            ? `First visit $${breakdown.first_total}, then $${breakdown.recurring_total} every other week`
+            : `One-time: $${breakdown.first_total}`
+          : mainPrice !== null
+            ? `$${mainPrice} one-time`
+            : "";
+      navigate("/thank-you", {
+        state: {
+          submitted: true,
+          kind: "booking",
+          customerEmailSent: data.customerEmailSent,
+          bt: data.bt,
+          recap: {
+            price: recapPrice,
+            date: booking.date,
+            window: booking.time || "Flexible arrival window",
+            status: "Request received — not confirmed yet",
+            response: "Nick confirms by email within one business day",
+          },
+        },
+      });
     } catch (err) {
       console.error("Quote booking error");
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "delivery" });
@@ -335,6 +391,14 @@ const Quote = () => {
     "w-full px-4 py-3 rounded-lg border border-border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring";
   const addonNote = "(every visit)";
   const includedAddons = ADDONS_INCLUDED_IN[service];
+  // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
+  const priceBlockAddons = [
+    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +$${ADDONS.insideOven.price}` : "",
+    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +$${ADDONS.insideFridge.price}` : "",
+    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +$${ADDONS.insideCabinets.price}` : "",
+    interiorWindows > 0 ? `${interiorWindows} interior windows +$${interiorWindows * ADDONS.interiorWindow.price}` : "",
+    pets ? `Pets +$${ADDONS.pets.price}` : "",
+  ].filter(Boolean).join(", ");
 
   return (
     <div className="page-shell">
@@ -508,7 +572,7 @@ const Quote = () => {
                 )}
                 <label htmlFor="q-addon-pets" className="flex items-center gap-2 text-sm">
                   <input id="q-addon-pets" type="checkbox" className="h-5 w-5" checked={pets} onChange={(e) => setPets(e.target.checked)} />
-                  {ADDONS.pets.label} (+${ADDONS.pets.price}) <span className="text-muted-foreground">{addonNote}</span>
+                  {ADDONS.pets.label} (+${ADDONS.pets.price}) <span className="text-muted-foreground">{addonNote} — extra pet-hair cleanup</span>
                 </label>
                 <div className="flex items-center gap-3 text-sm">
                   <label htmlFor="q-windows">
@@ -548,68 +612,71 @@ const Quote = () => {
             {/* Result */}
             <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
               {tier === null ? (
-                <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
+                <>
+                  <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
+                  <p className="text-sm text-muted-foreground mt-2">Homes with 6+ bedrooms or 6+ full bathrooms get an individual quote.</p>
+                </>
               ) : zipOutOfArea ? (
                 <p className="text-base font-semibold text-foreground">
                   We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
                 </p>
               ) : (
                 <>
-                  <p className="text-sm font-medium text-muted-foreground mb-1">{needsCleaningHistory ? "Answer the cleaning-history question above to confirm your first-visit price." : "Your price"}</p>
-                  {needsCleaningHistory && !isRecurring ? (
-                    <p className="text-base text-foreground">Select Yes or No above to see your price.</p>
-                  ) : isRecurring ? (
-                    <div className="flex flex-col items-center gap-1">
-                      {!answered ? (
-                        <p className="text-base text-foreground">Regular visits: ${recurringPrice} every other week. Your first visit may cost more if a deep clean is needed.</p>
-                      ) : firstVisit === recurringPrice ? (
-                        <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                          ${recurringPrice} per visit, every other week
-                        </span>
-                      ) : (
-                        <>
-                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                            First visit: ${firstVisit} per visit
-                          </span>
-                          <p className="text-base font-semibold text-foreground mt-1.5">
-                            Then ${recurringPrice} per visit, every other week
-                          </p>
-                        </>
-                      )}
-                      {recentlyCleaned === "no" && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Homes not cleaned professionally in the last 3 months start with a deep clean.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Your price</p>
+                  {service !== "standard" ? (
+                    // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
                       <p className="font-heading text-4xl md:text-5xl font-bold text-primary">
-                        ${mainPrice} per visit
+                        ${oneTimeTotal} <span className="text-xl font-semibold">one-time</span>
                       </p>
-                      {deepFirstVisit && (
-                        <p className="text-sm text-muted-foreground mt-2">
-                          Homes not cleaned professionally in the last 3 months start with a deep clean.
-                        </p>
-                      )}
+                      <p className="text-sm text-muted-foreground mt-2">
+                        {SERVICE_LABEL_CALC[service]}. Inside oven, fridge and cabinets are included — never charged twice.
+                      </p>
                     </>
-                  )}
-
-                  {foundingApplies && (
-                    <div className="mt-3 text-sm text-foreground">
-                      {!deepFirstVisit && (
-                        <p>Founding price, first clean: ${foundingFirst} (30% off the ${oneTimePrice} one-time price)</p>
-                      )}
-                      {deepFirstVisit && (
-                        <p className="text-muted-foreground">
-                          First visit is a deep clean at the standard deep-clean price.
+                  ) : !answered ? (
+                    <div className="flex flex-col items-center gap-1">
+                      <p className="text-base text-foreground">
+                        {isRecurring
+                          ? <>Regular visits: <strong>${breakdown?.recurring_total}</strong> every other week.</>
+                          : <>One-time clean: <strong>${breakdown?.first_total}</strong>.</>}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first.
+                      </p>
+                    </div>
+                  ) : breakdown ? (
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
+                        First visit: ${breakdown.first_total}
+                        {breakdown.first_service === "deep" && <span className="text-xl font-semibold"> — deep clean</span>}
+                      </span>
+                      {isRecurring && (
+                        <p className="text-base font-semibold text-foreground mt-1.5">
+                          Then ${breakdown.recurring_total} per visit, every other week
                         </p>
                       )}
-                      {foundingRecurring !== null && (
-                        <p>Founding rate for 6 months: ${foundingRecurring} per visit</p>
+                      {!isRecurring && (
+                        <p className="text-base font-semibold text-foreground mt-1.5">One-time visit</p>
+                      )}
+                      {breakdown.first_service === "deep" && (
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Homes not cleaned professionally in the last 3 months start with a deep clean. Inside oven,
+                          fridge and cabinets are included in a deep clean — never charged twice.
+                        </p>
+                      )}
+                      {breakdown.founding_applies && (
+                        <div className="mt-2 text-sm text-foreground">
+                          <p>Founding discount: 30% off{isRecurring ? ", locked for 6 months" : ""}.</p>
+                          {isRecurring && postFounding && (
+                            <p className="text-muted-foreground">After 6 months: ${postFounding.recurring_total} per visit.</p>
+                          )}
+                        </div>
+                      )}
+                      {priceBlockAddons && (
+                        <p className="text-sm text-muted-foreground mt-1">Add-ons, every visit: {priceBlockAddons}</p>
                       )}
                     </div>
-                  )}
+                  ) : null}
                 </>
               )}
 
@@ -622,7 +689,7 @@ const Quote = () => {
                 Request this booking
               </a>
               <p className="mt-3 text-sm text-muted-foreground">
-                Your card is charged only after you approve your photo report. $0 to book.
+                Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. $0 to book.
               </p>
             </div>
 
@@ -638,8 +705,7 @@ const Quote = () => {
               </div>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
-                Confirmed within one business day. Nothing is charged at booking. You see the photo report before we
-                charge your card.
+                Confirmed within one business day. Nothing is charged at booking. You get a photo report after the visit, before your card is charged.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -779,7 +845,7 @@ const Quote = () => {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>${mainPrice} per visit{isRecurring && answered && firstVisit !== recurringPrice ? `; then $${recurringPrice} every other week` : isRecurring ? ", every other week" : ""}</dd>
+                     <dt className="font-semibold">Price</dt><dd>{service === "standard" && breakdown ? <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
@@ -809,8 +875,8 @@ const Quote = () => {
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-semibold text-foreground">
               <span className="block text-xs font-normal text-muted-foreground">Your price</span>
-               ${mainPrice} {deepFirstVisit ? "first visit" : "per visit"}
-               {isRecurring && firstVisit !== recurringPrice && <span className="block text-xs">Then ${recurringPrice} every other week</span>}
+               ${mainPrice} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
+               {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then ${breakdown.recurring_total} every other week</span>}
             </p>
             <a
               href="#booking-request"

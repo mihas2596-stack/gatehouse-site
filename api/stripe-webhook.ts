@@ -170,26 +170,33 @@ export default async function handler(req: Req, res: Res) {
 
   try {
     if (eventType === "checkout.session.completed" && obj["mode"] === "setup") {
-      const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
-      const setupIntentRaw = obj["setup_intent"];
-      const setupIntentId =
-        typeof setupIntentRaw === "string" ? setupIntentRaw : (setupIntentRaw as { id?: string } | undefined)?.id;
-      const bookingId =
-        (obj["client_reference_id"] as string | undefined) ??
-        ((obj["metadata"] as Record<string, string> | undefined)?.["gh_booking_id"] ?? null);
-      if (customerId && setupIntentId) {
-        // Confirm the SetupIntent actually succeeded before marking card_ready.
-        const si = await stripeGet(STRIPE_SECRET_KEY, `/setup_intents/${encodeURIComponent(setupIntentId)}`);
-        if (si.ok && si.data["status"] === "succeeded") {
-          const pm = typeof si.data["payment_method"] === "string" ? (si.data["payment_method"] as string) : "";
-          await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-            "metadata[gh_state]": "card_ready",
-            "metadata[gh_payment_method]": pm,
-            ...(bookingId ? { "metadata[gh_booking_id]": bookingId } : {}),
-          });
-          log("card_ready", { customer: customerId, booking: bookingId });
-        } else {
-          logErr("setup_intent", `not succeeded: ${String(si.data["status"])}`);
+      const sessionMeta = (obj["metadata"] as Record<string, string> | undefined) ?? {};
+      // Only our own save-card sessions: ignore any other Checkout session
+      // that might target the same customer.
+      if (sessionMeta["source"] !== "gatehouse_save_card") {
+        log("ignored", "foreign_setup_session");
+      } else {
+        const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
+        const setupIntentRaw = obj["setup_intent"];
+        const setupIntentId =
+          typeof setupIntentRaw === "string" ? setupIntentRaw : (setupIntentRaw as { id?: string } | undefined)?.id;
+        const bookingId =
+          (obj["client_reference_id"] as string | undefined) ??
+          (sessionMeta["gh_booking_id"] ?? null);
+        if (customerId && setupIntentId) {
+          // Confirm the SetupIntent actually succeeded before marking card_ready.
+          const si = await stripeGet(STRIPE_SECRET_KEY, `/setup_intents/${encodeURIComponent(setupIntentId)}`);
+          if (si.ok && si.data["status"] === "succeeded") {
+            const pm = typeof si.data["payment_method"] === "string" ? (si.data["payment_method"] as string) : "";
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+              "metadata[gh_state]": "card_ready",
+              "metadata[gh_payment_method]": pm,
+              ...(bookingId ? { "metadata[gh_booking_id]": bookingId } : {}),
+            });
+            log("card_ready", { customer: customerId, booking: bookingId });
+          } else {
+            logErr("setup_intent", `not succeeded: ${String(si.data["status"])}`);
+          }
         }
       }
     } else if (eventType === "setup_intent.setup_failed") {
@@ -211,12 +218,17 @@ export default async function handler(req: Req, res: Res) {
         const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
         const curState = curMeta["gh_state"] ?? "";
         const newState = eventType === "payment_intent.succeeded" ? "paid" : "payment_failed";
+        const piId = (obj["id"] as string | undefined) ?? "";
         if (curState === "paid" && newState !== "paid") {
           log("payment", { state: "regression_blocked", booking: bookingId, curState, newState });
+        } else if (piId && curMeta["gh_last_payment"] === piId && curState === newState) {
+          // Same payment intent already recorded (cross-instance redelivery):
+          // the write below would be a no-op, skip it.
+          log("payment", { state: "already_recorded", booking: bookingId, pi: piId });
         } else {
           await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
             "metadata[gh_state]": newState,
-            "metadata[gh_last_payment]": (obj["id"] as string | undefined) ?? "",
+            "metadata[gh_last_payment]": piId,
           });
           log("payment", { state: eventType, booking: bookingId });
         }

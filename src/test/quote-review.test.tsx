@@ -22,9 +22,26 @@ describe("booking price confirmation", () => {
   it("shows the deep first visit in the result and mobile price bar", () => {
     openQuote();
     fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
-    expect(screen.getByText("First visit: $329 per visit")).toBeInTheDocument();
-    expect(screen.getByText("$329 first visit")).toBeInTheDocument();
-    expect(screen.getByText("Then $189 every other week")).toBeInTheDocument();
+    // Unified breakdown: one first-visit total, explicitly labeled as a deep clean.
+    expect(screen.getByText("First visit: $329", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("— deep clean")).toBeInTheDocument();
+    expect(screen.getByText("$329 first visit (deep clean)", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Then $189 per visit, every other week")).toBeInTheDocument();
+  });
+
+  it("shows one unified founding total for the confirmed scenario", () => {
+    // 3bd/2ba, Standard, every other week, cleaned=Yes, founding on, oven +$35:
+    // first visit $188 (153 + 35), then $167 (132 + 35), $224 after 6 months.
+    openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByLabelText(/claiming a founding spot/));
+    fireEvent.click(screen.getByLabelText(/Inside oven/));
+    expect(screen.getByText("First visit: $188", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Then $167 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("After 6 months: $224 per visit.")).toBeInTheDocument();
+    // No contradictory numbers: the old $224 headline / $153-off-$254 lines are gone.
+    expect(screen.queryByText(/30% off the \$254/)).not.toBeInTheDocument();
   });
 
   it("requires another review when the calculator changes after confirmation", () => {
@@ -32,7 +49,7 @@ describe("booking price confirmation", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
-    for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date * (YYYY-MM-DD)", "2099-12-01"]]) {
+    for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
     fireEvent.click(document.getElementById("b-terms")!);
