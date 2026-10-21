@@ -672,7 +672,10 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
           ? `\nBecause the home hasn't been professionally cleaned in the last 3 months, the first visit is a deep clean. Regular visits after that cost less.\n`
           : "";
         const priceDisplay = serverFirst ? `$${serverFirst}` : price ? `$${price}` : "—";
-        const recurringDisplay = serverRecurring ? `, then $${serverRecurring} per visit` : "";
+        // Equal first and recurring prices collapse into one line — "$189 for
+        // the first visit, then $189 per visit" reads like a typo.
+        const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;
+        const recurringDisplay = serverRecurring && !sameVisitPrice ? `, then $${serverRecurring} per visit` : "";
 
         const textBody = isQuote ? `Hi ${firstName},
 
@@ -687,7 +690,7 @@ ${homeDetails} · ZIP ${zip || ""}
 
 Service: ${serviceLabel}
 
-Your estimate: ${priceDisplay} for the first visit${recurringDisplay}.
+Your estimate: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.
 ${deepPara}
 I'll confirm your estimate, date and arrival window by the end of the next business day. Your final confirmation comes in a separate email.
 

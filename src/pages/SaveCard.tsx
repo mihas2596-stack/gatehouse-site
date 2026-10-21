@@ -18,6 +18,10 @@ type BookingSummary = {
   recurring?: string;
   service?: string;
   date?: string;
+  has_card?: string;
+  booking_confirmed?: string;
+  confirmed_date?: string;
+  confirmed_window?: string;
 };
 
 const SaveCard = () => {
@@ -108,6 +112,10 @@ const SaveCard = () => {
   };
 
   const bookingSummary = booking && (booking.first || booking.recurring || booking.service || booking.date);
+  // Revisit state from the booking token (server-checked against Stripe):
+  // a client reopening their link sees the true state, not the save form.
+  const hasCard = booking?.has_card === "1";
+  const isConfirmed = booking?.booking_confirmed === "1";
 
   return (
     <div className="page-shell min-h-[80vh] bg-background">
@@ -130,9 +138,10 @@ const SaveCard = () => {
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved</h1>
             <p className="text-lg text-foreground mb-6">
-              Your card is on file — confirmed with Stripe. Nothing was charged today. We charge it
-              when you approve your photo report, or automatically 24 hours after we send it if you
-              haven't reported an issue.
+              Your card is on file — confirmed with Stripe. $0 charged today. We&apos;ll email your
+              confirmed date and arrival window within one business day. Your card is charged when
+              you approve your photo report, or automatically 24 hours after we send it if you
+              haven&apos;t reported an issue.
             </p>
             <Button variant="hero" size="lg" asChild>
               <Link to="/">Back to Home</Link>
@@ -165,7 +174,37 @@ const SaveCard = () => {
             </p>
           </>
         )}
-        {verify.kind === "none" && (
+        {verify.kind === "none" && hasCard && isConfirmed && (
+          <>
+            <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Booking confirmed</h1>
+            <p className="text-lg text-foreground mb-6">
+              Your cleaning is confirmed
+              {booking?.confirmed_date ? <> for <strong>{booking.confirmed_date}</strong></> : null}
+              {booking?.confirmed_window ? <> · {booking.confirmed_window}</> : null}.
+              Your card is saved — $0 charged today. Your card is charged when you approve your
+              photo report, or automatically 24 hours after we send it if you haven&apos;t reported
+              an issue.
+            </p>
+            <Button variant="hero" size="lg" asChild>
+              <Link to="/">Back to Home</Link>
+            </Button>
+          </>
+        )}
+        {verify.kind === "none" && hasCard && !isConfirmed && (
+          <>
+            <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved — $0 charged</h1>
+            <p className="text-lg text-foreground mb-6">
+              Your card is already on file for this booking — no need to save it again. We&apos;ll
+              email your confirmed date and arrival window within one business day.
+            </p>
+            <Button variant="hero" size="lg" asChild>
+              <Link to="/">Back to Home</Link>
+            </Button>
+          </>
+        )}
+        {verify.kind === "none" && !hasCard && (
           <>
             <CreditCard className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
@@ -174,9 +213,19 @@ const SaveCard = () => {
             <p className="text-lg text-foreground mb-6">
               Your card secures your booking request. Your card is charged when you approve the report,
               or automatically 24 hours after we send it if you haven't reported an issue.
-              Saving your card doesn't confirm your cleaning time by itself — we confirm the date and
-              arrival window by email after reviewing your request.
+              {!isConfirmed && (
+                <> Saving your card doesn't confirm your cleaning time by itself — we confirm the date and
+                arrival window by email after reviewing your request.</>
+              )}
             </p>
+            {isConfirmed && (
+              <p className="mb-6 rounded-lg border border-sage/40 bg-sage/10 p-4 text-base text-foreground">
+                Good news — Nick confirmed your visit
+                {booking?.confirmed_date ? <> for <strong>{booking.confirmed_date}</strong></> : null}
+                {booking?.confirmed_window ? <> · {booking.confirmed_window}</> : null}.
+                Save your card below to complete — $0 today.
+              </p>
+            )}
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
                 <h2 className="mb-2 font-heading text-lg font-bold">Your booking</h2>

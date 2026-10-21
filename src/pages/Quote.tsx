@@ -407,7 +407,9 @@ const Quote = () => {
       const recapPrice =
         service === "standard" && breakdown
           ? isRecurring
-            ? `First visit $${breakdown.first_total}, then $${breakdown.recurring_total} every other week`
+            ? breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard"
+              ? `$${breakdown.recurring_total} per visit, every other week`
+              : `First visit $${breakdown.first_total}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then $${breakdown.recurring_total} per visit, every other week`
             : `One-time: $${breakdown.first_total}`
           : mainPrice !== null
             ? `$${mainPrice} one-time`
@@ -420,6 +422,7 @@ const Quote = () => {
           bt: data.bt,
           recap: {
             price: recapPrice,
+            email: booking.email.trim(),
             date: booking.date,
             window: booking.time || "Flexible arrival window",
             status: "Request received — not confirmed yet",

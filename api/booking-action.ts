@@ -1,6 +1,9 @@
 // POST /api/booking-action
 //
-// Operator actions for a booking: approve | dispute | resolve | charge | status.
+// Operator actions for a booking: approve | dispute | resolve | charge | status | confirm.
+// "confirm" is the owner confirming the booking DATE with the client before
+// the visit (orthogonal flag gh_booking_confirmed — it never touches the
+// gh_state machine the charge path depends on) and emails the client.
 // Auth: ADMIN_TOKEN env var (Bearer token). Kolya sets it in Vercel; it is
 // never exposed to the browser.
 //
@@ -79,12 +82,15 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
   report_version: z.number().int().positive().max(1000).optional(),
   reason: z.string().max(500).optional(),
+  // confirm only:
+  confirmed_date: z.string().max(20).optional(),
+  confirmed_window: z.string().max(80).optional(),
 });
 
 async function stripeGet(
@@ -217,6 +223,76 @@ export default async function handler(req: Req, res: Res) {
         state,
         issue_open: issueOpen,
         payment_method: meta["gh_payment_method"] ? "saved" : "none",
+        booking_confirmed: meta["gh_booking_confirmed"] === "1",
+        confirmed_date: meta["gh_confirmed_date"] ?? "",
+        confirmed_window: meta["gh_confirmed_window"] ?? "",
+      });
+    }
+
+    if (action === "confirm") {
+      // Owner confirms the visit date/window with the client. Orthogonal to
+      // gh_state: the report-approval/charge machine is untouched. Repeating
+      // the same confirmation does not re-email the client; changing the
+      // date or window does (it is a change notification).
+      const date = (parsed.data.confirmed_date ?? "").trim();
+      const win = (parsed.data.confirmed_window ?? "").trim();
+      if (!date) {
+        return json(400, { ok: false, error: "confirmed_date_required" });
+      }
+      const already =
+        meta["gh_booking_confirmed"] === "1" &&
+        meta["gh_confirmed_date"] === date &&
+        (meta["gh_confirmed_window"] ?? "") === win;
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_booking_confirmed]": "1",
+        "metadata[gh_confirmed_date]": date,
+        "metadata[gh_confirmed_window]": win,
+      });
+      let emailSent = false;
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      if (!already && RESEND_API_KEY) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        if (custEmail) {
+          const firstName = custName.trim().split(/\s+/)[0] || "there";
+          const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+          const priceLine = Number.isFinite(cents) && cents > 0
+            ? `\nFirst visit: $${(cents / 100).toFixed(2).replace(/\.00$/, "")}.`
+            : "";
+          try {
+            const resp = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${RESEND_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                to: [custEmail],
+                reply_to: "hello@gatehousehomecleaning.com",
+                subject: `Booking confirmed — ${date}`,
+                text:
+                  `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${priceLine}\n\n` +
+                  "Your card is charged only after the visit — when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.\n\n" +
+                  "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
+              }),
+              signal: AbortSignal.timeout(15000),
+            });
+            emailSent = resp.ok;
+          } catch {
+            emailSent = false;
+          }
+        }
+      }
+      log("confirm", { booking: bookingId, emailSent, already });
+      return json(200, {
+        ok: true,
+        booking_confirmed: true,
+        confirmed_date: date,
+        confirmed_window: win,
+        email_sent: emailSent,
+        already_confirmed: already,
       });
     }
 
