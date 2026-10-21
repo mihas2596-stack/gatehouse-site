@@ -8,7 +8,7 @@
 export type TierKey = "S" | "M" | "L";
 export type CalcServiceKey = "standard" | "deep" | "moveinout";
 export type FrequencyKey = "every2weeks" | "onetime";
-export type SizeBandKey = "under2500" | "2500" | "3000" | "3500" | "4000plus";
+export type SizeBandKey = "notsure" | "under2500" | "2500" | "3000" | "3500" | "4000plus";
 
 export const EXTRA_TIME_RATE = 45;
 export const EXTRA_TIME_NOTE =
@@ -79,6 +79,7 @@ export const FREQUENCY_LABEL: Record<FrequencyKey, string> = {
 
 /** Home size bands — collected for scheduling, they do not change the price. */
 export const SIZE_BANDS: { key: SizeBandKey; label: string }[] = [
+  { key: "notsure", label: "Not sure" },
   { key: "under2500", label: "Under 2,500 sq ft" },
   { key: "2500", label: "2,500–2,999 sq ft" },
   { key: "3000", label: "3,000–3,499 sq ft" },
@@ -89,6 +90,18 @@ export const SIZE_BANDS: { key: SizeBandKey; label: string }[] = [
 export const SIZE_BAND_LABEL: Record<SizeBandKey, string> = Object.fromEntries(
   SIZE_BANDS.map((b) => [b.key, b.label])
 ) as Record<SizeBandKey, string>;
+
+/** Extra areas a client can flag for planning — they never change the shown price. */
+export const EXTRA_ZONES = [
+  { key: "office", label: "Home office" },
+  { key: "basement", label: "Finished basement" },
+  { key: "living", label: "Extra living room" },
+  { key: "other", label: "Other space" },
+] as const;
+export type ExtraZoneKey = (typeof EXTRA_ZONES)[number]["key"];
+export const EXTRA_ZONE_LABEL: Record<ExtraZoneKey, string> = Object.fromEntries(
+  EXTRA_ZONES.map((z) => [z.key, z.label])
+) as Record<ExtraZoneKey, string>;
 
 /** Fixed-price add-ons, charged on every visit. */
 export const ADDONS = {

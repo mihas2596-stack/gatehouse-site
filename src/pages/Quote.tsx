@@ -15,6 +15,9 @@ import {
   EXTRA_TIME_NOTE,
   SIZE_BANDS,
   SIZE_BAND_LABEL,
+  EXTRA_ZONES,
+  EXTRA_ZONE_LABEL,
+  type ExtraZoneKey,
   BEDROOM_CHOICES,
   FULL_BATH_CHOICES,
   HALF_BATH_CHOICES,
@@ -53,7 +56,10 @@ const Quote = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
 
-  const [sizeBand, setSizeBand] = useState<SizeBandKey>("under2500");
+  const [sizeBand, setSizeBand] = useState<SizeBandKey>("notsure");
+  const [extraZones, setExtraZones] = useState<ExtraZoneKey[]>([]);
+  const toggleZone = (key: ExtraZoneKey) =>
+    setExtraZones((prev) => (prev.includes(key) ? prev.filter((z) => z !== key) : [...prev, key]));
   const [bedrooms, setBedrooms] = useState<number>(3);
   const [fullBaths, setFullBaths] = useState<number>(2);
   const [halfBaths, setHalfBaths] = useState<number>(0);
@@ -143,6 +149,15 @@ const Quote = () => {
   // 6+ full bathrooms) have no table price, but the request still goes
   // through — as a custom-quote request, not a ZIP error.
   const isLargeHome = tier === null;
+  // Scope-planning flags: an unsure or very large size, or any extra area,
+  // means the owner reviews the scope with the client BEFORE confirming.
+  // None of this ever changes the shown price by itself.
+  const scopeReasons: string[] = [
+    ...(sizeBand === "notsure" ? ["home size not sure"] : []),
+    ...(sizeBand === "4000plus" ? ["4,000+ sq ft"] : []),
+    ...(extraZones.length ? [`extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}`] : []),
+  ];
+  const scopeReview = scopeReasons.length > 0;
   const canProceed = zipInArea;
   const showPrice = !zipOutOfArea && tier !== null;
 
@@ -172,7 +187,7 @@ const Quote = () => {
     setReviewReady(false);
     requestRef.current = null;
     setSubmitError("");
-  }, [sizeBand, bedrooms, fullBaths, halfBaths, recentlyCleaned, frequency, service, zip, isFounding, addons]);
+  }, [sizeBand, bedrooms, fullBaths, halfBaths, recentlyCleaned, frequency, service, zip, isFounding, addons, extraZones]);
   const refs = {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
@@ -293,13 +308,15 @@ const Quote = () => {
         foundingApplies && breakdown?.note ? `Founding: ${breakdown.note}` : "",
         postFounding && isRecurring ? `After 6 months: $${postFounding.recurring_total} per visit` : "",
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
+        extraZones.length ? `Extra areas to clean: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : "",
+        scopeReview ? `Scope review needed: YES (${scopeReasons.join("; ")})` : "",
       ].filter(Boolean).join(" · ");
       // Idempotency: one request_id per booking attempt, kept in
       // sessionStorage so a retry — even after a page reload — reuses it and
       // the server reproduces the same booking instead of a duplicate. The id
       // rotates when the booking content changes or after a successful send.
       if (!requestRef.current) {
-        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, isFounding, mainPrice]);
+        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, isFounding, mainPrice, sizeBand, extraZones]);
         let id: string | null = null;
         try {
           if (sessionStorage.getItem("gh_request_sig") === sig) id = sessionStorage.getItem("gh_request_id");
@@ -329,6 +346,9 @@ const Quote = () => {
         time: booking.time,
         message: `${summary}${booking.notes ? `\n\nNotes: ${booking.notes}` : ""}\n\n${consentRecord}`,
         founding: foundingApplies,
+        extra_zones: extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", "),
+        scope_review: scopeReview,
+        scope_reasons: scopeReasons.join("; "),
         bedrooms: String(bedrooms),
         bathrooms: String(fullBaths + halfBaths * 0.5),
         zip: zip || "",
@@ -457,15 +477,6 @@ const Quote = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div className="md:col-span-2">
-                <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Home size (sq ft)</label>
-                <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>
-                  {SIZE_BANDS.map((b) => (
-                    <option key={b.key} value={b.key}>{b.label}</option>
-                  ))}
-                </select>
-              </div>
-
               <div>
                 <label htmlFor="q-bed" className="block text-sm font-medium mb-1.5">Bedrooms</label>
                 <select id="q-bed" value={bedrooms} onChange={(e) => setBedrooms(Number(e.target.value))} className={selectClass}>
@@ -718,6 +729,40 @@ const Quote = () => {
                 </>
               )}
 
+              {/* PLANNING THE VISIT — size and extra areas never change the price */}
+              <div className="mt-6 rounded-lg border border-border bg-background p-4">
+                <h3 className="font-heading text-base font-bold">Planning your visit</h3>
+                <div className="mt-3">
+                  <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Approximate home size — if you know it</label>
+                  <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>
+                    {SIZE_BANDS.map((b) => (
+                      <option key={b.key} value={b.key}>{b.label}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-xs text-muted-foreground">An estimate is fine. This helps us plan enough cleaning time.</p>
+                </div>
+                <fieldset className="mt-4">
+                  <legend className="text-sm font-medium">Any extra areas to clean?</legend>
+                  <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                    {EXTRA_ZONES.map((z) => (
+                      <label key={z.key} htmlFor={`q-zone-${z.key}`} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                        <input
+                          id={`q-zone-${z.key}`} type="checkbox"
+                          checked={extraZones.includes(z.key)} onChange={() => toggleZone(z.key)}
+                          className="h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                        />
+                        {z.label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {scopeReview && (
+                  <p className="mt-3 text-sm font-medium text-foreground">
+                    We&apos;ll review the cleaning scope before confirming your visit. Any price change needs your approval.
+                  </p>
+                )}
+              </div>
+
               <p className="text-sm text-muted-foreground mt-3">{EXTRA_TIME_NOTE}</p>
 
               <a
@@ -880,15 +925,18 @@ const Quote = () => {
                  <div ref={reviewRef} tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-heading text-lg font-bold">Review your details</h3>
-                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => { setReviewReady(false); document.getElementById("q-size")?.focus(); }}>Edit</Button>
+                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => { setReviewReady(false); document.getElementById("q-bed")?.focus(); }}>Edit</Button>
                   </div>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
-                    <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}</dd>
+                    <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
                      <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
+                  {scopeReview && (
+                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Any price change needs your approval.</p>
+                  )}
                 </div>
               )}
 

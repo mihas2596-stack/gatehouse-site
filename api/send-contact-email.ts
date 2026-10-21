@@ -350,6 +350,9 @@ const ContactSchema = z.object({
   time: z.string().max(50).optional().or(z.literal("")),
   message: z.string().max(5000).optional().or(z.literal("")),
   founding: z.boolean().optional(),
+  extra_zones: z.string().max(200).optional(),
+  scope_review: z.boolean().optional(),
+  scope_reasons: z.string().max(300).optional(),
   bedrooms: z.string().max(20).optional().or(z.literal("")),
   bathrooms: z.string().max(20).optional().or(z.literal("")),
   zip: z.string().max(20).optional().or(z.literal("")),
@@ -520,6 +523,9 @@ export default async function handler(req: Req, res: Res) {
       time,
       message,
       founding,
+      extra_zones,
+      scope_review,
+      scope_reasons,
       bedrooms,
       bathrooms,
       zip,
@@ -619,6 +625,8 @@ export default async function handler(req: Req, res: Res) {
           ${time ? row("Preferred Time", escapeHtml(time)) : ""}
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
 ${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
+${isQuote && extra_zones ? row("Extra areas to clean", extra_zones) : ""}
+${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "check scope"}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
         <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form${bookingId ? ` · Booking ID: ${bookingId}` : ""}</p>
