@@ -192,6 +192,25 @@ async function stripeGet(
 const q = (v: string | string[] | undefined): string =>
   Array.isArray(v) ? v[0] ?? "" : v ?? "";
 
+// Find the Stripe Customer carrying this booking_id in metadata.
+async function findCustomerByBooking(
+  secretKey: string,
+  bookingId: string,
+): Promise<{ id: string; metadata: Record<string, string> } | null> {
+  const query = `metadata['gh_booking_id']:'${bookingId.replace(/'/g, "")}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "1" })}`);
+  if (res.ok) {
+    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {} };
+    return null;
+  }
+  const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
+  if (!listRes.ok) return null;
+  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+  const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
+  return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   const headers: Record<string, string> = { Vary: "Origin" };
@@ -247,6 +266,26 @@ export default async function handler(req: Req, res: Res) {
       if (p.recurring) booking.recurring = p.recurring;
       if (p.service) booking.service = p.service;
       if (p.date) booking.date = p.date;
+      // Revisit state: a client reopening their link must see the truth —
+      // card already saved, and/or the owner has confirmed the date — not a
+      // fresh "save your card" form. Sourced from the Stripe Customer the
+      // webhook maintains (gh_payment_method / gh_booking_confirmed).
+      const revisitKey = process.env["STRIPE_SECRET_KEY"];
+      if (revisitKey) {
+        try {
+          const cust = await findCustomerByBooking(revisitKey, bookingId);
+          if (cust) {
+            if (cust.metadata["gh_payment_method"]) booking.has_card = "1";
+            if (cust.metadata["gh_booking_confirmed"] === "1") {
+              booking.booking_confirmed = "1";
+              if (cust.metadata["gh_confirmed_date"]) booking.confirmed_date = cust.metadata["gh_confirmed_date"];
+              if (cust.metadata["gh_confirmed_window"]) booking.confirmed_window = cust.metadata["gh_confirmed_window"];
+            }
+          }
+        } catch {
+          /* state unknown — the save form stays available */
+        }
+      }
     }
 
     if (!sessionId || !/^cs_(test|live)_/.test(sessionId)) {
