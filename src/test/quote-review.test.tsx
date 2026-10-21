@@ -55,9 +55,9 @@ describe("booking price confirmation", () => {
     fireEvent.click(document.getElementById("b-terms")!);
     fireEvent.click(document.getElementById("b-photo")!);
     fireEvent.click(screen.getByRole("button", { name: "Review my details" }));
-    expect(screen.getByRole("button", { name: /Send request — $0 today/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Send request — \$0 today/ })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
-    expect(screen.queryByRole("button", { name: /Send request — $0 today/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Send request — \$0 today/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review my details" })).toBeEnabled();
   });
 });
