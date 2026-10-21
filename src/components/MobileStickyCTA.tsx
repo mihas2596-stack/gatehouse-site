@@ -3,7 +3,10 @@ import { Mail } from "lucide-react";
 
 const MobileStickyCTA = () => {
   const { pathname } = useLocation();
-  const quoteOnly = pathname.startsWith("/quote");
+  // Funnel steps (quote form, save-card, thank-you): the bar must never offer
+  // a way BACK to pricing — Email only. Everywhere else it also links to /quote.
+  const funnelStep =
+    pathname.startsWith("/quote") || pathname.startsWith("/save-card") || pathname.startsWith("/thank-you");
 
   return (
     <nav
@@ -13,12 +16,12 @@ const MobileStickyCTA = () => {
     >
       <a
         href="mailto:hello@gatehousehomecleaning.com"
-        className={`${quoteOnly ? "flex-1" : "w-1/2"} min-h-[44px] flex items-center justify-center gap-2 bg-primary/90 text-primary-foreground text-sm font-bold no-underline`}
+        className={`${funnelStep ? "flex-1" : "w-1/2"} min-h-[44px] flex items-center justify-center gap-2 bg-primary/90 text-primary-foreground text-sm font-bold no-underline`}
       >
         <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
         Email
       </a>
-      {!quoteOnly && (
+      {!funnelStep && (
         <Link
           to="/quote"
           className="w-1/2 min-h-[44px] flex items-center justify-center gap-2 text-sm font-bold text-primary-foreground no-underline"

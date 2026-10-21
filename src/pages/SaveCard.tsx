@@ -125,7 +125,7 @@ const SaveCard = () => {
         description="Save your card to secure your booking. No charge today — your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue."
         noindex
       />
-      <div className="container max-w-xl py-12 text-center">
+      <div className="container max-w-xl py-12 pb-24 text-center md:pb-12">
         {verify.kind === "verifying" && (
           <>
             <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" aria-hidden="true" />

@@ -26,7 +26,7 @@ const ThankYou = () => {
     return (
       <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
         <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
-        <div className="container text-center max-w-xl py-12">
+        <div className="container text-center max-w-xl py-12 pb-24 md:pb-12">
           {received && <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />}
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
             {received ? "Message received" : "Ready to get in touch?"}
@@ -49,7 +49,7 @@ const ThankYou = () => {
   return (
     <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
       <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
-      <div className="container max-w-xl py-12">
+      <div className="container max-w-xl py-12 pb-24 md:pb-12">
         <div className="text-center">
           <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
           <ol className="mb-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
