@@ -33,7 +33,7 @@ const ThankYou = () => {
           </h1>
           <p className="text-lg text-foreground mb-6">
             {received
-              ? "Thanks for your question. Nick will reply by email within one business day."
+              ? "Thanks for your question. We reply by email within one business day."
               : "Use our quote or contact form to send a request. This page alone does not create a booking."}
           </p>
           <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "See My Price"}</Link></Button>
@@ -61,13 +61,13 @@ const ThankYou = () => {
           </ol>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Request received</h1>
           <p className="text-lg text-foreground mb-6">
-            <strong className="font-semibold">Next: securely save your card.</strong>{" "}
-            $0 charged today. Your preferred date is awaiting confirmation.
+            <strong className="font-semibold">One step left: save your card.</strong>{" "}
+            $0 charged today — then we confirm your preferred date by email.
           </p>
           {submission.customerEmailSent === false && (
             <p className="text-sm text-muted-foreground mb-6">
               Your request reached us safely — no need to send it again. The automatic confirmation email
-              didn&apos;t go through (check your spam folder just in case); Nick will still confirm
+              didn&apos;t go through (check your spam folder just in case); we&apos;ll still confirm
               everything by email within one business day.
             </p>
           )}
@@ -76,8 +76,9 @@ const ThankYou = () => {
         <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
           <h2 className="mb-2 font-heading text-xl font-bold">Save your card — $0 today</h2>
           <p className="mb-4 text-base leading-relaxed">
-            Save your card now so we can charge it after your visit — when you approve the photo
-            report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.
+            This step lets us confirm your date. The card is charged only after your visit — when
+            you approve the photo report, or automatically 24 hours after we send it if you
+            haven&apos;t reported an issue.
           </p>
           <Button variant="hero" size="xl" asChild className="w-full sm:w-auto">
             <Link to={saveCardHref}>Save my card securely</Link>
@@ -115,10 +116,10 @@ const ThankYou = () => {
         <div className="mb-8 rounded-xl bg-card p-6 text-left">
           <h2 className="mb-3 font-heading text-xl font-bold">What happens next</h2>
           <ol className="list-decimal pl-5 space-y-3 text-base leading-relaxed">
-            <li>Nick confirms your date, arrival window and service details by email within one business day.</li>
-            <li>Your cleaner completes the agreed checklist.</li>
-            <li>You receive a photo report after the visit. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
-            <li>If you selected every-other-week cleaning, we confirm the repeat schedule with you.</li>
+            <li><strong>Save your card</strong> with the button above, if you haven&apos;t yet — we confirm dates once a card is on file. $0 today.</li>
+            <li><strong>We confirm your date by email</strong> within one business day — the email includes your arrival window and, for every-other-week cleaning, your repeat schedule.</li>
+            <li><strong>We clean and send a photo report</strong> — your cleaner completes the agreed checklist, and you get photos of every room.</li>
+            <li><strong>Your card is charged after the visit</strong> — when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
           </ol>
           <p className="mt-4 text-sm text-muted-foreground">
             Something wrong after a visit?{" "}
