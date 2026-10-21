@@ -31,7 +31,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "What if the cleaner can't make it?",
-    a: "We contact you as soon as we know and offer the next available day that works for you. You are never charged for a visit that doesn't happen.",
+    a: "We contact you as soon as we know and offer the next available day that works for you. If we have to cancel a visit, you are never charged for it.",
   },
   {
     q: "What if I'm not happy with the cleaning?",
@@ -44,10 +44,6 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   {
     q: "Do you bring your own supplies and equipment?",
     a: "Yes. Every visit includes professional-grade supplies, vacuum, mop, microfiber cloths, and standard household cleaning products. You don't need to provide anything.",
-  },
-  {
-    q: "Can I reschedule or cancel?",
-    a: "Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25.",
   },
   {
     q: "What if you can't get into my home?",

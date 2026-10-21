@@ -812,7 +812,7 @@ const Quote = () => {
               </div>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
-                Confirmed within one business day. Nothing is charged at booking. You get a photo report after the visit, before your card is charged.
+                Nick confirms within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it's sent if you haven't reported an issue.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
