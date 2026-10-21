@@ -234,6 +234,20 @@ const SaveCard = () => {
                 Save your card below to complete — $0 today.
               </p>
             )}
+            <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
+              <h2 className="mb-2 font-heading text-lg font-bold">Why we ask for your card</h2>
+              <p className="mb-4 text-base leading-relaxed">
+                Two reasons: it holds your cleaner&apos;s time for your date, and it&apos;s how
+                &quot;approve, then pay&quot; works — you never pay for a cleaning you haven&apos;t seen.
+              </p>
+              <ul className="space-y-3 text-base leading-relaxed">
+                <li><strong>$0 today — and nothing before the visit.</strong> The card is saved, not charged.</li>
+                <li><strong>You pay after you see the work.</strong> The charge happens when you approve the photo report; if you report an issue, it stays paused until the issue is fixed.</li>
+                <li><strong>The amount is the price you saw.</strong> No surprises — extra work only ever happens with your approval first.</li>
+                <li><strong>Free cancellation up to 48 hours before your visit</strong> — cancel in time and nothing is charged at all.</li>
+                <li><strong>We never see your card number.</strong> Stripe processes it securely — the same system behind millions of online stores.</li>
+              </ul>
+            </div>
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
                 <h2 className="mb-2 font-heading text-lg font-bold">Your booking</h2>
