@@ -465,6 +465,13 @@ const Quote = () => {
           <p className="text-muted-foreground text-lg">
             No email needed to see your price.
           </p>
+          <ol className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
+            <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">1 · Your price</li>
+            <li aria-hidden="true" className="text-muted-foreground">→</li>
+            <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
+            <li aria-hidden="true" className="text-muted-foreground">→</li>
+            <li className="rounded-full border border-border bg-card px-3 py-1.5">3 · Secure your card</li>
+          </ol>
         </div>
       </section>
 
@@ -502,6 +509,33 @@ const Quote = () => {
                     <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label htmlFor="q-zip" className="block text-sm font-medium mb-1.5">ZIP code (service area check)</label>
+                <input
+                  id="q-zip"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={5}
+                  value={zip}
+                  onChange={(e) => setZip(e.target.value.replace(/\D/g, ""))}
+                  placeholder="30024"
+                  aria-invalid={zipOutOfArea}
+                  aria-describedby="zip-msg"
+                  className={`w-full px-4 py-3 rounded-lg border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring ${
+                    zipOutOfArea ? "border-destructive" : "border-border"
+                  }`}
+                />
+                <p id="zip-msg" className="mt-2 text-sm" role={zipOutOfArea ? "alert" : undefined}>
+                  {zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code.</span>}
+                  {zipInArea && <span className="text-foreground">We clean homes in {zip}.</span>}
+                  {zipOutOfArea && (
+                    <span className="text-destructive">
+                      We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
+                    </span>
+                  )}
+                </p>
               </div>
 
               <div className="md:col-span-2">
@@ -546,32 +580,6 @@ const Quote = () => {
                 </div>
               )}
 
-              <div className="md:col-span-2">
-                <label htmlFor="q-zip" className="block text-sm font-medium mb-1.5">ZIP code (service area check)</label>
-                <input
-                  id="q-zip"
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={5}
-                  value={zip}
-                  onChange={(e) => setZip(e.target.value.replace(/\D/g, ""))}
-                  placeholder="30024"
-                  aria-invalid={zipOutOfArea}
-                  aria-describedby="zip-msg"
-                  className={`w-full px-4 py-3 rounded-lg border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring ${
-                    zipOutOfArea ? "border-destructive" : "border-border"
-                  }`}
-                />
-                <p id="zip-msg" className="mt-2 text-sm" role={zipOutOfArea ? "alert" : undefined}>
-                  {zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code.</span>}
-                  {zipInArea && <span className="text-foreground">We clean homes in {zip}.</span>}
-                  {zipOutOfArea && (
-                    <span className="text-destructive">
-                      We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
-                    </span>
-                  )}
-                </p>
-              </div>
             </div>
 
             {/* Founding spot — standard cleanings only. Deep and move-in/out
@@ -830,6 +838,7 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.phone && <p id="b-phone-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.phone}</p>}
+                  <p className="mt-1.5 text-xs text-muted-foreground">For arrival updates and access details on the day of your visit.</p>
                 </div>
                 <div>
                   <label htmlFor="b-address" className="block text-sm font-medium mb-1.5">Street address *</label>
@@ -852,6 +861,7 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.date && <p id="b-date-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.date}</p>}
+                  <p className="mt-1.5 text-xs text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="b-time" className="block text-sm font-medium mb-1.5">Preferred arrival window</label>
@@ -924,7 +934,7 @@ const Quote = () => {
               {reviewReady && (
                  <div ref={reviewRef} tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="font-heading text-lg font-bold">Review your details</h3>
+                    <h3 className="font-heading text-lg font-bold">Check your request</h3>
                     <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => { setReviewReady(false); document.getElementById("q-bed")?.focus(); }}>Edit</Button>
                   </div>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
@@ -948,11 +958,11 @@ const Quote = () => {
                     ? "Enter a ZIP in our service area"
                     : needsCleaningHistory ? "Answer the cleaning-history question above"
                     : reviewReady
-                      ? (isLargeHome ? <>Send my custom quote request <Send className="w-5 h-5" /></> : <>Send my booking request <Send className="w-5 h-5" /></>)
+                      ? <>Send request — $0 today <Send className="w-5 h-5" /></>
                       : isLargeHome ? "Request a custom quote" : "Review my details"}
               </Button>
               <p className="text-xs text-foreground text-center mt-4">
-                Your booking request goes straight to us. We confirm your booking within one business day — usually much sooner.
+                Your request goes straight to Nick — $0 today. Next step after sending: save your card securely. Nick confirms your date by email within one business day.
               </p>
             </form>
           </div>
