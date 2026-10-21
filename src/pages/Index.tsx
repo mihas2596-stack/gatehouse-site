@@ -75,7 +75,7 @@ const included = [
 
 const pricingPoints = [
   "Every-other-week visits cost less than one-time cleans: the house never builds up weeks of grime, so each visit takes less time.",
-  "Everything included in a standard clean is listed on this site, room by room. Anything not on that list is an optional add-on.",
+  "Everything included in a standard clean is listed on this site, room by room. Anything beyond the checklist is one of five optional add-ons with a fixed price.",
   "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book.",
 ];
 

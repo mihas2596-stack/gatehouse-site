@@ -58,7 +58,7 @@ export const CITIES: City[] = [
     description: "Every-other-week house cleaning in Johns Creek, GA. Price estimate online, same day and time each visit.",
     paragraphs: [
       "Johns Creek sits in north Fulton County and is known for large lots and generously sized houses, many of them above three thousand square feet with several full bathrooms. Square footage changes how long a visit takes, so the calculator asks for a size band and uses that information to plan the visit. The displayed price is based on bedrooms, full bathrooms and your cleaning selections.",
-      "Each visit follows the published room-by-room checklist: countertops, sinks and appliance exteriors in the kitchen; toilets, tubs, showers, mirrors and floors in every bathroom; dusting and floors in bedrooms and living areas. Anything outside that list — inside the oven, inside the fridge, interior windows, inside cabinets — is an optional add-on with a fixed price.",
+      "Each visit follows the published room-by-room checklist: countertops, sinks and appliance exteriors in the kitchen; toilets, tubs, showers, mirrors and floors in every bathroom; dusting and floors in bedrooms and living areas. Extras beyond the checklist — inside the oven, inside the fridge, interior windows, inside cabinets, extra pet-hair work — are optional add-ons with fixed prices.",
       "Scheduling in Johns Creek is deliberately simple. You choose the day and arrival window that works, and it stays the same every other week rather than shifting around each month. There is no membership fee, no promo code and no long-term commitment, and your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.",
     ],
   },
