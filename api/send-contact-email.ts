@@ -681,7 +681,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
 
 Thanks for your request — it isn't a confirmed booking yet.
 
-Next step: save your card to continue. $0 is charged today:
+Next step: save your card to continue. Saving a card doesn't charge you anything — $0 today, and we never see your card number (Stripe handles it securely). We ask for it now so your date can be confirmed — and so you pay only after the visit, once you've seen the photo report:
 ${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
 
 Your request:

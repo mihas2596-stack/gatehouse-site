@@ -80,6 +80,10 @@ const ThankYou = () => {
             you approve the photo report, or automatically 24 hours after we send it if you
             haven&apos;t reported an issue.
           </p>
+          <p className="mb-4 text-sm text-muted-foreground">
+            We never see your card number — Stripe handles it securely. Changed your mind?
+            Cancellation is free up to 48 hours before your visit.
+          </p>
           <Button variant="hero" size="xl" asChild className="w-full sm:w-auto">
             <Link to={saveCardHref}>Save my card securely</Link>
           </Button>
