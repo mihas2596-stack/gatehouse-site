@@ -178,7 +178,7 @@ const Index = () => (
           <p className="eyebrow mb-2 text-primary">Payment</p>
           <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">How payment works</h2>
           <p className="mt-3 text-base leading-relaxed text-foreground md:text-lg">
-            No surprises, no prepayment. You pay only for work you&apos;ve already seen.
+            No prepayment. Review your room-by-room report: approve to pay, or report an issue within 24 hours. If no issue is reported, your card is charged automatically after 24 hours.
           </p>
         </div>
         <ol className="mx-auto grid max-w-5xl grid-cols-1 gap-3 md:grid-cols-3 md:gap-5">
@@ -208,7 +208,7 @@ const Index = () => (
             {/* Columns on tablet+, accordion on phones — rendered once */}
             <IncludedRooms rooms={included} />
             <p className="mt-6 text-left text-base font-medium leading-relaxed text-foreground">
-              Anything not on this list is an optional add-on. Add-on prices are listed on the What's Included page.
+              This is the standard checklist for every visit. Optional extras — inside oven or fridge, inside cabinets, interior windows, extra pet-hair work — are priced on the What&apos;s Included page.
             </p>
             <Button asChild variant="outline" size="lg" className="mt-5 rounded-full">
               <Link to="/whats-included">See the full checklist</Link>

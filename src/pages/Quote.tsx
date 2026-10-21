@@ -39,11 +39,15 @@ const resolveService = (param: string | null): CalcServiceKey => {
 
 // Exact consent wording, stored with every booking request.
 const TERMS_CONSENT_TEXT =
-  "I agree to the Terms of Service, including the arbitration clause in Section 16, and the Privacy Policy.";
-const SMS_CONSENT_TEXT =
-  "Send me booking updates by text (confirmations, reminders, my photo report). Optional — email works too. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.";
-const PHOTO_CONSENT_TEXT =
-  "I agree to photos of the cleaned rooms for the approval photo report I receive before my card is charged. Photos are kept for 90 days and never published without my separate written permission.";
+  "I agree to the Terms, including binding arbitration (Section 16), and acknowledge the Privacy Policy.";
+const SMS_CONSENT_MAIN = "Text me booking updates. Optional — email works too.";
+const SMS_DISCLOSURE =
+  "Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.";
+const SMS_CONSENT_TEXT = `${SMS_CONSENT_MAIN} ${SMS_DISCLOSURE}`;
+const PHOTO_CONSENT_MAIN =
+  "I consent to photos inside my home of the cleaned rooms for my private cleaning report.";
+const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission.";
+const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
 const Quote = () => {
   const [params] = useSearchParams();
@@ -838,9 +842,9 @@ const Quote = () => {
                 />
                 <label htmlFor="b-terms" className="text-sm text-foreground leading-snug">
                   I agree to the{" "}
-                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline text-primary">Terms of Service</a>
-                  , including the arbitration clause in Section 16, and the{" "}
-                   <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. *
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline text-primary">Terms</a>
+                  , including binding arbitration (Section 16), and acknowledge the{" "}
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. *
                 </label>
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
@@ -853,7 +857,8 @@ const Quote = () => {
                   className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
                 />
                 <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
-                  {PHOTO_CONSENT_TEXT} *
+                  {PHOTO_CONSENT_MAIN} *
+                  <span className="mt-1 block text-xs text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
                 </label>
               </div>
               {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
@@ -865,7 +870,8 @@ const Quote = () => {
                   className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
                 />
                 <label htmlFor="b-sms" className="text-sm text-foreground leading-snug">
-                  Send me booking updates by text (confirmations, reminders, my photo report). Optional — email works too. Message frequency varies. Message and data rates may apply. Reply STOP to opt out, HELP for help.
+                  {SMS_CONSENT_MAIN}
+                  <span className="mt-1 block text-xs text-muted-foreground">{SMS_DISCLOSURE}</span>
                 </label>
               </div>
 

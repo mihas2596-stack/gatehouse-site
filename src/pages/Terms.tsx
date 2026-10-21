@@ -85,10 +85,10 @@ const Terms = () => {
 
         <h2 className="font-heading text-2xl font-bold mb-4">5. Pricing and Payment</h2>
         <p className="mb-4">
-          <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide. If the home differs materially from those details, extra time is billed at $45 per hour. We contact you before extra time starts.
+          <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide. If the home differs materially from those details, extra time is billed at $45 per hour and starts only with your approval — we explain why and agree the maximum charge with you first.
         </p>
         <p className="mb-4">
-          <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. If you approve the report, or do not respond within 24 hours after it is sent, the visit is approved and your card is charged the visit price. If you report a missed item on the checklist within that window, your card is not charged for the visit until the item is fixed. Payments are processed by Stripe.
+          <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. If you approve the report, or do not respond within 24 hours after it is sent, the visit is approved and your card is charged the visit price. If you report a missed item on the checklist within that window, your card is not charged for the visit until the item is fixed. If our report email is confirmed undelivered, the 24-hour period does not begin until we have reached you another way. Payments are processed by Stripe.
         </p>
         <p className="mb-4">
           <strong>5.3 Late Payment.</strong> Unpaid amounts may accrue a late fee of 1.5% per month or the maximum amount permitted by Georgia law, whichever is less. We may suspend Services for accounts with outstanding balances.

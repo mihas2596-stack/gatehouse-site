@@ -668,7 +668,12 @@ ${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
 
         const textBody = isQuote ? `Hi ${firstName},
 
-Thanks for reaching out. Here's what you sent:
+Thanks for your request — it isn't a confirmed booking yet.
+
+Next step: save your card to continue. $0 is charged today:
+${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
+
+Your request:
 
 ${homeDetails} · ZIP ${zip || ""}
 
@@ -676,12 +681,7 @@ Service: ${serviceLabel}
 
 Your estimate: ${priceDisplay} for the first visit${recurringDisplay}.
 ${deepPara}
-What happens next:
-
-I'll confirm your estimate, date and arrival window by the end of the next business day. Your request is not a confirmed booking yet. No payment is taken by this form.
-
-Save your card now ($0 today) so we can charge it after your visit:
-${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
+I'll confirm your estimate, date and arrival window by the end of the next business day. Your final confirmation comes in a separate email.
 
 How payment works:
 
@@ -707,7 +707,7 @@ hello@gatehousehomecleaning.com`;
           from: FROM_AUTO,
           to: [email],
           reply_to: REPLY_TO_AUTO,
-          subject: isQuote ? "Got your cleaning request — next steps" : "Got your question — I’ll reply within one business day",
+          subject: isQuote ? "Request received — save your card to continue" : "Got your question — I’ll reply within one business day",
           text: textBody,
         }, parsed.data.request_id ? `customer/${parsed.data.request_id}` : undefined);
         if (auto.ok) {
