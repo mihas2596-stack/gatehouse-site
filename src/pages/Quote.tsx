@@ -523,7 +523,7 @@ const Quote = () => {
                   maxLength={5}
                   value={zip}
                   onChange={(e) => setZip(e.target.value.replace(/\D/g, ""))}
-                  placeholder="30024"
+                  placeholder="e.g. 30024"
                   aria-invalid={zipOutOfArea}
                   aria-describedby="zip-msg"
                   className={`w-full px-4 py-3 rounded-lg border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring ${
@@ -705,17 +705,30 @@ const Quote = () => {
                     </div>
                   ) : breakdown ? (
                     <div className="flex flex-col items-center gap-1">
-                      <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                        First visit: ${breakdown.first_total}
-                        {breakdown.first_service === "deep" && <span className="text-xl font-semibold"> — deep clean</span>}
-                      </span>
-                      {isRecurring && (
-                        <p className="text-base font-semibold text-foreground mt-1.5">
-                          Then ${breakdown.recurring_total} per visit, every other week
-                        </p>
-                      )}
-                      {!isRecurring && (
-                        <p className="text-base font-semibold text-foreground mt-1.5">One-time visit</p>
+                      {isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
+                        <>
+                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
+                            ${breakdown.recurring_total} per visit
+                          </span>
+                          <p className="text-base font-semibold text-foreground mt-1.5">
+                            Every other week — first visit included
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
+                            First visit: ${breakdown.first_total}
+                            {breakdown.first_service === "deep" && <span className="text-xl font-semibold"> — deep clean</span>}
+                          </span>
+                          {isRecurring && (
+                            <p className="text-base font-semibold text-foreground mt-1.5">
+                              Then ${breakdown.recurring_total} per visit, every other week
+                            </p>
+                          )}
+                          {!isRecurring && (
+                            <p className="text-base font-semibold text-foreground mt-1.5">One-time visit</p>
+                          )}
+                        </>
                       )}
                       {breakdown.first_service === "deep" && (
                         <p className="text-sm text-muted-foreground mt-1">
@@ -943,7 +956,7 @@ const Quote = () => {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
+                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? `$${breakdown.recurring_total} per visit, every other week` : <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}</>}{breakdown.founding_applies && postFounding && isRecurring ? ` · founding 30% off for 6 months, then $${postFounding.recurring_total}` : ""}</> : <>${mainPrice} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
@@ -978,8 +991,12 @@ const Quote = () => {
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-semibold text-foreground">
               <span className="block text-xs font-normal text-muted-foreground">Your price</span>
-               ${mainPrice} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
-               {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then ${breakdown.recurring_total} every other week</span>}
+              {service === "standard" && breakdown && isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
+                <>${breakdown.recurring_total} per visit<span className="block text-xs">Every other week</span></>
+              ) : (
+                <>${mainPrice} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
+                {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then ${breakdown.recurring_total} every other week</span>}</>
+              )}
             </p>
             <a
               href="#booking-request"
