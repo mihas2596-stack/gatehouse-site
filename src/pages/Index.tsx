@@ -110,20 +110,19 @@ const Index = () => (
     </Helmet>
 
     {/* 1. HERO */}
-    <section className="hero-section border-b border-border/60 bg-background pt-[88px] pb-10 md:pt-24 md:pb-12">
+    <section className="hero-section border-b border-border/60 bg-background pt-[88px] pb-12 md:pt-28 md:pb-16">
       <div className="container">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-8 md:grid-cols-2 md:gap-10">
+        <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-2 md:gap-12 lg:gap-16">
           <figure className="order-2 md:order-2">
             <img
               src={heroImage}
-              alt="Illustrative photo of a living room"
+              alt="Living room in a freshly cleaned home (stock photo)"
               loading="eager"
-              className="h-44 w-full rounded-xl object-cover shadow-warm sm:h-56 md:h-[320px] lg:h-[360px]"
+              className="h-52 w-full rounded-xl object-cover shadow-warm sm:h-64 md:h-[380px] lg:h-[440px]"
             />
-            <figcaption className="mt-2 text-center text-xs text-muted-foreground md:text-left">Illustrative photo.</figcaption>
           </figure>
           <div className="order-1 animate-fade-up text-center md:order-1 md:text-left">
-            <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[44px] lg:text-[50px]">
+            <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[46px] lg:text-[56px]">
               A Clean Home, Every Other Week
             </h1>
             <p className="mt-4 text-base font-medium leading-relaxed text-foreground md:text-lg">
