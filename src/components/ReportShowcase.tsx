@@ -29,8 +29,8 @@ const steps = [
     text: "Approve it, or flag anything we missed. Your card is charged on approval — or automatically 24 hours after the report if you don't flag an issue.",
   },
   {
-    title: "We charge after your approval",
-    text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue.",
+    title: "An issue pauses the charge",
+    text: "Flagged something? Your card isn't charged until we've fixed it — missed checklist items are re-cleaned free within 72 hours.",
   },
 ];
 

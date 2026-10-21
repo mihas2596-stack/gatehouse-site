@@ -12,7 +12,7 @@ export type SizeBandKey = "under2500" | "2500" | "3000" | "3500" | "4000plus";
 
 export const EXTRA_TIME_RATE = 45;
 export const EXTRA_TIME_NOTE =
-  "Extra time: $45/hour if the home differs from what you entered. We contact you before any extra time starts.";
+  "Extra time is $45/hour, only with your approval — we explain why and agree the maximum with you before any extra work starts.";
 
 export const TIERS: { key: TierKey; label: string; rooms: string }[] = [
   { key: "S", label: "Small home", rooms: "1–2 bedrooms, up to 2 full bathrooms" },
