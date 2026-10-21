@@ -1,6 +1,9 @@
 // POST /api/booking-action
 //
-// Operator actions for a booking: approve | dispute | resolve | charge | status | confirm.
+// Operator actions for a booking: approve | dispute | resolve | charge | status | confirm | send_report.
+// "send_report" stores the photo-report URLs in customer metadata, starts
+// the 24h Terms clock (gh_report_sent_at) and emails the client the
+// /report portal link (client actions live in api/report.ts).
 // "confirm" is the owner confirming the booking DATE with the client before
 // the visit (orthogonal flag gh_booking_confirmed — it never touches the
 // gh_state machine the charge path depends on) and emails the client.
@@ -22,7 +25,7 @@
 //  - 24h auto-charge is NOT implemented here (owner enables it explicitly)
 
 import { z } from "zod";
-import { createHmac, timingSafeEqual, randomUUID } from "crypto";
+import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
   bid: string;
@@ -41,6 +44,24 @@ const b64urlEncode = (s: string): string =>
   Buffer.from(s, "utf8").toString("base64url");
 const b64urlDecode = (s: string): string =>
   Buffer.from(s, "base64url").toString("utf8");
+
+// v2 booking-link minting (same scheme as send-contact-email /
+// create-checkout-session): send_report emails the client a fresh /report
+// link, so this file needs the encrypt side too.
+function tokenKey(secret: string): Buffer {
+  return createHash("sha256").update(`gatehouse-booking-link:${secret}`).digest();
+}
+
+function encryptBookingPayload(secret: string, payload: BookingPayload): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", tokenKey(secret), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2.${Buffer.concat([iv, tag, ct]).toString("base64url")}`;
+}
+
+const bookingLinkSecret = (stripeKey: string): string =>
+  process.env["BOOKING_LINK_SECRET"] || stripeKey;
 
 const _rlHits = new Map<string, number[]>();
 function rateLimit(ip: string, maxPerMinute: number): boolean {
@@ -82,7 +103,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -91,6 +112,8 @@ const ActionSchema = z.object({
   // confirm only:
   confirmed_date: z.string().max(20).optional(),
   confirmed_window: z.string().max(80).optional(),
+  // send_report only: public https URLs of the report photos.
+  photos: z.array(z.string().min(1).max(1000)).max(24).optional(),
 });
 
 async function stripeGet(
@@ -333,8 +356,8 @@ export default async function handler(req: Req, res: Res) {
         logErr("approve", "blocked: issue open");
         return json(409, { ok: false, error: "issue_open" });
       }
-      if (state !== "card_ready") {
-        logErr("approve", `blocked: state=${state}, need card_ready`);
+      if (state !== "card_ready" && state !== "report_sent") {
+        logErr("approve", `blocked: state=${state}, need card_ready or report_sent`);
         return json(409, { ok: false, error: "card_not_ready" });
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -438,6 +461,110 @@ export default async function handler(req: Req, res: Res) {
       });
       log("charge", { booking: bookingId, status: String(piStatus) });
       return json(402, { ok: false, error: "payment_requires_action", status: piStatus });
+    }
+
+    if (action === "send_report") {
+      // Operator sends the photo report: photo URLs are chunked into
+      // customer metadata (Stripe caps a metadata value at 500 chars, so
+      // the JSON list is split into 4 × 450-char keys gh_rp_0..3), the 24h
+      // Terms clock starts now, and the client is emailed the /report link.
+      // Re-sending (e.g. after a re-clean) bumps gh_report_version and
+      // clears any open issue — the new report supersedes the old one.
+      // The identical photo set re-sent within 10 minutes is a no-op
+      // (double-click protection; no duplicate email).
+      const photos = parsed.data.photos ?? [];
+      if (photos.some((u) => !u.startsWith("https://"))) {
+        return json(400, { ok: false, error: "invalid_photo_url" });
+      }
+      if (state === "paid" || state === "payment_pending") {
+        return json(409, { ok: false, error: "already_paid" });
+      }
+      const photosJson = JSON.stringify(photos);
+      if (photosJson.length > 450 * 4) {
+        return json(400, { ok: false, error: "photo_payload_too_large" });
+      }
+      const photoHash = createHash("sha256").update(photosJson).digest("hex").slice(0, 16);
+      const prevSentMs = Date.parse(meta["gh_report_sent_at"] ?? "");
+      if (
+        meta["gh_state"] === "report_sent" &&
+        meta["gh_rp_hash"] === photoHash &&
+        Number.isFinite(prevSentMs) &&
+        Date.now() - prevSentMs < 10 * 60 * 1000
+      ) {
+        return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
+      }
+      const version = (parseInt(meta["gh_report_version"] ?? "0", 10) || 0) + 1;
+      const sentAt = new Date().toISOString();
+      const params: Record<string, string> = {
+        "metadata[gh_state]": "report_sent",
+        "metadata[gh_issue_open]": "",
+        "metadata[gh_issue_reason]": "",
+        "metadata[gh_report_sent_at]": sentAt,
+        "metadata[gh_report_version]": String(version),
+        "metadata[gh_rp_hash]": photoHash,
+      };
+      for (let i = 0; i < 4; i++) {
+        params[`metadata[gh_rp_${i}]`] = photosJson.slice(i * 450, (i + 1) * 450);
+      }
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+      let emailSent = false;
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      if (RESEND_API_KEY) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        if (custEmail) {
+          const firstName = custName.trim().split(/\s+/)[0] || "there";
+          const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId,
+            email: custEmail,
+            name: custName,
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const link = `https://www.gatehousehomecleaning.com/report?bt=${token}`;
+          const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+          const priceLine = Number.isFinite(cents) && cents > 0
+            ? ` Your card is charged $${(cents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`
+            : "";
+          const deadline = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            weekday: "short", month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(Date.parse(sentAt) + 24 * 3600 * 1000));
+          try {
+            const resp = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${RESEND_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                to: [custEmail],
+                reply_to: "hello@gatehousehomecleaning.com",
+                subject: "Your cleaning report is ready",
+                text:
+                  `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
+                  `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
+                  `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
+              }),
+              signal: AbortSignal.timeout(15000),
+            });
+            emailSent = resp.ok;
+          } catch {
+            emailSent = false;
+          }
+        }
+      }
+      log("send_report", { booking: bookingId, version, photos: photos.length, emailSent });
+      return json(200, {
+        ok: true,
+        state: "report_sent",
+        report_version: version,
+        report_sent_at: sentAt,
+        photos: photos.length,
+        email_sent: emailSent,
+      });
     }
 
     return json(400, { ok: false, error: "invalid_request" });

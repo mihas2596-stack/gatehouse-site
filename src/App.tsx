@@ -22,6 +22,7 @@ const Privacy = lazy(() => import("./pages/Privacy"));
 const Terms = lazy(() => import("./pages/Terms"));
 const ThankYou = lazy(() => import("./pages/ThankYou"));
 const SaveCard = lazy(() => import("./pages/SaveCard"));
+const Report = lazy(() => import("./pages/Report"));
 
 const queryClient = new QueryClient();
 
@@ -48,6 +49,7 @@ const App = () => (
             <Route path="/terms" element={<Terms />} />
             <Route path="/thank-you" element={<ThankYou />} />
             <Route path="/save-card" element={<SaveCard />} />
+            <Route path="/report" element={<Report />} />
             <Route path="/availability" element={<Navigate to="/quote" replace />} />
             <Route path="/about" element={<About />} />
             <Route path="/founding" element={<Reviews />} />
