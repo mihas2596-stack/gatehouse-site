@@ -263,6 +263,28 @@ export default async function handler(req: Req, res: Res) {
         booking_confirmed: meta["gh_booking_confirmed"] === "1",
         confirmed_date: meta["gh_confirmed_date"] ?? "",
         confirmed_window: meta["gh_confirmed_window"] ?? "",
+        // Everything the operator needs to work the booking in one call:
+        ops: {
+          proposed_date: meta["gh_proposed_date"] ?? "",
+          alt_dates: meta["gh_alt_dates"] ?? "",
+          cleaner_name: meta["gh_cleaner_name"] ?? "",
+          access_notes: meta["gh_access_notes"] ?? "",
+          no_photo_zones: meta["gh_no_photo_zones"] ?? "",
+          issue_room: meta["gh_issue_room"] ?? "",
+          issue_reason: meta["gh_issue_reason"] ?? "",
+          issue_resolved_at: meta["gh_issue_resolved_at"] ?? "",
+          reclean_date: meta["gh_reclean_date"] ?? "",
+          report_version: meta["gh_report_version"] ?? "",
+          report_sent_at: meta["gh_report_sent_at"] ?? "",
+          report_amount_cents: meta["gh_report_amount_cents"] ?? "",
+          report_bounced: meta["gh_report_bounced"] === "1",
+          cancel_scope: meta["gh_cancel_scope"] ?? "",
+          cancel_fee_cents: meta["gh_cancel_fee_cents"] ?? "",
+          fee_charged: meta["gh_fee_charged"] === "1",
+          last_payment: meta["gh_last_payment"] ?? "",
+          first_price_cents: meta["gh_first_price_cents"] ?? "",
+          recurring_price_cents: meta["gh_recurring_price_cents"] ?? "",
+        },
       });
     }
 
