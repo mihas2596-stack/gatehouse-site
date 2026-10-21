@@ -170,7 +170,7 @@ const SaveCard = () => {
               </Button>
             </div>
             <p className="text-sm text-muted-foreground">
-              Still stuck? Email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a> — Nick will help.
+              Still stuck? Email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a> — we&apos;ll help you out.
             </p>
           </>
         )}
@@ -207,20 +207,28 @@ const SaveCard = () => {
         {verify.kind === "none" && !hasCard && (
           <>
             <CreditCard className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <ol className="mb-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
+              <li className="rounded-full border border-border bg-card px-3 py-1.5">1 · Your price</li>
+              <li aria-hidden="true" className="text-muted-foreground">→</li>
+              <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
+              <li aria-hidden="true" className="text-muted-foreground">→</li>
+              <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">3 · Secure your card</li>
+            </ol>
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-              Save your card — $0 today
+              Last step: save your card — $0 today
             </h1>
             <p className="text-lg text-foreground mb-6">
-              Your card secures your booking request. Your card is charged when you approve the report,
-              or automatically 24 hours after we send it if you haven't reported an issue.
+              This finishes your request — nothing is charged today. We ask for a card now so we
+              can charge it after your visit: when you approve the photo report, or automatically
+              24 hours after we send it if you haven&apos;t reported an issue.
               {!isConfirmed && (
-                <> Saving your card doesn't confirm your cleaning time by itself — we confirm the date and
-                arrival window by email after reviewing your request.</>
+                <> The card alone doesn&apos;t confirm your time — we confirm your date and arrival
+                window by email within one business day.</>
               )}
             </p>
             {isConfirmed && (
               <p className="mb-6 rounded-lg border border-sage/40 bg-sage/10 p-4 text-base text-foreground">
-                Good news — Nick confirmed your visit
+                Good news — your visit is confirmed
                 {booking?.confirmed_date ? <> for <strong>{booking.confirmed_date}</strong></> : null}
                 {booking?.confirmed_window ? <> · {booking.confirmed_window}</> : null}.
                 Save your card below to complete — $0 today.
@@ -247,6 +255,12 @@ const SaveCard = () => {
               </div>
             )}
             <div className="mb-8 rounded-xl bg-card p-6 text-left">
+              <h2 className="mb-3 font-heading text-lg font-bold">What to do</h2>
+              <ol className="mb-5 list-decimal space-y-2 pl-5 text-base leading-relaxed">
+                <li>Tap the button below — you&apos;ll go to Stripe&apos;s secure page.</li>
+                <li>Enter your card there. It takes about a minute.</li>
+                <li>Done — we email your confirmed date and arrival window within one business day.</li>
+              </ol>
               <ul className="space-y-3 text-base leading-relaxed">
                 <li className="flex gap-3">
                   <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
@@ -323,7 +337,7 @@ const SaveCard = () => {
                 </p>
               )}
               <Button type="submit" variant="hero" size="lg" className="w-full" disabled={submitStatus === "sending"}>
-                {submitStatus === "sending" ? "Opening secure card entry…" : "Continue to secure card entry"}
+                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Save my card — $0 today"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
                 You'll enter your card on Stripe's secure page. $0 is charged today.

@@ -33,7 +33,7 @@ const howItWorks = [
     n: "2",
     Icon: CreditCard,
     title: "Book and save your card",
-    text: "Pick your preferred day and save your card — $0 is charged today. Nick confirms your date by email.",
+    text: "Pick your preferred day and save your card — $0 is charged today. We confirm your date by email.",
     highlight: false,
   },
   {

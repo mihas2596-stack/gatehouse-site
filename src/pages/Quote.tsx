@@ -426,7 +426,7 @@ const Quote = () => {
             date: booking.date,
             window: booking.time || "Flexible arrival window",
             status: "Request received — not confirmed yet",
-            response: "Nick confirms by email within one business day",
+            response: "We confirm by email within one business day",
           },
         },
       });
@@ -812,7 +812,7 @@ const Quote = () => {
               </div>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
-                Nick confirms within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it's sent if you haven't reported an issue.
+                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it's sent if you haven't reported an issue.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -978,7 +978,7 @@ const Quote = () => {
                       : isLargeHome ? "Request a custom quote" : "Review my details"}
               </Button>
               <p className="text-xs text-foreground text-center mt-4">
-                Your request goes straight to Nick — $0 today. Next step after sending: save your card securely. Nick confirms your date by email within one business day.
+                Your request comes straight to us — $0 today. Next step after sending: save your card (about a minute). We confirm your date by email within one business day.
               </p>
             </form>
           </div>
