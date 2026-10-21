@@ -481,6 +481,7 @@ const Quote = () => {
       <section className="pt-4 pb-12 md:pt-6 md:pb-16">
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
+            <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3 — See your price</p>
             <div className="flex items-center gap-2 mb-6">
               <Calculator className="w-5 h-5 text-primary" />
               <h2 className="font-heading text-2xl font-bold">Quote Calculator</h2>
@@ -656,7 +657,7 @@ const Quote = () => {
             {service === "standard" && (
               <fieldset className="mt-6">
                 <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? *</legend>
-                <p className="text-sm text-muted-foreground mb-2">This determines whether your first visit needs a deep clean.</p>
+                <p className="text-sm text-muted-foreground mb-2">This determines whether your first visit needs a deep clean — and what it costs. If it does, the price above shows the deep-clean first visit and the regular price after it, before you book.</p>
                 <div className="flex flex-wrap gap-x-5 gap-y-1">
                   {(["yes", "no"] as const).map((v) => (
                     <label key={v} className="flex items-center gap-2 text-sm min-h-[44px]">
@@ -807,6 +808,7 @@ const Quote = () => {
               noValidate
                className="mt-10 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
             >
+              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3 — Plan your visit</p>
               <div className="flex items-center gap-2 mb-2">
                 <h2 className="font-heading text-2xl font-bold">Request your booking</h2>
               </div>

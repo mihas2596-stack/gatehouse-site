@@ -103,17 +103,31 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
   report_version: z.number().int().positive().max(1000).optional(),
   reason: z.string().max(500).optional(),
-  // confirm only:
+  // confirm / decline_date:
   confirmed_date: z.string().max(20).optional(),
   confirmed_window: z.string().max(80).optional(),
-  // send_report only: public https URLs of the report photos.
-  photos: z.array(z.string().min(1).max(1000)).max(24).optional(),
+  alt_dates: z.array(z.string().min(1).max(20)).max(3).optional(),
+  // resolve: agreed re-clean date (YYYY-MM-DD)
+  reclean_date: z.string().max(20).optional(),
+  // set_cleaner: name as the client should see it; photo only with the
+  // cleaner's permission — the operator supplies it, we store the URL.
+  cleaner_name: z.string().max(80).optional(),
+  cleaner_photo: z.string().max(1000).optional(),
+  // send_report only: photo URLs, optionally with room + note per photo.
+  photos: z.array(z.union([
+    z.string().min(1).max(1000),
+    z.object({
+      url: z.string().min(1).max(1000),
+      room: z.string().max(40).optional(),
+      note: z.string().max(120).optional(),
+    }),
+  ])).max(24).optional(),
 });
 
 async function stripeGet(
@@ -249,6 +263,28 @@ export default async function handler(req: Req, res: Res) {
         booking_confirmed: meta["gh_booking_confirmed"] === "1",
         confirmed_date: meta["gh_confirmed_date"] ?? "",
         confirmed_window: meta["gh_confirmed_window"] ?? "",
+        // Everything the operator needs to work the booking in one call:
+        ops: {
+          proposed_date: meta["gh_proposed_date"] ?? "",
+          alt_dates: meta["gh_alt_dates"] ?? "",
+          cleaner_name: meta["gh_cleaner_name"] ?? "",
+          access_notes: meta["gh_access_notes"] ?? "",
+          no_photo_zones: meta["gh_no_photo_zones"] ?? "",
+          issue_room: meta["gh_issue_room"] ?? "",
+          issue_reason: meta["gh_issue_reason"] ?? "",
+          issue_resolved_at: meta["gh_issue_resolved_at"] ?? "",
+          reclean_date: meta["gh_reclean_date"] ?? "",
+          report_version: meta["gh_report_version"] ?? "",
+          report_sent_at: meta["gh_report_sent_at"] ?? "",
+          report_amount_cents: meta["gh_report_amount_cents"] ?? "",
+          report_bounced: meta["gh_report_bounced"] === "1",
+          cancel_scope: meta["gh_cancel_scope"] ?? "",
+          cancel_fee_cents: meta["gh_cancel_fee_cents"] ?? "",
+          fee_charged: meta["gh_fee_charged"] === "1",
+          last_payment: meta["gh_last_payment"] ?? "",
+          first_price_cents: meta["gh_first_price_cents"] ?? "",
+          recurring_price_cents: meta["gh_recurring_price_cents"] ?? "",
+        },
       });
     }
 
@@ -348,6 +384,9 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_state]": "approved",
         "metadata[gh_issue_open]": "",
         "metadata[gh_issue_resolved_at]": new Date().toISOString(),
+        ...(parsed.data.reclean_date
+          ? { "metadata[gh_reclean_date]": parsed.data.reclean_date }
+          : {}),
       });
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
@@ -478,8 +517,11 @@ export default async function handler(req: Req, res: Res) {
       // clears any open issue — the new report supersedes the old one.
       // The identical photo set re-sent within 10 minutes is a no-op
       // (double-click protection; no duplicate email).
-      const photos = parsed.data.photos ?? [];
-      if (photos.some((u) => !u.startsWith("https://"))) {
+      const rawPhotos = parsed.data.photos ?? [];
+      const photos = rawPhotos.map((p) =>
+        typeof p === "string" ? { url: p } : p,
+      );
+      if (photos.some((p) => !p.url.startsWith("https://"))) {
         return json(400, { ok: false, error: "invalid_photo_url" });
       }
       if (state === "paid" || state === "payment_pending") {
@@ -607,6 +649,139 @@ export default async function handler(req: Req, res: Res) {
         photos: photos.length,
         email_sent: emailSent,
       });
+    }
+
+      if (action === "decline_date") {
+      // The requested date does not work: record the decline plus the
+      // operator's alternative dates. The client picks one (or proposes
+      // their own) from the /visit page — no form to refill, and the
+      // saved card stays attached to the same request.
+      const alts = (parsed.data.alt_dates ?? []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_state]": "date_declined",
+        "metadata[gh_alt_dates]": alts.join(","),
+      });
+      let emailed = false;
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      if (RESEND_API_KEY) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        if (custEmail) {
+          const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId, email: custEmail, name: custName,
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const firstName = custName.trim().split(/\s+/)[0] || "there";
+          try {
+            const resp = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${RESEND_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                to: [custEmail],
+                reply_to: "hello@gatehousehomecleaning.com",
+                subject: "About your requested date",
+                text:
+                  `Hi ${firstName},\n\nThanks for your request. The date you picked doesn't work on our side` +
+                  (alts.length ? ` — here are the closest dates we can do: ${alts.join(", ")}.` : ".") +
+                  `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\nhttps://www.gatehousehomecleaning.com/visit?bt=${token}\n\n` +
+                  `Your card stays saved with this request only, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nNick\n\nGatehouse Home Cleaning\n`,
+              }),
+              signal: AbortSignal.timeout(15000),
+            });
+            emailed = resp.ok;
+          } catch {
+            emailed = false;
+          }
+        }
+      }
+      log("decline_date", { booking: bookingId, alts: alts.length, emailed });
+      return json(200, { ok: true, state: "date_declined", alt_dates: alts, email_sent: emailed });
+    }
+
+    if (action === "set_cleaner") {
+      // Assign (or replace) the cleaner the client will see. The photo
+      // URL is stored only when the operator supplies one — by house
+      // rule that means the cleaner agreed to be shown.
+      const name = (parsed.data.cleaner_name ?? "").trim();
+      if (!name) return json(400, { ok: false, error: "cleaner_name_required" });
+      const photo = (parsed.data.cleaner_photo ?? "").trim();
+      if (photo && !photo.startsWith("https://")) {
+        return json(400, { ok: false, error: "invalid_photo_url" });
+      }
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_cleaner_name]": name.slice(0, 80),
+        "metadata[gh_cleaner_photo]": photo,
+      });
+      log("set_cleaner", { booking: bookingId });
+      return json(200, { ok: true, cleaner_name: name });
+    }
+
+    if (action === "charge_fee") {
+      // Collect the late-cancellation fee recorded by the client cancel
+      // flow (api/visit). Amount comes ONLY from server metadata — the
+      // operator cannot invent a figure here.
+      if (state !== "cancelled") {
+        return json(409, { ok: false, error: "not_cancelled" });
+      }
+      const feeCents = parseInt(meta["gh_cancel_fee_cents"] ?? "", 10);
+      if (!Number.isFinite(feeCents) || feeCents <= 0) {
+        return json(409, { ok: false, error: "no_fee_due" });
+      }
+      if (meta["gh_fee_charged"] === "1") {
+        return json(200, { ok: true, already: true, fee_cents: feeCents });
+      }
+      const pm = meta["gh_payment_method"] ?? "";
+      if (!pm) return json(409, { ok: false, error: "no_payment_method" });
+      const pi = await stripePost(
+        STRIPE_SECRET_KEY,
+        "/payment_intents",
+        {
+          amount: String(feeCents),
+          currency: "usd",
+          customer: customer.id,
+          payment_method: pm,
+          off_session: "true",
+          confirm: "true",
+          description: `Gatehouse late-cancellation fee — booking ${bookingId}`,
+          "metadata[gh_booking_id]": bookingId,
+          "metadata[gh_kind]": "cancellation_fee",
+        },
+        `fee_${bookingId}`,
+      );
+      if (pi.ok && pi.data["status"] === "succeeded") {
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_fee_charged]": "1",
+          "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
+        });
+        log("charge_fee", { booking: bookingId, feeCents });
+        return json(200, { ok: true, fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? "") });
+      }
+      const errMsg = (pi.data["error"] as { message?: string } | undefined)?.message ?? "fee charge failed";
+      logErr("charge_fee", errMsg);
+      return json(402, { ok: false, error: "fee_charge_failed", detail: errMsg });
+    }
+
+    if (action === "delete_card") {
+      // Remove the saved card (e.g. the client cancelled and asked for
+      // the card to be deleted). Detach at Stripe and clear our pointer.
+      const pm = meta["gh_payment_method"] ?? "";
+      if (pm) {
+        const det = await stripePost(STRIPE_SECRET_KEY, `/payment_methods/${pm}/detach`, {});
+        if (!det.ok) {
+          logErr("delete_card", `stripe ${det.status}`);
+          return json(502, { ok: false, error: "stripe_error" });
+        }
+      }
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_payment_method]": "",
+      });
+      log("delete_card", { booking: bookingId });
+      return json(200, { ok: true, card_deleted: true });
     }
 
     return json(400, { ok: false, error: "invalid_request" });

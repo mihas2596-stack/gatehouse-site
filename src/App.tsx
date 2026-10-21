@@ -23,6 +23,7 @@ const Terms = lazy(() => import("./pages/Terms"));
 const ThankYou = lazy(() => import("./pages/ThankYou"));
 const SaveCard = lazy(() => import("./pages/SaveCard"));
 const Report = lazy(() => import("./pages/Report"));
+const Visit = lazy(() => import("./pages/Visit"));
 
 const queryClient = new QueryClient();
 
@@ -50,6 +51,7 @@ const App = () => (
             <Route path="/thank-you" element={<ThankYou />} />
             <Route path="/save-card" element={<SaveCard />} />
             <Route path="/report" element={<Report />} />
+            <Route path="/visit" element={<Visit />} />
             <Route path="/availability" element={<Navigate to="/quote" replace />} />
             <Route path="/about" element={<About />} />
             <Route path="/founding" element={<Reviews />} />

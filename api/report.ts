@@ -193,19 +193,26 @@ async function stripePost(
 async function findCustomerByBooking(
   secretKey: string,
   bookingId: string,
-): Promise<{ id: string; metadata: Record<string, string> } | null> {
+): Promise<{ id: string; email: string; name: string; metadata: Record<string, string> } | null> {
   const query = `metadata['gh_booking_id']:'${bookingId.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "1" })}`);
+  type RawCust = { id: string; email?: string; name?: string; metadata?: Record<string, string> };
+  const shape = (c: RawCust) => ({
+    id: c.id,
+    email: typeof c.email === "string" ? c.email : "",
+    name: typeof c.name === "string" ? c.name : "",
+    metadata: c.metadata ?? {},
+  });
   if (res.ok) {
-    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {} };
+    const list = (res.data["data"] as RawCust[] | undefined) ?? [];
+    if (list.length > 0) return shape(list[0]);
     return null;
   }
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
   if (!listRes.ok) return null;
-  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+  const list = (listRes.data["data"] as RawCust[] | undefined) ?? [];
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
-  return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
+  return found ? shape(found) : null;
 }
 
 type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue";
@@ -222,7 +229,9 @@ function deriveState(meta: Record<string, string>): ReportState {
   return "not_ready";
 }
 
-function readPhotos(meta: Record<string, string>): string[] {
+export type PhotoItem = { url: string; room?: string; note?: string };
+
+function readPhotoItems(meta: Record<string, string>): PhotoItem[] {
   let json = "";
   for (let i = 0; i < 4; i++) {
     const part = meta[`gh_rp_${i}`];
@@ -233,7 +242,22 @@ function readPhotos(meta: Record<string, string>): string[] {
   try {
     const arr = JSON.parse(json) as unknown;
     if (!Array.isArray(arr)) return [];
-    return arr.filter((u): u is string => typeof u === "string" && u.startsWith("https://"));
+    const out: PhotoItem[] = [];
+    for (const it of arr) {
+      if (typeof it === "string" && it.startsWith("https://")) {
+        out.push({ url: it });
+      } else if (it && typeof it === "object") {
+        const o = it as Record<string, unknown>;
+        if (typeof o["url"] === "string" && (o["url"] as string).startsWith("https://")) {
+          out.push({
+            url: o["url"] as string,
+            ...(typeof o["room"] === "string" ? { room: (o["room"] as string).slice(0, 40) } : {}),
+            ...(typeof o["note"] === "string" ? { note: (o["note"] as string).slice(0, 120) } : {}),
+          });
+        }
+      }
+    }
+    return out;
   } catch {
     return [];
   }
@@ -281,6 +305,8 @@ export default async function handler(req: Req, res: Res) {
     let bt = "";
     let action = "";
     let reason = "";
+    let room = "";
+    let photoB64 = "";
     if (req.method === "GET") {
       bt = q((req.query ?? {})["bt"]);
     } else {
@@ -288,6 +314,13 @@ export default async function handler(req: Req, res: Res) {
       bt = typeof body["bt"] === "string" ? body["bt"] : "";
       action = typeof body["action"] === "string" ? body["action"] : "";
       reason = typeof body["reason"] === "string" ? body["reason"].slice(0, 500) : "";
+      room = typeof body["room"] === "string" ? body["room"].slice(0, 60) : "";
+      // Optional photo from the client (data URL or raw base64, ~1MB cap).
+      // A failed or oversized photo NEVER blocks the issue itself.
+      if (typeof body["photo"] === "string" && body["photo"].length <= 1_400_000) {
+        photoB64 = body["photo"].replace(/^data:image\/[a-zA-Z]+;base64,/, "");
+        if (!/^[A-Za-z0-9+/=\s]+$/.test(photoB64)) photoB64 = "";
+      }
     }
     if (!bt) {
       res.status(200).json({ requestId, ok: false, state: "invalid_link" });
@@ -331,16 +364,31 @@ export default async function handler(req: Req, res: Res) {
       const deadline = sentAt
         ? new Date(Date.parse(sentAt) + 24 * 3600 * 1000).toISOString()
         : null;
+      const items = readPhotoItems(meta);
+      const amountCents = parseInt(
+        meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "",
+        10,
+      );
       return {
         requestId,
         ok: true,
         state: deriveState(meta),
         booking,
-        photos: readPhotos(meta),
+        photos: items.map((p) => p.url),
+        photo_items: items,
+        amount: Number.isFinite(amountCents) && amountCents > 0 ? money(String(amountCents)) : null,
+        amount_cents: Number.isFinite(amountCents) && amountCents > 0 ? amountCents : null,
         report_sent_at: sentAt,
         deadline,
         delivery_failed: meta["gh_report_bounced"] === "1",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
+        issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
+        resolution: meta["gh_issue_resolved_at"]
+          ? {
+              resolved_at: meta["gh_issue_resolved_at"],
+              reclean_date: meta["gh_reclean_date"] ?? "",
+            }
+          : null,
       };
     };
 
@@ -399,6 +447,7 @@ export default async function handler(req: Req, res: Res) {
       "metadata[gh_issue_open]": "1",
       "metadata[gh_issue_ever]": "1",
       "metadata[gh_issue_reason]": reason.slice(0, 200),
+      "metadata[gh_issue_room]": room.slice(0, 60),
       "metadata[gh_report_client_action]": "issue",
       "metadata[gh_report_responded_at]": nowIso,
     });
@@ -408,8 +457,62 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     Object.assign(meta, {
-      gh_state: "issue_open", gh_issue_open: "1", gh_issue_reason: reason.slice(0, 200),
+      gh_state: "issue_open", gh_issue_open: "1",
+      gh_issue_reason: reason.slice(0, 200), gh_issue_room: room.slice(0, 60),
     });
+
+    // Best-effort notifications — the issue is already recorded on the
+    // server at this point; an email failure changes nothing for the
+    // client (the charge stays paused either way).
+    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+    if (RESEND_API_KEY) {
+      const firstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
+      const sendMail = async (payload: Record<string, unknown>) => {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${RESEND_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch {
+          /* best-effort */
+        }
+      };
+      // Owner: full detail + the client's photo when one was attached.
+      await sendMail({
+        from: "Gatehouse site <info@gatehousehomecleaning.com>",
+        to: ["nikolajmihasenok@gmail.com"],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: `Issue reported — booking ${payload.bid}`,
+        text:
+          `A client reported an issue from the photo report. The charge is PAUSED.\n\n` +
+          `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
+          `Room: ${room || "(not specified)"}\nWhat they said: ${reason || "(no description)"}\n` +
+          (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`),
+        ...(photoB64
+          ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
+          : {}),
+      });
+      // Client: the confirmation promised on the page.
+      if (customer.email) {
+        await sendMail({
+          from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+          to: [customer.email],
+          reply_to: "hello@gatehousehomecleaning.com",
+          subject: "We received your report — the charge is paused",
+          text:
+            `Hi ${firstName},\n\nRequest received. The charge is paused — nothing will be charged while we look into it.\n` +
+            `We'll reply within one business day.\n\n` +
+            (room ? `Room: ${room}\n` : "") +
+            (reason ? `What you told us: ${reason}\n\n` : "\n") +
+            `You can check the status any time on your report page — the same link as before.\n\nNick\n\nGatehouse Home Cleaning\n`,
+        });
+      }
+    }
     res.status(200).json(view());
   } catch (error: unknown) {
     console.error(JSON.stringify({

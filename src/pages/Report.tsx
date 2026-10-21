@@ -13,15 +13,22 @@ type ReportStateName =
   | "paid"
   | "payment_issue";
 
+type PhotoItem = { url: string; room?: string; note?: string };
+
 type ReportData = {
   ok: boolean;
   state: ReportStateName;
   booking?: { first?: string; service?: string; date?: string };
   photos?: string[];
+  photo_items?: PhotoItem[];
+  amount?: string | null;
+  amount_cents?: number | null;
   report_sent_at?: string | null;
   deadline?: string | null;
   delivery_failed?: boolean;
   issue_reason?: string;
+  issue_room?: string;
+  resolution?: { resolved_at: string; reclean_date: string } | null;
   error?: string;
 };
 
@@ -49,6 +56,9 @@ const Report = () => {
   const [actionError, setActionError] = useState("");
   const [issueOpen, setIssueOpen] = useState(false);
   const [issueText, setIssueText] = useState("");
+  const [issueRoom, setIssueRoom] = useState("");
+  const [issuePhoto, setIssuePhoto] = useState("");
+  const [issuePhotoNote, setIssuePhotoNote] = useState("");
 
   const load = useCallback(async () => {
     if (!bt) {
@@ -70,6 +80,21 @@ const Report = () => {
     void load();
   }, [load]);
 
+  const onPhotoPick = (file: File | null) => {
+    setIssuePhoto("");
+    setIssuePhotoNote("");
+    if (!file) return;
+    if (file.size > 1_000_000) {
+      // Too large to attach — the message itself still goes through.
+      setIssuePhotoNote("That photo is large, so we'll send your message without it.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
+    reader.readAsDataURL(file);
+  };
+
   const act = async (action: "approve" | "issue") => {
     setBusy(true);
     setActionError("");
@@ -77,7 +102,12 @@ const Report = () => {
       const r = await fetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bt, action, reason: action === "issue" ? issueText : undefined }),
+        body: JSON.stringify({
+          bt, action,
+          reason: action === "issue" ? issueText : undefined,
+          room: action === "issue" ? issueRoom : undefined,
+          photo: action === "issue" && issuePhoto ? issuePhoto : undefined,
+        }),
       });
       const j = (await r.json()) as ReportData;
       if (j && j.state && j.state !== "invalid_link") {
@@ -96,7 +126,8 @@ const Report = () => {
   const summaryRows: Array<[string, string]> = [];
   if (booking.service) summaryRows.push(["Service", booking.service]);
   if (booking.date) summaryRows.push(["Visit date", booking.date]);
-  if (booking.first) summaryRows.push(["First visit", booking.first]);
+  if (data?.amount) summaryRows.push(["This visit", data.amount]);
+  else if (booking.first) summaryRows.push(["First visit", booking.first]);
 
   const summary = summaryRows.length > 0 && (
     <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
@@ -170,7 +201,36 @@ const Report = () => {
               Here&apos;s your home after the visit — check every room.
             </p>
             {summary}
-            {data.photos && data.photos.length > 0 ? (
+            {data.photo_items && data.photo_items.length > 0 ? (
+              <div className="mb-6 space-y-5">
+                {Object.entries(
+                  data.photo_items.reduce<Record<string, PhotoItem[]>>((acc, p) => {
+                    const key = p.room || "Your home";
+                    (acc[key] ??= []).push(p);
+                    return acc;
+                  }, {}),
+                ).map(([room, items]) => (
+                  <div key={room}>
+                    <h2 className="font-heading text-lg font-bold mb-2">{room}</h2>
+                    <div className="grid grid-cols-2 gap-3">
+                      {items.map((p, i) => (
+                        <figure key={i}>
+                          <img
+                            src={p.url}
+                            alt={`${room} — cleaning photo ${i + 1}`}
+                            loading="lazy"
+                            className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                          />
+                          {p.note ? (
+                            <figcaption className="text-xs text-muted-foreground mt-1">{p.note}</figcaption>
+                          ) : null}
+                        </figure>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : data.photos && data.photos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 mb-6">
                 {data.photos.map((src, i) => (
                   <img
@@ -187,10 +247,16 @@ const Report = () => {
                 The photos for this visit are attached to the email we sent you.
               </p>
             )}
+            <p className="text-xs text-muted-foreground mb-6 text-left">
+              About these photos: they exist only for your private report. We photograph rooms, not
+              people — faces, documents and screens are avoided. Only you and the Gatehouse team can
+              open this page. Photos are kept for 90 days, then deleted, and never published without
+              your separate written permission.
+            </p>
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
               <p className="text-sm text-foreground">
                 If everything looks good, approve below
-                {booking.first ? <> — your card is then charged {booking.first}</> : null}.
+                {data.amount ? <> — your card is then charged {data.amount}</> : null}.
                 If something isn&apos;t right, report an issue and the charge stays paused while we
                 make it right.
                 {data.deadline ? (
@@ -205,7 +271,7 @@ const Report = () => {
             {!issueOpen ? (
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                  {busy ? "Working…" : "Approve report"}
+                  {busy ? "Working…" : data.amount ? `Approve cleaning & pay ${data.amount}` : "Approve report"}
                 </Button>
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
                   Report an issue
@@ -213,6 +279,25 @@ const Report = () => {
               </div>
             ) : (
               <div className="text-left">
+                <label htmlFor="issue-room" className="block font-semibold mb-2">
+                  Which room?
+                </label>
+                <select
+                  id="issue-room"
+                  value={issueRoom}
+                  onChange={(e) => setIssueRoom(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
+                >
+                  <option value="">Choose a room…</option>
+                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[])).map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                  <option value="Kitchen">Kitchen</option>
+                  <option value="Bathroom">Bathroom</option>
+                  <option value="Bedroom">Bedroom</option>
+                  <option value="Living areas">Living areas</option>
+                  <option value="Other">Other / not listed</option>
+                </select>
                 <label htmlFor="issue-text" className="block font-semibold mb-2">
                   What isn&apos;t right?
                 </label>
@@ -225,6 +310,23 @@ const Report = () => {
                   placeholder="Tell us what we missed — the charge stays paused while we sort it out."
                   className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
                 />
+                <label htmlFor="issue-photo" className="block font-semibold mb-2">
+                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <input
+                  id="issue-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm mb-1"
+                />
+                {issuePhotoNote && (
+                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
+                )}
+                <p className="text-xs text-muted-foreground mb-3">
+                  Sending this pauses your charge. We&apos;ll confirm by email and reply within one
+                  business day.
+                </p>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("issue")}>
                     {busy ? "Sending…" : "Send — pause my charge"}
@@ -244,9 +346,16 @@ const Report = () => {
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Approved — thank you</h1>
             <p className="text-lg text-foreground mb-6">
               Your approval is recorded.
-              {booking.first ? <> Your card will be charged {booking.first} for this visit.</> : null}{" "}
+              {data.amount ? <> Your card will be charged {data.amount} for this visit.</> : booking.first ? <> Your card will be charged {booking.first} for this visit.</> : null}{" "}
               The receipt comes by email.
             </p>
+            {data.resolution && (
+              <p className="text-base text-foreground mb-6">
+                Your earlier issue was marked resolved
+                {data.resolution.reclean_date ? <> — re-clean agreed for <strong>{data.resolution.reclean_date}</strong></> : ""}.
+                If anything is still off, email hello@gatehousehomecleaning.com.
+              </p>
+            )}
             <Button variant="hero" size="lg" asChild>
               <Link to="/">Back to Home</Link>
             </Button>
@@ -256,10 +365,12 @@ const Report = () => {
         {!loading && data?.state === "issue_open" && (
           <div className="text-center">
             <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Issue reported — charge paused</h1>
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Request received — charge paused</h1>
             <p className="text-lg text-foreground mb-6">
-              We&apos;ve paused the charge for this visit. We&apos;ll review what you flagged and email
-              you — if we missed something, we come back and fix it free.
+              We&apos;ve paused the charge for this visit. We&apos;ll reply within one business day —
+              a confirmation is also in your email.
+              {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
+              {data.issue_reason ? <> “{data.issue_reason}”</> : null}
             </p>
             {actionError && (
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
