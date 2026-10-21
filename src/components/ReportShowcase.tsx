@@ -68,6 +68,9 @@ function PhoneDemo() {
           <div className="text-center">
             <p className="text-xs font-bold text-sage-foreground">Visit report</p>
             <p className="text-[10px] text-muted-foreground">Every-other-week clean · Sample</p>
+            <span className="mt-1 inline-block rounded-full bg-peach px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-foreground">
+              Demo — not a real report
+            </span>
           </div>
 
           <div className="space-y-2">
@@ -104,7 +107,7 @@ function PhoneDemo() {
           {state === "approved" && (
             <div className="rounded-lg bg-primary/10 p-3 text-center">
               <ThumbsUp className="mx-auto h-5 w-5 text-primary" aria-hidden="true" />
-              <p className="mt-1 text-xs font-bold text-sage-foreground">Approved — card charged.</p>
+              <p className="mt-1 text-xs font-bold text-sage-foreground">Demo only — no payment was taken.</p>
               <p className="mt-0.5 text-[10px] text-muted-foreground">Thank you! See you in two weeks.</p>
               <button
                 type="button"

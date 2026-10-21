@@ -541,6 +541,7 @@ export default async function handler(req: Req, res: Res) {
     let bookingToken: string | null = null;
     let bookingId: string | null = null;
     let saveCardUrl: string | null = null;
+    let visitUrl: string | null = null;
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
     let serverRecurring: string | undefined;
@@ -597,6 +598,7 @@ export default async function handler(req: Req, res: Res) {
       bookingToken = signed.token;
       bookingId = signed.bid;
       saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
+      visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(bookingToken)}`;
       log("booking", { bid: bookingId });
     }
 
@@ -683,6 +685,9 @@ Thanks for your request — it isn't a confirmed booking yet.
 
 Next step: save your card to continue. Saving a card doesn't charge you anything — $0 today, and we never see your card number (Stripe handles it securely). We ask for it now so your date can be confirmed — and so you pay only after the visit, once you've seen the photo report:
 ${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
+
+After that, your visit page is where everything lives — status, your cleaner, reschedule or cancel without refilling forms:
+${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
 
 Your request:
 

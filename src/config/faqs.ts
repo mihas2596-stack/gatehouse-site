@@ -39,7 +39,11 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "Who will be cleaning my home?",
-    a: "Cleans are done by independent cleaning professionals. We tell you your cleaner's name before each visit.",
+    a: "Cleans are done by independent cleaning professionals, matched to your home by Gatehouse. Before your visit, your visit page shows your cleaner's name (and a photo when they've agreed to share one). If your cleaner ever changes, we tell you before the visit.",
+  },
+  {
+    q: "What happens with the photos in my report?",
+    a: "Photos are taken only for your private report — rooms, not people; faces, documents and screens are avoided. Only you (through your private link) and the Gatehouse team can see them. They're kept for 90 days, then deleted, and never published without your separate written permission. You can mark rooms as not-to-photograph on your visit page before the visit.",
   },
   {
     q: "Do you bring your own supplies and equipment?",
@@ -47,7 +51,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "What if you can't get into my home?",
-    a: "If we can't get in at the scheduled time, the full visit price is charged.",
+    a: "We re-check your access instructions, try to reach you, and wait before marking the visit missed. If we still can't get in, the full visit price is charged under our Terms. Clear entry instructions on your visit page prevent this — you can add or change them any time before the visit.",
   },
   {
     q: "What if something gets damaged?",

@@ -22,7 +22,7 @@
 // payment_pending with a fresh re-read first — a timer run, an operator
 // charge and a repeated webhook cannot produce two payments for one visit.
 
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const MAX_PER_RUN = 25;
@@ -38,7 +38,7 @@ type Res = {
   end(body?: string): void;
 };
 
-type Cust = { id: string; metadata: Record<string, string> };
+type Cust = { id: string; email?: string; name?: string; metadata: Record<string, string> };
 
 async function stripeGet(
   secretKey: string,
@@ -122,19 +122,24 @@ export function selectDue(customers: Cust[], nowMs: number): DueCharge[] {
   return out;
 }
 
-async function findReportSentCustomers(secretKey: string): Promise<Cust[]> {
-  const query = `metadata['gh_state']:'report_sent'`;
+async function findByState(secretKey: string, state: string): Promise<Cust[]> {
+  const query = `metadata['gh_state']:'${state}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "100" })}`);
+  type Raw = { id: string; email?: string; name?: string; metadata?: Record<string, string> };
   if (res.ok) {
-    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-    return list.map((c) => ({ id: c.id, metadata: c.metadata ?? {} }));
+    const list = (res.data["data"] as Raw[] | undefined) ?? [];
+    return list.map((c) => ({ id: c.id, email: c.email, name: c.name, metadata: c.metadata ?? {} }));
   }
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
   if (!listRes.ok) return [];
-  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+  const list = (listRes.data["data"] as Raw[] | undefined) ?? [];
   return list
-    .map((c) => ({ id: c.id, metadata: c.metadata ?? {} }))
-    .filter((c) => c.metadata["gh_state"] === "report_sent");
+    .map((c) => ({ id: c.id, email: c.email, name: c.name, metadata: c.metadata ?? {} }))
+    .filter((c) => c.metadata["gh_state"] === state);
+}
+
+async function findReportSentCustomers(secretKey: string): Promise<Cust[]> {
+  return findByState(secretKey, "report_sent");
 }
 
 function authed(req: Req): boolean {
@@ -249,10 +254,95 @@ export default async function handler(req: Req, res: Res) {
       }
     }
 
-    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed });
+    // --- Reminder pass: a report waiting 20+ hours gets ONE reminder
+    // before the 24h auto-charge, so the charge never surprises the
+    // client. Same guards as the charge itself (no issue, no bounce).
+    let reminded = 0;
+    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+    if (RESEND_API_KEY) {
+      for (const c of candidates) {
+        const m = c.metadata;
+        if (m["gh_reminded_at"]) continue;
+        if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
+        if (m["gh_report_bounced"] === "1") continue;
+        const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
+        if (!Number.isFinite(sentMs)) continue;
+        if (sentMs + 20 * 3600 * 1000 > now || sentMs + 24 * 3600 * 1000 <= now) continue;
+        if (!c.email) continue;
+        try {
+          // The report link needs a fresh booking token.
+          const key = createHash("sha256")
+            .update(`gatehouse-booking-link:${process.env["BOOKING_LINK_SECRET"] || STRIPE_SECRET_KEY}`)
+            .digest();
+          const iv = randomBytes(12);
+          const cipher = createCipheriv("aes-256-gcm", key, iv);
+          const payload = JSON.stringify({
+            bid: m["gh_booking_id"] ?? "", email: c.email, name: c.name ?? "",
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const ct = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+          const token = "v2." + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64url");
+          const deadline = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            weekday: "short", month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(sentMs + 24 * 3600 * 1000));
+          const resp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: [c.email],
+              reply_to: "hello@gatehousehomecleaning.com",
+              subject: "Reminder: your cleaning report is waiting",
+              text:
+                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
+                `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
+                `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nNick\n\nGatehouse Home Cleaning\n`,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (resp.ok) {
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
+              "metadata[gh_reminded_at]": new Date().toISOString(),
+            });
+            reminded++;
+          }
+        } catch (err) {
+          logErr("reminder", err);
+        }
+      }
+    }
+
+    // --- Retention pass: report photo links are deleted 90 days after
+    // the report was sent (the retention the Privacy policy promises).
+    // Applies to paid bookings; unpaid ones keep their evidence.
+    let cleaned = 0;
+    try {
+      const paid = await findByState(STRIPE_SECRET_KEY, "paid");
+      for (const c of paid) {
+        const m = c.metadata;
+        if (!m["gh_rp_0"]) continue;
+        const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
+        if (!Number.isFinite(sentMs)) continue;
+        if (sentMs + 90 * 24 * 3600 * 1000 > now) continue;
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
+          "metadata[gh_rp_0]": "",
+          "metadata[gh_rp_1]": "",
+          "metadata[gh_rp_2]": "",
+          "metadata[gh_rp_3]": "",
+          "metadata[gh_photos_deleted_at]": new Date().toISOString(),
+        });
+        cleaned++;
+      }
+    } catch (err) {
+      logErr("retention", err);
+    }
+
+    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned });
     res.status(200).json({
       requestId, ok: true,
-      checked: candidates.length, due: due.length, charged, skipped, failed,
+      checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned,
     });
   } catch (error: unknown) {
     logErr("unexpected", error);
