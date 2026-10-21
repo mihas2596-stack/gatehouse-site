@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
+import { PRICES, ADDONS } from "@/config/calculator";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 type ServiceCard = {
@@ -85,6 +86,78 @@ const Services = () => {
               ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* Comparison — factual differences only, prices from the same config
+          the calculator and the server charge by. */}
+      <section className="py-10 md:py-12 bg-background">
+        <div className="container max-w-4xl">
+          <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
+          <p className="text-center text-muted-foreground mb-8">
+            All three follow the same published room-by-room checklist. The difference is the interiors — and when each one applies.
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="bg-card">
+                  <th className="p-4 font-semibold"></th>
+                  <th className="p-4 font-heading font-bold">Standard</th>
+                  <th className="p-4 font-heading font-bold">Deep clean</th>
+                  <th className="p-4 font-heading font-bold">Move-in / Move-out</th>
+                </tr>
+              </thead>
+              <tbody className="[&_td]:p-4 [&_th]:p-4 [&_tr]:border-t [&_tr]:border-border align-top">
+                <tr>
+                  <th className="font-semibold">Best for</th>
+                  <td>Regular upkeep of a lived-in home</td>
+                  <td>A reset — or no professional clean in the last 3 months</td>
+                  <td>An empty home, moving in or out</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Room-by-room checklist</th>
+                  <td>Included</td>
+                  <td>Included</td>
+                  <td>Included</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Inside oven</th>
+                  <td>Add-on +${ADDONS.insideOven.price}</td>
+                  <td>Included</td>
+                  <td>Included</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Inside fridge</th>
+                  <td>Add-on +${ADDONS.insideFridge.price}</td>
+                  <td>Included</td>
+                  <td>Included</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Inside cabinets &amp; drawers</th>
+                  <td>Add-on +${ADDONS.insideCabinets.price}</td>
+                  <td>Included</td>
+                  <td>Included</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Interior windows</th>
+                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
+                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
+                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
+                </tr>
+                <tr>
+                  <th className="font-semibold">Price — small / medium / large</th>
+                  <td>${PRICES.standardOnetime.S} / ${PRICES.standardOnetime.M} / ${PRICES.standardOnetime.L} one-time<br />${PRICES.recurring.S} / ${PRICES.recurring.M} / ${PRICES.recurring.L} every other week</td>
+                  <td>${PRICES.deep.S} / ${PRICES.deep.M} / ${PRICES.deep.L}</td>
+                  <td>${PRICES.moveinout.S} / ${PRICES.moveinout.M} / ${PRICES.moveinout.L}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
+            Haven&apos;t had a professional clean in the last 3 months? Your first visit is a deep clean — that rule is
+            explained in the calculator before you send anything, and after that first visit standard rates apply.
+            Deep and move-in/out prices already include the oven, fridge and cabinet interiors — they are never charged twice.
+          </p>
         </div>
       </section>
 
