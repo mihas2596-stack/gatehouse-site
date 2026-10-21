@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle, CreditCard, ShieldCheck, AlertTriangle, Loader2 } from "lucide-react";
+import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 
@@ -218,9 +218,7 @@ const SaveCard = () => {
               Last step: save your card — $0 today
             </h1>
             <p className="text-lg text-foreground mb-6">
-              This finishes your request — nothing is charged today. We ask for a card now so we
-              can charge it after your visit: when you approve the photo report, or automatically
-              24 hours after we send it if you haven&apos;t reported an issue.
+              This finishes your request — nothing is charged today.
               {!isConfirmed && (
                 <> The card alone doesn&apos;t confirm your time — we confirm your date and arrival
                 window by email within one business day.</>
@@ -235,18 +233,18 @@ const SaveCard = () => {
               </p>
             )}
             <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
-              <h2 className="mb-2 font-heading text-lg font-bold">Why we ask for your card</h2>
-              <p className="mb-4 text-base leading-relaxed">
-                Two reasons: it holds your cleaner&apos;s time for your date, and it&apos;s how
-                &quot;approve, then pay&quot; works — you never pay for a cleaning you haven&apos;t seen.
+              <h2 className="mb-2 font-heading text-lg font-bold">Save your card for your cleaning — $0 today</h2>
+              <p className="text-base leading-relaxed">
+                Stripe securely saves your card so you won&apos;t need to enter it again after your
+                visit. Gatehouse does not receive your full card number. After each clean, we email
+                your room-by-room photo report. We charge the agreed visit price when you approve
+                it, or 24 hours after we send it if you haven&apos;t reported an issue. Reporting an
+                issue pauses the charge while we resolve it. No Link account is required.
               </p>
-              <ul className="space-y-3 text-base leading-relaxed">
-                <li><strong>$0 today — and nothing before the visit.</strong> The card is saved, not charged.</li>
-                <li><strong>You pay after you see the work.</strong> The charge happens when you approve the photo report; if you report an issue, it stays paused until the issue is fixed.</li>
-                <li><strong>The amount is the price you saw.</strong> No surprises — extra work only ever happens with your approval first.</li>
-                <li><strong>Free cancellation up to 48 hours before your visit</strong> — cancel in time and nothing is charged at all.</li>
-                <li><strong>We never see your card number.</strong> Stripe processes it securely — the same system behind millions of online stores.</li>
-              </ul>
+              <p className="mt-4 text-sm text-muted-foreground">
+                Cancellation and no-access fees may apply under our{" "}
+                <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
+              </p>
             </div>
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
@@ -264,7 +262,7 @@ const SaveCard = () => {
                   ) : (
                     <>per the prices above</>
                   )}{" "}
-                  — each charge when you approve that visit's photo report, or automatically 24 hours after we send it if you haven't reported an issue. $0 is charged today.
+                  — each charge when you approve that visit&apos;s photo report, or 24 hours after we send it if you haven&apos;t reported an issue (the full rule is in the block above and our Terms). $0 is charged today.
                 </p>
               </div>
             )}
@@ -275,26 +273,6 @@ const SaveCard = () => {
                 <li>Enter your card there. It takes about a minute.</li>
                 <li>Done — we email your confirmed date and arrival window within one business day.</li>
               </ol>
-              <ul className="space-y-3 text-base leading-relaxed">
-                <li className="flex gap-3">
-                  <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
-                  <span>No charge today — $0 now.</span>
-                </li>
-                <li className="flex gap-3">
-                  <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
-                  <span>Charged on your approval — or 24 hours after the report if you don't flag an issue.</span>
-                </li>
-                <li className="flex gap-3">
-                  <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
-                  <span>Free cancellation up to 48 hours before your visit.</span>
-                </li>
-                <li className="flex gap-3">
-                  <ShieldCheck className="w-5 h-5 mt-1 shrink-0 text-sage-foreground" aria-hidden="true" />
-                  <span>
-                    Card details are processed securely by Stripe. We never see or store your card number.
-                  </span>
-                </li>
-              </ul>
               <p className="mt-4 text-sm text-muted-foreground">
                 Something wrong after a visit?{" "}
                 <a
@@ -351,7 +329,7 @@ const SaveCard = () => {
                 </p>
               )}
               <Button type="submit" variant="hero" size="lg" className="w-full" disabled={submitStatus === "sending"}>
-                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Save my card — $0 today"}
+                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Save card — $0 today"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
                 You'll enter your card on Stripe's secure page. $0 is charged today.

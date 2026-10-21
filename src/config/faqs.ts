@@ -7,7 +7,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "How do I pay?",
-    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report, and your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue.",
+    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report, and your card is charged when you approve the report.",
   },
   {
     q: "When exactly is my card charged?",

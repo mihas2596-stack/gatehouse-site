@@ -329,6 +329,7 @@ export default async function handler(req: Req, res: Res) {
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "issue_open",
         "metadata[gh_issue_open]": "1",
+        "metadata[gh_issue_ever]": "1",
         "metadata[gh_issue_reason]": (parsed.data.reason ?? "").slice(0, 200),
       });
       log("dispute", { booking: bookingId });
@@ -346,6 +347,7 @@ export default async function handler(req: Req, res: Res) {
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "approved",
         "metadata[gh_issue_open]": "",
+        "metadata[gh_issue_resolved_at]": new Date().toISOString(),
       });
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
@@ -387,10 +389,14 @@ export default async function handler(req: Req, res: Res) {
         logErr("charge", "blocked: no saved payment method");
         return json(409, { ok: false, error: "no_payment_method" });
       }
-      // Server-side amount check: the charge must equal the server-quoted
-      // first-visit price stored on the customer at card-save time. The
-      // request amount is never trusted on its own (fail-closed).
-      const quotedCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+      // Server-side amount check: the charge must equal the amount pinned
+      // to THIS visit's report by send_report (gh_report_amount_cents —
+      // the first or recurring price of the agreed order, validated there).
+      // Bookings without a pinned report amount fall back to the
+      // first-visit price stored at card-save time. The request amount is
+      // never trusted on its own (fail-closed).
+      const rawQuoted = meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"];
+      const quotedCents = parseInt(rawQuoted ?? "", 10);
       if (!Number.isFinite(quotedCents) || quotedCents <= 0) {
         logErr("charge", "blocked: no quoted price on record");
         return json(409, { ok: false, error: "quote_missing" });
@@ -483,6 +489,26 @@ export default async function handler(req: Req, res: Res) {
       if (photosJson.length > 450 * 4) {
         return json(400, { ok: false, error: "photo_payload_too_large" });
       }
+      // Pin the agreed amount for THIS visit's report. The operator may
+      // pass amount_cents, but it must equal one of the two prices of the
+      // agreed order stored at card-save time (first or recurring) —
+      // anything else is rejected, never trusted. Default: first-visit
+      // price for the first report, recurring price after that.
+      const firstCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+      const recurringCents = parseInt(meta["gh_recurring_price_cents"] ?? "", 10);
+      let amountCents = parsed.data.amount_cents;
+      if (amountCents !== undefined) {
+        if (amountCents !== firstCents && amountCents !== recurringCents) {
+          return json(400, { ok: false, error: "amount_not_agreed" });
+        }
+      } else if ((parseInt(meta["gh_report_version"] ?? "0", 10) || 0) === 0) {
+        amountCents = firstCents;
+      } else {
+        amountCents = Number.isFinite(recurringCents) && recurringCents > 0 ? recurringCents : firstCents;
+      }
+      if (amountCents === undefined || !Number.isFinite(amountCents) || amountCents <= 0) {
+        return json(409, { ok: false, error: "quote_missing" });
+      }
       const photoHash = createHash("sha256").update(photosJson).digest("hex").slice(0, 16);
       const prevSentMs = Date.parse(meta["gh_report_sent_at"] ?? "");
       if (
@@ -501,6 +527,8 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_issue_reason]": "",
         "metadata[gh_report_sent_at]": sentAt,
         "metadata[gh_report_version]": String(version),
+        "metadata[gh_report_amount_cents]": String(amountCents),
+        "metadata[gh_report_bounced]": "",
         "metadata[gh_rp_hash]": photoHash,
       };
       for (let i = 0; i < 4; i++) {
@@ -522,7 +550,7 @@ export default async function handler(req: Req, res: Res) {
             ts: Math.floor(Date.now() / 1000),
           });
           const link = `https://www.gatehousehomecleaning.com/report?bt=${token}`;
-          const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+          const cents = amountCents;
           const priceLine = Number.isFinite(cents) && cents > 0
             ? ` Your card is charged $${(cents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`
             : "";
@@ -551,6 +579,20 @@ export default async function handler(req: Req, res: Res) {
               signal: AbortSignal.timeout(15000),
             });
             emailSent = resp.ok;
+            if (resp.ok) {
+              // Capture the Resend message id so a later confirmed bounce
+              // (api/resend-webhook) can void this report's 24h clock.
+              try {
+                const j = (await resp.json()) as { id?: string };
+                if (typeof j.id === "string" && j.id) {
+                  await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+                    "metadata[gh_report_email_id]": j.id,
+                  });
+                }
+              } catch {
+                /* best-effort */
+              }
+            }
           } catch {
             emailSent = false;
           }

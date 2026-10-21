@@ -711,7 +711,7 @@ const Quote = () => {
                             ${breakdown.recurring_total} per visit
                           </span>
                           <p className="text-base font-semibold text-foreground mt-1.5">
-                            Every other week — first visit included
+                            First visit: ${breakdown.first_total} · then ${breakdown.recurring_total} per visit, every other week
                           </p>
                         </>
                       ) : (

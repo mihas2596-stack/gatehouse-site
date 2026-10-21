@@ -26,7 +26,7 @@ export const CITIES: City[] = [
     paragraphs: [
       "Suwanee is a walkable, family-heavy suburb built around Town Center, with large neighborhoods spreading east toward Lawrenceville-Suwanee Road. Many houses here have four or five bedrooms, three or more bathrooms and a finished basement level, which is why our calculator asks for square footage as well as room counts — square footage helps plan the visit; the calculator price is based on bedrooms and full bathrooms.",
       "Every visit covers the same rooms in the same order: kitchen, bathrooms, bedrooms, then living areas and hallways. Stair railings get wiped, stairs get vacuumed, beds are made and trash is emptied. We bring our own vacuum, mop, cloths and products, so nothing needs to be waiting for us in the laundry room.",
-      "Most homes get a price online; larger homes can email us for a custom quote. You see your every-other-week price on screen, request a day and arrival window, and we confirm within one business day. Nothing is charged at booking. Your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue. Cancel or reschedule free up to 48 hours before a visit.",
+      "Most homes get a price online; larger homes can email us for a custom quote. You see your every-other-week price on screen, request a day and arrival window, and we confirm within one business day. Nothing is charged at booking. Your card is charged after the visit, when you approve the photo report (the 24-hour rule is in our Terms). Cancel or reschedule free up to 48 hours before a visit.",
     ],
   },
   {
@@ -48,7 +48,7 @@ export const CITIES: City[] = [
     paragraphs: [
       "Duluth is one of the denser parts of our service area, with townhomes and condominiums near Sugarloaf Parkway alongside traditional single-family streets closer to the downtown green. Townhome layouts stack bathrooms and bedrooms over two or three floors, so our checklist includes stair railings, stairs and hallway floors on every visit.",
       "Pricing works the same way here as everywhere else we serve: bedrooms, full bathrooms, cleaning type, frequency and add-ons. We collect square footage and half bathrooms for scheduling; they do not change the calculator price.",
-      "If your building has controlled access or a gate, share the code or the guest-list name when you book and we will use it. You do not need to be home during the visit. You can leave a door code and come back to a finished house. Your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue, and the same weekday and arrival window repeat every other week.",
+      "If your building has controlled access or a gate, share the code or the guest-list name when you book and we will use it. You do not need to be home during the visit. You can leave a door code and come back to a finished house. Your card is charged after the visit, when you approve the photo report (the 24-hour rule is in our Terms), and the same weekday and arrival window repeat every other week.",
     ],
   },
   {
@@ -59,7 +59,7 @@ export const CITIES: City[] = [
     paragraphs: [
       "Johns Creek sits in north Fulton County and is known for large lots and generously sized houses, many of them above three thousand square feet with several full bathrooms. Square footage changes how long a visit takes, so the calculator asks for a size band and uses that information to plan the visit. The displayed price is based on bedrooms, full bathrooms and your cleaning selections.",
       "Each visit follows the published room-by-room checklist: countertops, sinks and appliance exteriors in the kitchen; toilets, tubs, showers, mirrors and floors in every bathroom; dusting and floors in bedrooms and living areas. Extras beyond the checklist — inside the oven, inside the fridge, interior windows, inside cabinets, extra pet-hair work — are optional add-ons with fixed prices.",
-      "Scheduling in Johns Creek is deliberately simple. You choose the day and arrival window that works, and it stays the same every other week rather than shifting around each month. There is no membership fee, no promo code and no long-term commitment, and your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.",
+      "Scheduling in Johns Creek is deliberately simple. You choose the day and arrival window that works, and it stays the same every other week rather than shifting around each month. There is no membership fee, no promo code and no long-term commitment, and your card is charged after the visit, when you approve the photo report (the 24-hour rule is in our Terms).",
     ],
   },
   {
@@ -70,7 +70,7 @@ export const CITIES: City[] = [
     paragraphs: [
       "Alpharetta is part of our North Atlanta service area, with a mix of new mixed-use developments near Avalon and established residential streets spreading out toward Windward. Houses here range from compact townhomes to large family homes, and both fit the same simple pricing model: bedrooms, full bathrooms, cleaning type, frequency and add-ons.",
       "The service itself is a standard clean repeated on a fixed rhythm. Kitchens and bathrooms get the detailed work, bedrooms and living areas get dusting and floors, and trash is emptied throughout. We arrive with our own supplies and equipment, so nothing needs to be supplied by you.",
-      "Because we publish prices, there is no quote call and no in-home estimate visit in Alpharetta. Enter the details of the home, read the number on screen, then request the day and arrival window you want. We confirm within one business day, and your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.",
+      "Because we publish prices, there is no quote call and no in-home estimate visit in Alpharetta. Enter the details of the home, read the number on screen, then request the day and arrival window you want. We confirm within one business day, and your card is charged after the visit, when you approve the photo report (the 24-hour rule is in our Terms).",
     ],
   },
   {

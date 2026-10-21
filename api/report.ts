@@ -208,13 +208,14 @@ async function findCustomerByBooking(
   return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
 }
 
-type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid";
+type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue";
 
 function deriveState(meta: Record<string, string>): ReportState {
   const state = meta["gh_state"] ?? "";
   if (state === "paid") return "paid";
+  if (state === "payment_failed") return "payment_issue";
   if (meta["gh_issue_open"] === "1" || state === "issue_open") return "issue_open";
-  if (state === "approved" || state === "payment_pending" || state === "payment_failed") {
+  if (state === "approved" || state === "payment_pending") {
     return "approved";
   }
   if (meta["gh_report_sent_at"]) return "awaiting";
@@ -338,6 +339,7 @@ export default async function handler(req: Req, res: Res) {
         photos: readPhotos(meta),
         report_sent_at: sentAt,
         deadline,
+        delivery_failed: meta["gh_report_bounced"] === "1",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
       };
     };
@@ -395,6 +397,7 @@ export default async function handler(req: Req, res: Res) {
     const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
       "metadata[gh_state]": "issue_open",
       "metadata[gh_issue_open]": "1",
+      "metadata[gh_issue_ever]": "1",
       "metadata[gh_issue_reason]": reason.slice(0, 200),
       "metadata[gh_report_client_action]": "issue",
       "metadata[gh_report_responded_at]": nowIso,

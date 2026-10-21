@@ -10,7 +10,8 @@ type ReportStateName =
   | "awaiting"
   | "approved"
   | "issue_open"
-  | "paid";
+  | "paid"
+  | "payment_issue";
 
 type ReportData = {
   ok: boolean;
@@ -19,6 +20,7 @@ type ReportData = {
   photos?: string[];
   report_sent_at?: string | null;
   deadline?: string | null;
+  delivery_failed?: boolean;
   issue_reason?: string;
   error?: string;
 };
@@ -140,11 +142,23 @@ const Report = () => {
         {!loading && data?.state === "not_ready" && (
           <div className="text-center">
             <Camera className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Your report isn&apos;t ready yet</h1>
-            <p className="text-lg text-foreground mb-6">
-              Your photo report appears here after your cleaning. We&apos;ll email you when it&apos;s
-              ready — this same link will then show your photos.
-            </p>
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
+              {data.delivery_failed ? "Your report email didn't arrive" : "Your report isn't ready yet"}
+            </h1>
+            {data.delivery_failed ? (
+              <p className="text-lg text-foreground mb-6">
+                We tried to email your photo report, but it couldn&apos;t be delivered — so the
+                24-hour window has <strong>not</strong> started and no charge will happen until the
+                report reaches you. Email{" "}
+                <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>{" "}
+                and we&apos;ll resend it another way.
+              </p>
+            ) : (
+              <p className="text-lg text-foreground mb-6">
+                Your photo report appears here after your cleaning. We&apos;ll email you when it&apos;s
+                ready — this same link will then show your photos.
+              </p>
+            )}
             {summary}
           </div>
         )}
@@ -252,6 +266,22 @@ const Report = () => {
             )}
             <Button variant="outline" size="lg" disabled={busy} onClick={() => void act("approve")}>
               {busy ? "Working…" : "Everything is fine now — approve"}
+            </Button>
+          </div>
+        )}
+
+        {!loading && data?.state === "payment_issue" && (
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Your payment didn&apos;t go through</h1>
+            <p className="text-lg text-foreground mb-6">
+              Your bank declined the charge for this visit, or asks for an extra confirmation.
+              Your cleaning is done — only the payment is outstanding. Update or confirm your
+              card and we&apos;ll complete it.
+            </p>
+            {summary}
+            <Button variant="hero" size="lg" asChild>
+              <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Update or confirm your card</Link>
             </Button>
           </div>
         )}

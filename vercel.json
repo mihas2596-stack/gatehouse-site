@@ -1,5 +1,11 @@
 {
   "buildCommand": "npm run build",
+  "crons": [
+    {
+      "path": "/api/auto-charge",
+      "schedule": "0 * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",
