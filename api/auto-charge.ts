@@ -23,7 +23,7 @@
 // charge and a repeated webhook cannot produce two payments for one visit.
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
-import { sendReceiptEmailOnce } from "./booking-action";
+import { sendReceiptEmailOnce } from "./booking-action.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const MAX_PER_RUN = 25;
