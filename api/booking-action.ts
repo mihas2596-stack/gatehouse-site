@@ -85,6 +85,7 @@ function clientIp(headers: Record<string, string | string[] | undefined>): strin
   return (first ?? "unknown").split(",")[0].trim();
 }
 
+
 const STRIPE_API = "https://api.stripe.com/v1";
 
 const ALLOWED_ORIGINS = [
