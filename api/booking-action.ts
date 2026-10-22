@@ -29,7 +29,7 @@ import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, ra
 import {
   dbConfigured, dbSelect, dbUpdate, dbUpsert, logEvent,
   newCleanerToken, hashToken, storageSignDownload,
-} from "./_db";
+} from "./_db.js";
 
 type BookingPayload = {
   bid: string;
@@ -84,7 +84,6 @@ function clientIp(headers: Record<string, string | string[] | undefined>): strin
   const first = Array.isArray(fwd) ? fwd[0] : fwd;
   return (first ?? "unknown").split(",")[0].trim();
 }
-
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
