@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { dbConfigured, dbUpsert, logEvent } from "./_db";
+import { dbConfigured, dbUpsert, logEvent } from "./_db.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
