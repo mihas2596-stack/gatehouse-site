@@ -20,7 +20,7 @@
 // and STRIPE_WEBHOOK_SECRET must be set in Vercel env vars.
 
 import { createHmac, timingSafeEqual } from "crypto";
-import { sendReceiptEmailOnce } from "./booking-action";
+import { sendReceiptEmailOnce } from "./booking-action.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
