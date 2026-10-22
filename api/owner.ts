@@ -6,7 +6,7 @@
 // stay in booking-action (confirm, set_cleaner, cleaner_link,
 // return_report, send_report, charge) — this endpoint never mutates.
 
-import { dbConfigured, dbSelect, storageSignDownload } from "./_db";
+import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 
 type Req = {
   method?: string;
