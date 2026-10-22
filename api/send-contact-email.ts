@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { dbConfigured, dbUpsert, logEvent } from "./_db";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -597,6 +598,48 @@ export default async function handler(req: Req, res: Res) {
       });
       bookingToken = signed.token;
       bookingId = signed.bid;
+      // Visit record (database): one row per visit, created with the
+      // booking so the cleaner/owner pipeline has its anchor from the
+      // start. Best-effort — a DB hiccup never fails the booking.
+      if (dbConfigured()) {
+        try {
+          const genericItems = [{ label: "Cleaned as agreed", done: false }];
+          const stdItems = (labels: string[]) => labels.map((label) => ({ label, done: false }));
+          const rooms: { name: string; items: { label: string; done: boolean }[] }[] = [
+            { name: "Kitchen", items: stdItems(["Counters and sink cleaned", "Appliance exteriors wiped", "Floor vacuumed and mopped", "Trash emptied"]) },
+            { name: "Bathrooms", items: stdItems(["Toilet, shower/tub and sink cleaned", "Mirrors polished", "Floor cleaned", "Trash emptied"]) },
+            { name: "Bedrooms", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Bed made (if requested)"]) },
+            { name: "Living room", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Cushions straightened"]) },
+          ];
+          for (const z of (extra_zones ?? []).slice(0, 8)) {
+            if (typeof z === "string" && z.trim()) rooms.push({ name: z.trim().slice(0, 60), items: [...genericItems] });
+          }
+          const visitRow = await dbUpsert<{ id: string }>(
+            "gh_visits",
+            {
+              booking_id: bookingId,
+              visit_no: 1,
+              client_name: (name ?? "").trim() || null,
+              client_email: (email ?? "").trim() || null,
+              service: (service ?? "").trim() || null,
+              visit_date: /^\d{4}-\d{2}-\d{2}$/.test((date ?? "").trim()) ? (date as string).trim() : null,
+              window: (time ?? "").trim() || null,
+              address: (address ?? "").trim() || null,
+              access_notes: (message ?? "").trim().slice(0, 1000) || null,
+              amount_cents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
+              checklist: { rooms },
+              status: "requested",
+              is_test: /\b(qa|test)\b/i.test(name ?? ""),
+            },
+            "booking_id,visit_no",
+          );
+          if (visitRow) {
+            await logEvent(visitRow.id, bookingId, "system", "visit_created", { service: service ?? null });
+          }
+        } catch (err) {
+          logErr("visit_row", err instanceof Error ? err.message : String(err));
+        }
+      }
       saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
       visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(bookingToken)}`;
       log("booking", { bid: bookingId });

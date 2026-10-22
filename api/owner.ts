@@ -1,0 +1,98 @@
+// Owner view API — read-only lists over the visit database.
+//   GET /api/owner?view=list              → latest visits + photo counts
+//   GET /api/owner?view=detail&visit_id=  → one visit: photos (signed URLs),
+//                                           checklist, event history
+// Auth: ADMIN_TOKEN (Bearer), same as booking-action. All WRITE actions
+// stay in booking-action (confirm, set_cleaner, cleaner_link,
+// return_report, send_report, charge) — this endpoint never mutates.
+
+import { dbConfigured, dbSelect, storageSignDownload } from "./_db";
+
+type Req = {
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+  query?: Record<string, string | string[] | undefined>;
+};
+type Res = {
+  status(code: number): Res;
+  json(body: unknown): void;
+  setHeader(name: string, value: string): void;
+  end(body?: string): void;
+};
+
+const ALLOWED_ORIGINS = [
+  "https://gatehousehomecleaning.com",
+  "https://www.gatehousehomecleaning.com",
+  "http://localhost:8080",
+];
+
+type VisitRow = Record<string, unknown> & { id: string };
+
+export default async function handler(req: Req, res: Res) {
+  const requestId = Math.random().toString(36).slice(2);
+  const json = (status: number, body: Record<string, unknown>) =>
+    res.status(status).json({ requestId, ...body });
+  const origin = req.headers["origin"];
+  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+    return json(403, { ok: false, error: "origin_not_allowed" });
+  }
+  if (req.method !== "GET") return json(405, { ok: false, error: "method_not_allowed" });
+  const ADMIN_TOKEN = process.env["ADMIN_TOKEN"];
+  if (!ADMIN_TOKEN) return json(500, { ok: false, error: "server_error" });
+  const authRaw = req.headers["authorization"];
+  const auth = Array.isArray(authRaw) ? authRaw[0] : authRaw ?? "";
+  if (auth !== `Bearer ${ADMIN_TOKEN}`) return json(401, { ok: false, error: "unauthorized" });
+  if (!dbConfigured()) return json(501, { ok: false, error: "db_not_configured" });
+
+  try {
+    const viewName = typeof req.query?.["view"] === "string" ? (req.query["view"] as string) : "list";
+    if (viewName === "detail") {
+      const visitId = typeof req.query?.["visit_id"] === "string" ? (req.query["visit_id"] as string) : "";
+      if (!/^[0-9a-f-]{36}$/i.test(visitId)) return json(400, { ok: false, error: "invalid_visit" });
+      const visits = await dbSelect<VisitRow>("gh_visits", `id=eq.${visitId}&limit=1`);
+      const visit = visits[0];
+      if (!visit) return json(404, { ok: false, error: "visit_not_found" });
+      const photos = await dbSelect<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
+        "gh_photos",
+        `visit_id=eq.${visitId}&order=created_at.asc&limit=200`,
+      );
+      const photosWithUrls = await Promise.all(
+        photos.map(async (ph) => ({
+          id: ph.id,
+          room: ph.room,
+          kind: ph.kind,
+          note: ph.note,
+          created_at: ph.created_at,
+          url: await storageSignDownload(ph.storage_path, 3600),
+        })),
+      );
+      const events = await dbSelect(
+        "gh_events",
+        `visit_id=eq.${visitId}&order=created_at.desc&limit=100`,
+      );
+      return json(200, { ok: true, visit, photos: photosWithUrls, events });
+    }
+
+    // list
+    const visits = await dbSelect<VisitRow>(
+      "gh_visits",
+      "order=created_at.desc&limit=100",
+    );
+    const ids = visits.map((v) => v.id);
+    const counts = new Map<string, number>();
+    if (ids.length > 0) {
+      const photos = await dbSelect<{ visit_id: string }>(
+        "gh_photos",
+        `visit_id=in.(${ids.join(",")})&limit=2000`,
+      );
+      for (const ph of photos) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
+    }
+    return json(200, {
+      ok: true,
+      visits: visits.map((v) => ({ ...v, photo_count: counts.get(v.id) ?? 0 })),
+    });
+  } catch (err) {
+    console.error(JSON.stringify({ requestId, step: "owner", error: err instanceof Error ? err.message : String(err) }));
+    return json(500, { ok: false, error: "server_error" });
+  }
+}

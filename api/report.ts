@@ -20,6 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
+import { dbConfigured, dbSelect, logEvent } from "./_db";
 
 type BookingPayload = {
   bid: string;
@@ -381,6 +382,8 @@ export default async function handler(req: Req, res: Res) {
         report_sent_at: sentAt,
         deadline,
         delivery_failed: meta["gh_report_bounced"] === "1",
+        receipt_sent: Boolean(meta["gh_receipt_email_id"]),
+        postpay_issue: meta["gh_postpay_issue"] === "1",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
         resolution: meta["gh_issue_resolved_at"]
@@ -403,8 +406,62 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const state = deriveState(meta);
-    if (state === "paid") {
+    if (state === "paid" && action === "approve") {
       res.status(409).json({ requestId, ok: false, error: "already_paid" });
+      return;
+    }
+    if (state === "paid" && action === "issue") {
+      // Post-payment issue: the visit is already paid, so this does NOT
+      // pause or reverse anything automatically. The issue is recorded,
+      // the owner is notified, and the owner decides on a re-clean or a
+      // refund. The client is told exactly that.
+      if (meta["gh_postpay_issue"] === "1") {
+        res.status(200).json({ ...view(), already: true });
+        return;
+      }
+      const updPost = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_postpay_issue]": "1",
+        "metadata[gh_postpay_issue_reason]": reason.slice(0, 200),
+        "metadata[gh_postpay_issue_room]": room.slice(0, 60),
+        "metadata[gh_postpay_issue_at]": new Date().toISOString(),
+      });
+      if (!updPost.ok) {
+        res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+        return;
+      }
+      meta["gh_postpay_issue"] = "1";
+      if (dbConfigured()) {
+        const vrows = await dbSelect<{ id: string }>(
+          "gh_visits",
+          `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
+        );
+        if (vrows[0]) {
+          await logEvent(vrows[0].id, payload.bid, "client", "postpay_issue", {
+            room: room.slice(0, 60), reason: reason.slice(0, 200),
+          });
+        }
+      }
+      const RESEND_PP = process.env["RESEND_API_KEY"];
+      if (RESEND_PP) {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${RESEND_PP}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: ["nikolajmihasenok@gmail.com"],
+              subject: `POST-PAYMENT issue reported — ${customer.name ?? payload.bid}`,
+              text:
+                `A client reported an issue AFTER the visit was paid.\n\n` +
+                `Booking: ${payload.bid}\nRoom: ${room}\nWhat they said: ${reason}\n\n` +
+                `The payment is complete — nothing was reversed automatically. ` +
+                `Review and decide: offer a re-clean or a refund, and reply to the client.`,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch { /* the issue is recorded server-side regardless */ }
+      }
+      res.status(200).json({ ...view(), postpay: true });
       return;
     }
     if (!meta["gh_report_sent_at"]) {

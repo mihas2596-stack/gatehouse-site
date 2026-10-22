@@ -65,6 +65,45 @@ const Header = () => {
     };
   }, [isOpen]);
 
+  // Checkout-stage pages get a minimal header: logo + help only. No nav,
+  // no "See My Price" — nothing that pulls a client who is one step from
+  // finishing back into browsing.
+  const minimalHeader = location.pathname === "/thank-you" || location.pathname === "/save-card";
+  if (minimalHeader) {
+    return (
+      <header
+        className="fixed top-0 left-0 right-0 z-[100] bg-background py-0 lg:py-2"
+        style={{
+          backgroundColor: 'hsl(var(--background))',
+          boxShadow: '0 1px 0 rgba(0,0,0,0.06)',
+        }}
+      >
+        <div className="container flex items-center justify-between min-h-[56px] md:min-h-[72px]">
+          <Link to="/" onClick={handleLogoClick} aria-label="Gatehouse Home Cleaning — home" className="flex min-h-[44px] flex-col items-start justify-center cursor-pointer active:opacity-80 leading-none">
+            <span
+              className="font-script text-[19px] whitespace-nowrap md:text-4xl lg:text-3xl font-bold leading-tight"
+              style={{ color: 'hsl(var(--brand-ink))' }}
+            >
+              Gatehouse Home Cleaning
+            </span>
+            <span
+              className="hidden md:block font-semibold uppercase"
+              style={{ color: 'hsl(var(--brand-ink))', fontSize: '9.5px', letterSpacing: '0.18em', marginTop: '2px' }}
+            >
+              North Atlanta, GA
+            </span>
+          </Link>
+          <a
+            href="mailto:hello@gatehousehomecleaning.com"
+            className="text-sm font-semibold text-primary underline"
+          >
+            Need help? hello@gatehousehomecleaning.com
+          </a>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header
       className={`fixed top-0 left-0 right-0 z-[100] bg-background transition-shadow duration-300 ${

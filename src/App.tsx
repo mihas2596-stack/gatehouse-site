@@ -22,6 +22,8 @@ const Privacy = lazy(() => import("./pages/Privacy"));
 const Terms = lazy(() => import("./pages/Terms"));
 const ThankYou = lazy(() => import("./pages/ThankYou"));
 const SaveCard = lazy(() => import("./pages/SaveCard"));
+const Cleaner = lazy(() => import("./pages/Cleaner"));
+const Owner = lazy(() => import("./pages/Owner"));
 const Report = lazy(() => import("./pages/Report"));
 const Visit = lazy(() => import("./pages/Visit"));
 
@@ -50,6 +52,8 @@ const App = () => (
             <Route path="/terms" element={<Terms />} />
             <Route path="/thank-you" element={<ThankYou />} />
             <Route path="/save-card" element={<SaveCard />} />
+            <Route path="/cleaner" element={<Cleaner />} />
+            <Route path="/owner" element={<Owner />} />
             <Route path="/report" element={<Report />} />
             <Route path="/visit" element={<Visit />} />
             <Route path="/availability" element={<Navigate to="/quote" replace />} />

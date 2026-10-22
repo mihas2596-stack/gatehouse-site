@@ -464,6 +464,10 @@ export default async function handler(req: Req, res: Res) {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",
         currency: "usd",
+        // Always English: Stripe otherwise follows the visitor's browser
+        // locale, which confused owner-testing and would confuse clients
+        // whose browsers are set to another language.
+        locale: "en",
         // Cards only: Klarna / Cash App / bank debit make no sense for a
         // card-on-file setup and confuse clients on the save-card page.
         "payment_method_types[0]": "card",

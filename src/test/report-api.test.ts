@@ -204,14 +204,25 @@ describe("report portal", () => {
     expect(currentMeta["gh_state"]).toBe("approved");
   });
 
-  it("a paid visit refuses client issues and new reports", async () => {
+  it("a paid visit records a post-payment issue (no auto-reversal) and still refuses new reports", async () => {
     await sendReport();
     currentMeta["gh_state"] = "paid";
     const issue = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await reportHandler(postReq({ bt, action: "issue", reason: "too late" }) as any, issue as any);
-    expect(issue.code).toBe(409);
-    expect(issue.body["error"]).toBe("already_paid");
+    await reportHandler(postReq({ bt, action: "issue", reason: "found a streak", room: "Kitchen" }) as any, issue as any);
+    expect(issue.code).toBe(200);
+    expect(issue.body["postpay"]).toBe(true);
+    expect(currentMeta["gh_postpay_issue"]).toBe("1");
+    expect(currentMeta["gh_state"]).toBe("paid"); // payment state untouched
+    expect(currentMeta["gh_issue_open"]).not.toBe("1"); // nothing "paused" — already paid
+    const again = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "issue", reason: "second" }) as any, again as any);
+    expect(again.body["already"]).toBe(true);
+    const approveLate = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve" }) as any, approveLate as any);
+    expect(approveLate.code).toBe(409);
     const resend = await sendReport();
     expect(resend.code).toBe(409);
     expect(resend.body["error"]).toBe("already_paid");

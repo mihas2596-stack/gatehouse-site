@@ -20,6 +20,7 @@
 // and STRIPE_WEBHOOK_SECRET must be set in Vercel env vars.
 
 import { createHmac, timingSafeEqual } from "crypto";
+import { sendReceiptEmailOnce } from "./booking-action";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -231,6 +232,14 @@ export default async function handler(req: Req, res: Res) {
             "metadata[gh_last_payment]": piId,
           });
           log("payment", { state: eventType, booking: bookingId });
+        }
+        if (newState === "paid") {
+          // Receipt email (idempotent — the helper no-ops when the
+          // receipt marker is already stored). A failure here never
+          // fails the webhook: the cron retries the EMAIL later.
+          try {
+            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, curMeta, bookingId);
+          } catch { /* best-effort */ }
         }
       }
     } else {

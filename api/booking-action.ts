@@ -26,6 +26,10 @@
 
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
+import {
+  dbConfigured, dbSelect, dbUpdate, dbUpsert, logEvent,
+  newCleanerToken, hashToken, storageSignDownload,
+} from "./_db";
 
 type BookingPayload = {
   bid: string;
@@ -103,7 +107,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card", "cleaner_link", "return_report"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -115,6 +119,8 @@ const ActionSchema = z.object({
   alt_dates: z.array(z.string().min(1).max(20)).max(3).optional(),
   // resolve: agreed re-clean date (YYYY-MM-DD)
   reclean_date: z.string().max(20).optional(),
+  // return_report: owner's note back to the cleaner.
+  note: z.string().max(1000).optional(),
   // set_cleaner: name as the client should see it; photo only with the
   // cleaner's permission — the operator supplies it, we store the URL.
   cleaner_name: z.string().max(80).optional(),
@@ -193,6 +199,104 @@ async function findCustomerByBooking(
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
   return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
 }
+
+// Receipt email — sent ONCE per paid visit (guarded by gh_receipt_email_id).
+// A failed receipt send never touches the payment: it only leaves the
+// marker unset, and the auto-charge cron retries the EMAIL later.
+export async function sendReceiptEmailOnce(
+  secretKey: string,
+  customerId: string,
+  meta: Record<string, string>,
+  bookingId: string,
+): Promise<boolean> {
+  if (meta["gh_receipt_email_id"]) return true;
+  const key = process.env["RESEND_API_KEY"];
+  const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
+  if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
+  const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
+  const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+  const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+  if (!custEmail) return false;
+  const firstName = custName.trim().split(/\s+/)[0] || "there";
+  const dollars = (amountCents / 100).toFixed(2).replace(/\.00$/, "");
+  const dateLine = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric",
+  }).format(new Date());
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [custEmail],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: `Your Gatehouse receipt — $${dollars}`,
+        text:
+          `Hi ${firstName},\n\nThank you — your cleaning is paid.\n\n` +
+          `Amount paid: $${dollars}\nDate: ${dateLine} (Atlanta time)\nBooking: ${bookingId.slice(0, 8)}\n\n` +
+          `Your card on file was charged after your photo report, as agreed. ` +
+          `If anything about the visit isn't right, just reply to this email — we'll review it.\n\n` +
+          `Gatehouse Home Cleaning\n`,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) return false;
+    const j = (await resp.json()) as { id?: string };
+    if (typeof j.id === "string" && j.id) {
+      await stripePost(secretKey, `/customers/${customerId}`, {
+        "metadata[gh_receipt_email_id]": j.id,
+      });
+      if (dbConfigured()) {
+        await dbUpdate("gh_visits", `booking_id=eq.${bookingId}`, { receipt_email_id: j.id });
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type VisitRowLite = {
+  id: string;
+  report_status: string;
+  checklist: unknown;
+};
+
+async function latestVisit(bookingId: string): Promise<VisitRowLite | null> {
+  if (!dbConfigured()) return null;
+  const rows = await dbSelect<VisitRowLite>(
+    "gh_visits",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+
+const DEFAULT_CHECKLIST = {
+  rooms: [
+    { name: "Kitchen", items: [
+      { label: "Counters and sink cleaned", done: false },
+      { label: "Appliance exteriors wiped", done: false },
+      { label: "Floor vacuumed and mopped", done: false },
+      { label: "Trash emptied", done: false },
+    ] },
+    { name: "Bathrooms", items: [
+      { label: "Toilet, shower/tub and sink cleaned", done: false },
+      { label: "Mirrors polished", done: false },
+      { label: "Floor cleaned", done: false },
+      { label: "Trash emptied", done: false },
+    ] },
+    { name: "Bedrooms", items: [
+      { label: "Surfaces dusted", done: false },
+      { label: "Floor vacuumed / cleaned", done: false },
+      { label: "Bed made (if requested)", done: false },
+    ] },
+    { name: "Living room", items: [
+      { label: "Surfaces dusted", done: false },
+      { label: "Floor vacuumed / cleaned", done: false },
+      { label: "Cushions straightened", done: false },
+    ] },
+  ],
+};
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
@@ -496,9 +600,28 @@ export default async function handler(req: Req, res: Res) {
       if (piStatus === "succeeded") {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "paid",
+          "metadata[gh_paid_at]": new Date().toISOString(),
+          "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
         });
-        log("charge", { booking: bookingId, status: "succeeded" });
-        return json(200, { ok: true, state: "paid", payment_intent: pi.data["id"] });
+        const receiptSent = await sendReceiptEmailOnce(
+          STRIPE_SECRET_KEY, customer.id,
+          { ...meta, gh_report_amount_cents: String(amountCents) },
+          bookingId,
+        );
+        const paidVisit = await latestVisit(bookingId);
+        if (paidVisit) {
+          await dbUpdate("gh_visits", `id=eq.${paidVisit.id}`, {
+            status: "paid",
+            paid_at: new Date().toISOString(),
+            payment_intent_id: String(pi.data["id"] ?? ""),
+          });
+          await logEvent(paidVisit.id, bookingId, "system", "payment_succeeded", {
+            payment_intent: String(pi.data["id"] ?? ""),
+            receipt_sent: receiptSent,
+          });
+        }
+        log("charge", { booking: bookingId, status: "succeeded", receiptSent });
+        return json(200, { ok: true, state: "paid", payment_intent: pi.data["id"], receipt_sent: receiptSent });
       }
       // requires_action etc.: not a success, not a duplicate — client must act.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -527,7 +650,37 @@ export default async function handler(req: Req, res: Res) {
       if (state === "paid" || state === "payment_pending") {
         return json(409, { ok: false, error: "already_paid" });
       }
-      const photosJson = JSON.stringify(photos);
+      // Visit-pipeline gate: when the booking has a visit record, the
+      // cleaner must have submitted the report and the owner sends THAT
+      // report (photos come from private storage as long-lived signed
+      // URLs, valid for the 90-day report retention window). A draft or
+      // returned report cannot be sent to the client from here.
+      let finalPhotos = photos;
+      const visitRow = await latestVisit(bookingId);
+      if (visitRow) {
+        if (visitRow.report_status !== "submitted" && visitRow.report_status !== "sent") {
+          return json(409, { ok: false, error: "report_not_ready", report_status: visitRow.report_status });
+        }
+        if (visitRow.report_status === "submitted") {
+          const dbPhotos = await dbSelect<{ room: string; storage_path: string; note: string | null }>(
+            "gh_photos",
+            `visit_id=eq.${visitRow.id}&order=created_at.asc&limit=60`,
+          );
+          if (dbPhotos.length === 0) {
+            return json(409, { ok: false, error: "report_has_no_photos" });
+          }
+          const signed: { url: string; room?: string; note?: string }[] = [];
+          for (const dp of dbPhotos) {
+            const url = await storageSignDownload(dp.storage_path, 95 * 24 * 3600);
+            if (url) signed.push({ url, room: dp.room, ...(dp.note ? { note: dp.note } : {}) });
+          }
+          if (signed.length === 0) {
+            return json(502, { ok: false, error: "photo_signing_failed" });
+          }
+          finalPhotos = signed;
+        }
+      }
+      const photosJson = JSON.stringify(finalPhotos);
       if (photosJson.length > 450 * 4) {
         return json(400, { ok: false, error: "photo_payload_too_large" });
       }
@@ -578,6 +731,7 @@ export default async function handler(req: Req, res: Res) {
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
       let emailSent = false;
+      let reportEmailId = "";
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
@@ -627,6 +781,7 @@ export default async function handler(req: Req, res: Res) {
               try {
                 const j = (await resp.json()) as { id?: string };
                 if (typeof j.id === "string" && j.id) {
+                  reportEmailId = j.id;
                   await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
                     "metadata[gh_report_email_id]": j.id,
                   });
@@ -640,14 +795,37 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
-      log("send_report", { booking: bookingId, version, photos: photos.length, emailSent });
+      if (!emailSent) {
+        // The report email did not go out: the client cannot see the
+        // report, so the 24h auto-charge clock must NOT run on it.
+        // Reuse the bounce block flag — auto-charge and the reminder
+        // pass both skip blocked reports; the operator re-sends.
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_report_bounced]": "1",
+        });
+        logErr("send_report", "email not sent — auto-charge clock blocked");
+      }
+      if (visitRow) {
+        await dbUpdate("gh_visits", `id=eq.${visitRow.id}`, {
+          report_status: "sent",
+          report_sent_at: sentAt,
+          report_email_id: reportEmailId || null,
+          report_bounced: !emailSent,
+          status: "report_sent",
+        });
+        await logEvent(visitRow.id, bookingId, "owner", "report_sent", {
+          version, email_sent: emailSent, photos: finalPhotos.length,
+        });
+      }
+      log("send_report", { booking: bookingId, version, photos: finalPhotos.length, emailSent });
       return json(200, {
         ok: true,
         state: "report_sent",
         report_version: version,
         report_sent_at: sentAt,
-        photos: photos.length,
+        photos: finalPhotos.length,
         email_sent: emailSent,
+        ...(emailSent ? {} : { warning: "report_email_not_sent_clock_blocked" }),
       });
     }
 
@@ -782,6 +960,71 @@ export default async function handler(req: Req, res: Res) {
       });
       log("delete_card", { booking: bookingId });
       return json(200, { ok: true, card_deleted: true });
+    }
+
+    if (action === "cleaner_link") {
+      // Issue (or rotate) the cleaner's token link for this booking's
+      // current visit. Only the SHA-256 hash is stored; the owner passes
+      // the raw link to the cleaner out of band (e.g. WhatsApp).
+      if (!dbConfigured()) {
+        return json(501, { ok: false, error: "db_not_configured" });
+      }
+      let visit = await latestVisit(bookingId);
+      if (!visit) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const created = await dbUpsert<VisitRowLite & { id: string }>(
+          "gh_visits",
+          {
+            booking_id: bookingId,
+            visit_no: 1,
+            stripe_customer_id: customer.id,
+            client_name: typeof custRes.data["name"] === "string" ? custRes.data["name"] : null,
+            client_email: typeof custRes.data["email"] === "string" ? custRes.data["email"] : null,
+            service: meta["gh_service"] ?? null,
+            amount_cents: parseInt(meta["gh_first_price_cents"] ?? "", 10) || null,
+            cleaner_name: meta["gh_cleaner_name"] ?? null,
+            checklist: DEFAULT_CHECKLIST,
+            status: "scheduled",
+          },
+          "booking_id,visit_no",
+        );
+        if (!created) return json(502, { ok: false, error: "db_error" });
+        visit = created;
+      }
+      const token = newCleanerToken();
+      const expires = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString();
+      const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
+        cleaner_token_hash: hashToken(token),
+        cleaner_token_expires: expires,
+      });
+      if (!okUpd) return json(502, { ok: false, error: "db_error" });
+      await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires });
+      log("cleaner_link", { booking: bookingId, expires });
+      return json(200, {
+        ok: true,
+        url: `https://www.gatehousehomecleaning.com/cleaner?ct=${token}`,
+        expires,
+      });
+    }
+
+    if (action === "return_report") {
+      // Owner sends the cleaner's report back with a note. The cleaner
+      // sees the note when they reopen their link; nothing reaches the
+      // client and no clock or charge state changes.
+      if (!dbConfigured()) {
+        return json(501, { ok: false, error: "db_not_configured" });
+      }
+      const visit = await latestVisit(bookingId);
+      if (!visit) return json(404, { ok: false, error: "visit_not_found" });
+      if (visit.report_status !== "submitted") {
+        return json(409, { ok: false, error: "report_not_submitted", report_status: visit.report_status });
+      }
+      const noteText = (parsed.data.note ?? "").trim();
+      const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, { report_status: "returned" });
+      if (!okUpd) return json(502, { ok: false, error: "db_error" });
+      await logEvent(visit.id, bookingId, "owner", "report_returned", { note: noteText });
+      log("return_report", { booking: bookingId });
+      return json(200, { ok: true, report_status: "returned" });
     }
 
     return json(400, { ok: false, error: "invalid_request" });

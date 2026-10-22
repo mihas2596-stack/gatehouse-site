@@ -28,6 +28,8 @@ type ReportData = {
   delivery_failed?: boolean;
   issue_reason?: string;
   issue_room?: string;
+  receipt_sent?: boolean;
+  postpay_issue?: boolean;
   resolution?: { resolved_at: string; reclean_date: string } | null;
   error?: string;
 };
@@ -55,6 +57,7 @@ const Report = () => {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [issueOpen, setIssueOpen] = useState(false);
+  const [paidIssueOpen, setPaidIssueOpen] = useState(false);
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
   const [issuePhoto, setIssuePhoto] = useState("");
@@ -402,11 +405,70 @@ const Report = () => {
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Paid — thank you</h1>
             <p className="text-lg text-foreground mb-6">
-              This visit is paid. Your receipt was emailed to you.
+              {data.receipt_sent
+                ? "This visit is paid. Your receipt was emailed to you."
+                : "This visit is paid. Your receipt is on its way to your email."}
             </p>
-            <Button variant="hero" size="lg" asChild>
-              <Link to="/">Back to Home</Link>
-            </Button>
+            {data.postpay_issue ? (
+              <p className="text-base text-foreground mb-6">
+                Your issue has been received. We&apos;ll review it and reply by email
+                within one business day.
+              </p>
+            ) : !paidIssueOpen ? (
+              <button
+                type="button"
+                className="text-sm underline text-muted-foreground"
+                onClick={() => setPaidIssueOpen(true)}
+              >
+                Something wasn&apos;t right? Report an issue with this visit
+              </button>
+            ) : (
+              <div className="text-left max-w-md mx-auto">
+                <p className="text-sm text-muted-foreground mb-3">
+                  Your visit is already paid, so nothing is paused or reversed
+                  automatically. Tell us what wasn&apos;t right — we&apos;ll review
+                  it and reply by email within one business day.
+                </p>
+                <label htmlFor="paid-issue-room" className="block font-semibold mb-2">Which room?</label>
+                <select
+                  id="paid-issue-room"
+                  className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
+                  value={issueRoom}
+                  onChange={(e) => setIssueRoom(e.target.value)}
+                >
+                  <option value="">Choose a room…</option>
+                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean))).map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                  <option value="Something else">Something else</option>
+                </select>
+                <label htmlFor="paid-issue-text" className="block font-semibold mb-2">What happened?</label>
+                <textarea
+                  id="paid-issue-text"
+                  className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
+                  rows={3}
+                  value={issueText}
+                  onChange={(e) => setIssueText(e.target.value)}
+                  placeholder="Tell us what wasn't right"
+                />
+                {actionError && (
+                  <p className="text-sm text-destructive mb-3" role="alert">{actionError}</p>
+                )}
+                <div className="flex gap-3">
+                  <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act("issue")}>
+                    {busy ? "Sending…" : "Send"}
+                  </Button>
+                  <Button variant="outline" disabled={busy} onClick={() => setPaidIssueOpen(false)}>
+                    Back
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="mt-6">
+              <Button variant="hero" size="lg" asChild>
+                <Link to="/">Back to Home</Link>
+              </Button>
+            </div>
           </div>
         )}
       </div>

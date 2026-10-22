@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
+import { formatDateLong } from "@/lib/utils";
 
 type SubmitStatus = "idle" | "sending" | "error";
 type VerifyState =
@@ -136,12 +137,11 @@ const SaveCard = () => {
         {verify.kind === "saved" && (
           <>
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved</h1>
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved. Your request is complete.</h1>
             <p className="text-lg text-foreground mb-6">
-              Your card is on file — confirmed with Stripe. $0 charged today. We&apos;ll email your
-              confirmed date and arrival window within one business day. Your card is charged when
-              you approve your photo report, or automatically 24 hours after we send it if you
-              haven&apos;t reported an issue.
+              We&apos;ll confirm availability for your requested date by email within one business
+              day. Nothing was charged — your card is charged when you approve your photo report,
+              or 24 hours after we send it if you haven&apos;t reported an issue.
             </p>
             <Button variant="hero" size="lg" asChild>
               <Link to="/">Back to Home</Link>
@@ -194,10 +194,10 @@ const SaveCard = () => {
         {verify.kind === "none" && hasCard && !isConfirmed && (
           <>
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved — $0 charged</h1>
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved. Your request is complete.</h1>
             <p className="text-lg text-foreground mb-6">
               Your card is already on file for this booking — no need to save it again. We&apos;ll
-              email your confirmed date and arrival window within one business day.
+              confirm availability for your requested date by email within one business day.
             </p>
             <Button variant="hero" size="lg" asChild>
               <Link to="/">Back to Home</Link>
@@ -235,14 +235,16 @@ const SaveCard = () => {
             <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
               <h2 className="mb-2 font-heading text-lg font-bold">Save your card for your cleaning — $0 today</h2>
               <p className="text-base leading-relaxed">
-                Stripe securely saves your card so you won&apos;t need to enter it again after your
-                visit. Gatehouse does not receive your full card number. After each clean, we email
-                your room-by-room photo report. We charge the agreed visit price when you approve
-                it, or 24 hours after we send it if you haven&apos;t reported an issue. Reporting an
-                issue pauses the charge while we resolve it. No Link account is required.
+                After your cleaning, we&apos;ll email your photo report. We charge the agreed visit
+                price when you approve it, or 24 hours after we send it if you haven&apos;t reported
+                an issue. Reporting an issue within that window pauses the charge until it&apos;s
+                resolved. Your card is only for paying after the cleaning — Gatehouse never sees
+                your full card number.
               </p>
               <p className="mt-4 text-sm text-muted-foreground">
-                Cancellation and no-access fees may apply under our{" "}
+                Free cancellation until 48 hours before your visit; after that a $25 fee applies.
+                If we arrive and can&apos;t get in — and can&apos;t reach you — the visit is charged
+                in full. See our{" "}
                 <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
               </p>
             </div>
@@ -251,7 +253,7 @@ const SaveCard = () => {
                 <h2 className="mb-2 font-heading text-lg font-bold">Your booking</h2>
                 <ul className="space-y-1 text-base">
                   {booking!.service && <li>Service: <strong>{booking!.service}</strong></li>}
-                  {booking!.date && <li>Preferred date: <strong>{booking!.date}</strong></li>}
+                  {booking!.date && <li>Preferred date: <strong>{formatDateLong(booking!.date)}</strong></li>}
                   {booking!.first && <li>First visit: <strong>${booking!.first}</strong></li>}
                   {booking!.recurring && <li>Recurring visits: <strong>${booking!.recurring}</strong></li>}
                 </ul>
@@ -262,28 +264,10 @@ const SaveCard = () => {
                   ) : (
                     <>per the prices above</>
                   )}{" "}
-                  — each charge when you approve that visit&apos;s photo report, or 24 hours after we send it if you haven&apos;t reported an issue (the full rule is in the block above and our Terms). $0 is charged today.
+                  as described above and in our Terms. $0 is charged today.
                 </p>
               </div>
             )}
-            <div className="mb-8 rounded-xl bg-card p-6 text-left">
-              <h2 className="mb-3 font-heading text-lg font-bold">What to do</h2>
-              <ol className="mb-5 list-decimal space-y-2 pl-5 text-base leading-relaxed">
-                <li>Tap the button below — you&apos;ll go to Stripe&apos;s secure page.</li>
-                <li>Enter your card there. It takes about a minute.</li>
-                <li>Done — we email your confirmed date and arrival window within one business day.</li>
-              </ol>
-              <p className="mt-4 text-sm text-muted-foreground">
-                Something wrong after a visit?{" "}
-                <a
-                  href="mailto:hello@gatehousehomecleaning.com?subject=Issue%20with%20my%20cleaning%20visit"
-                  className="font-semibold text-primary underline"
-                >
-                  Report an issue
-                </a>{" "}
-                within 24 hours of your photo report — the charge stays paused until we fix it.
-              </p>
-            </div>
             {canceled && (
               <p className="mb-6 rounded-lg bg-muted p-4 text-sm text-muted-foreground">
                 Card entry was canceled — nothing was saved or charged. You can try again below whenever
@@ -329,10 +313,10 @@ const SaveCard = () => {
                 </p>
               )}
               <Button type="submit" variant="hero" size="lg" className="w-full" disabled={submitStatus === "sending"}>
-                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Save card — $0 today"}
+                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Add card — $0 today"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
-                You'll enter your card on Stripe's secure page. $0 is charged today.
+                You'll enter your card securely on Stripe. No Link account is required.
               </p>
             </form>
           </>

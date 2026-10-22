@@ -23,6 +23,7 @@
 // charge and a repeated webhook cannot produce two payments for one visit.
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
+import { sendReceiptEmailOnce } from "./booking-action";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const MAX_PER_RUN = 25;
@@ -314,6 +315,24 @@ export default async function handler(req: Req, res: Res) {
       }
     }
 
+    // --- Receipt-retry pass: a paid visit whose receipt email failed
+    // earlier gets the EMAIL resent — never the payment (§7: retry the
+    // letter, not the charge). The helper no-ops when the receipt
+    // marker is already stored.
+    let receipts = 0;
+    try {
+      const paidAll = await findByState(STRIPE_SECRET_KEY, "paid");
+      for (const c of paidAll) {
+        if (c.metadata["gh_receipt_email_id"]) continue;
+        const bid = c.metadata["gh_booking_id"];
+        if (!bid) continue;
+        const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, c.id, c.metadata, bid);
+        if (sent) receipts++;
+      }
+    } catch (err) {
+      logErr("receipt_retry", err);
+    }
+
     // --- Retention pass: report photo links are deleted 90 days after
     // the report was sent (the retention the Privacy policy promises).
     // Applies to paid bookings; unpaid ones keep their evidence.
@@ -339,10 +358,10 @@ export default async function handler(req: Req, res: Res) {
       logErr("retention", err);
     }
 
-    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned });
+    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned, receipts });
     res.status(200).json({
       requestId, ok: true,
-      checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned,
+      checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned, receipts,
     });
   } catch (error: unknown) {
     logErr("unexpected", error);

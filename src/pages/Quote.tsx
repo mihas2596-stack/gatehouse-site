@@ -428,6 +428,18 @@ const Quote = () => {
             status: "Request received — not confirmed yet",
             response: "We confirm by email within one business day",
           },
+          // Structured plan for the merged finish step on /thank-you:
+          // amounts come from the same breakdown the server re-derives, so
+          // the summary, the consent and the future charge cannot diverge.
+          plan: {
+            service: SERVICE_LABEL_CALC[service],
+            first: mainPrice,
+            recurring: isRecurring && breakdown ? breakdown.recurring_total : null,
+            firstIsDeep: breakdown?.first_service === "deep",
+            founding: foundingApplies,
+            afterFoundingRecurring:
+              foundingApplies && isRecurring && postFounding ? postFounding.recurring_total : null,
+          },
         },
       });
     } catch (err) {
