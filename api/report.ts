@@ -20,7 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, logEvent } from "./_db";
+import { dbConfigured, dbSelect, logEvent } from "./_db.js";
 
 type BookingPayload = {
   bid: string;
