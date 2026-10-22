@@ -21,7 +21,7 @@ import {
   storageSignDownload,
   storageRemove,
   hashToken,
-} from "./_db";
+} from "./_db.js";
 
 type Req = {
   method?: string;
