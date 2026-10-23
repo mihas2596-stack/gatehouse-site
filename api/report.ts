@@ -21,6 +21,7 @@
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
+import { sendReceiptEmailOnce } from "./booking-action.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -263,12 +264,14 @@ async function stripePost(
   secretKey: string,
   path: string,
   params: Record<string, string>,
+  idempotencyKey?: string,
 ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
   const response = await fetch(`${STRIPE_API}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${secretKey}`,
       "Content-Type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
     },
     body: new URLSearchParams(params),
     signal: AbortSignal.timeout(15000),
@@ -305,6 +308,30 @@ async function findCustomerByBooking(
   const list = (listRes.data["data"] as RawCust[] | undefined) ?? [];
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
   return found ? shape(found) : null;
+}
+
+// The saved-card webhook can miss (its secret is an owner action), so a
+// missing gh_payment_method must not block a charge Stripe can actually
+// make: read the customer's cards from Stripe and backfill the cache.
+async function reconcilePaymentMethod(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+  meta: Record<string, string>,
+): Promise<string> {
+  const existing = meta["gh_payment_method"] ?? "";
+  if (existing) return existing;
+  const res = await stripeGet(
+    secretKey,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+  );
+  if (!res.ok) return "";
+  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  const pm = list[0]?.id ?? "";
+  if (!pm) return "";
+  await stripePost(secretKey, `/customers/${customer.id}`, { "metadata[gh_payment_method]": pm });
+  customer.metadata["gh_payment_method"] = pm;
+  meta["gh_payment_method"] = pm;
+  return pm;
 }
 
 type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue";
@@ -623,30 +650,120 @@ export default async function handler(req: Req, res: Res) {
     const nowIso = new Date().toISOString();
 
     if (action === "approve") {
-      if (state === "approved") {
-        res.status(200).json({ ...view(), already: true });
+      // Terms 5.2: the card is charged WHEN the client approves the
+      // report. Approval is recorded first (it is a fact even if the
+      // payment then fails), then the pinned amount is charged at once.
+      const approvalLogged = Boolean(latestEvent(events, "report_approved"));
+      if (!approvalLogged) {
+        const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_state]": "approved",
+          "metadata[gh_issue_open]": "",
+          "metadata[gh_issue_reason]": "",
+          "metadata[gh_report_client_action]": "approved",
+          "metadata[gh_report_responded_at]": nowIso,
+        });
+        if (!upd.ok) {
+          logErr("approve", `stripe ${upd.status}`);
+          res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+          return;
+        }
+        Object.assign(meta, {
+          gh_state: "approved", gh_issue_open: "", gh_issue_reason: "",
+        });
+        if (row) {
+          await logEvent(row.id, payload.bid, "client", "report_approved", {});
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
+        }
+      }
+      // The amount is the price pinned to THIS booking — never a value
+      // from the request. The visit row wins; the report pin is fallback.
+      const amountCents = row?.amount_cents
+        ?? (parseInt(meta["gh_report_amount_cents"] ?? "", 10) || parseInt(meta["gh_first_price_cents"] ?? "", 10) || NaN);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        logErr("approve_charge", "blocked: no pinned amount");
+        res.status(409).json({ requestId, ok: false, error: "quote_missing" });
         return;
       }
-      const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "approved",
-        "metadata[gh_issue_open]": "",
-        "metadata[gh_issue_reason]": "",
-        "metadata[gh_report_client_action]": "approved",
-        "metadata[gh_report_responded_at]": nowIso,
-      });
-      if (!upd.ok) {
-        logErr("approve", `stripe ${upd.status}`);
-        res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+      const paymentMethod = await reconcilePaymentMethod(STRIPE_SECRET_KEY, customer, meta);
+      if (!paymentMethod) {
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_state]": "payment_failed",
+        });
+        meta["gh_state"] = "payment_failed";
+        if (row) await logEvent(row.id, payload.bid, "system", "payment_failed", { reason: "no_payment_method" });
+        res.status(402).json({ ...view(), error: "no_payment_method" });
         return;
       }
-      Object.assign(meta, {
-        gh_state: "approved", gh_issue_open: "", gh_issue_reason: "",
+      const reportVersion = meta["gh_report_version"] ?? "1";
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_state]": "payment_pending",
+        "metadata[gh_report_version]": reportVersion,
       });
+      meta["gh_state"] = "payment_pending";
+      // One payment per booking + report version: retries and double
+      // clicks resolve to the same PaymentIntent instead of charging twice.
+      const pi = await stripePost(
+        STRIPE_SECRET_KEY,
+        "/payment_intents",
+        {
+          amount: String(amountCents),
+          currency: "usd",
+          customer: customer.id,
+          payment_method: paymentMethod,
+          off_session: "true",
+          confirm: "true",
+          description: `Gatehouse cleaning — booking ${payload.bid}`,
+          "metadata[gh_booking_id]": payload.bid,
+          "metadata[gh_report_version]": reportVersion,
+        },
+        `charge_${payload.bid}_v${reportVersion}`,
+      );
+      if (pi.ok && pi.data["status"] === "succeeded") {
+        const piId = String(pi.data["id"] ?? "");
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_state]": "paid",
+          "metadata[gh_paid_at]": new Date().toISOString(),
+          "metadata[gh_last_payment]": piId,
+        });
+        Object.assign(meta, { gh_state: "paid", gh_last_payment: piId });
+        if (row) {
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+            status: "paid",
+            paid_at: new Date().toISOString(),
+            payment_intent_id: piId,
+          });
+        }
+        const receiptSent = await sendReceiptEmailOnce(
+          STRIPE_SECRET_KEY, customer.id,
+          { ...meta, gh_report_amount_cents: String(amountCents) },
+          payload.bid,
+        );
+        if (receiptSent) meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
+        if (row) {
+          await logEvent(row.id, payload.bid, "system", "payment_succeeded", {
+            payment_intent: piId, via: "client_approve", receipt_sent: receiptSent,
+          });
+        }
+        res.status(200).json(view());
+        return;
+      }
+      const piStatus = String(pi.data["status"] ?? "failed");
+      const errMsg =
+        ((pi.data["error"] as { message?: string } | undefined)?.message ?? `payment ${piStatus}`);
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_state]": "payment_failed",
+      });
+      meta["gh_state"] = "payment_failed";
       if (row) {
-        await logEvent(row.id, payload.bid, "client", "report_approved", {});
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
+        await logEvent(row.id, payload.bid, "system", "payment_failed", {
+          via: "client_approve", status: piStatus, detail: errMsg.slice(0, 200),
+        });
       }
-      res.status(200).json(view());
+      logErr("approve_charge", `${payload.bid}: ${errMsg}`);
+      res.status(402).json({
+        ...view(),
+        error: piStatus === "requires_action" ? "payment_requires_action" : "payment_failed",
+      });
       return;
     }
 

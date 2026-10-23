@@ -389,8 +389,8 @@ const Report = () => {
             <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Approved — thank you</h1>
             <p className="text-lg text-foreground mb-6">
-              Your approval is recorded.
-              {data.amount ? <> Your card will be charged {data.amount} for this visit.</> : booking.first ? <> Your card will be charged {booking.first} for this visit.</> : null}{" "}
+              Your approval is recorded and your payment is being completed
+              {data.amount ? <> — {data.amount} for this visit</> : booking.first ? <> — {booking.first} for this visit</> : null}.
               The receipt comes by email.
             </p>
             {data.resolution && (
@@ -435,9 +435,14 @@ const Report = () => {
               card and we&apos;ll complete it.
             </p>
             {summary}
-            <Button variant="hero" size="lg" asChild>
-              <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Update or confirm your card</Link>
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
+                {busy ? "Working…" : data.amount ? `Try charging ${data.amount} again` : "Try the charge again"}
+              </Button>
+              <Button variant="outline" size="lg" asChild>
+                <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Update or confirm your card</Link>
+              </Button>
+            </div>
           </div>
         )}
 

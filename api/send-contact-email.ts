@@ -143,10 +143,12 @@ export function serverBreakdown(opts: {
     };
   }
   if (opts.testScale) {
+    // Owner order 2026-10-23: during the test window no visit prices
+    // above $1.50 (mirrors TEST_PRICE_CAP in src/config/calculator.ts).
     result = {
       ...result,
-      first_total: moneyRound(result.first_total * TEST_PRICE_SCALE),
-      recurring_total: moneyRound(result.recurring_total * TEST_PRICE_SCALE),
+      first_total: Math.min(1.5, moneyRound(result.first_total * TEST_PRICE_SCALE)),
+      recurring_total: Math.min(1.5, moneyRound(result.recurring_total * TEST_PRICE_SCALE)),
     };
   }
   return result;

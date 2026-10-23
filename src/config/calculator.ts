@@ -146,7 +146,11 @@ export type CalcInput = {
 
 /** Owner price-test scale — must match TEST_PRICE_SCALE in api/send-contact-email.ts. */
 export const TEST_PRICE_SCALE = 0.01;
-export const scaleTestPrice = (n: number): number => Math.round(n * TEST_PRICE_SCALE * 100) / 100;
+/** Owner order 2026-10-23: while the test window runs, no visit prices
+ * above $1.50, whatever the tier or add-ons. Mirrored server-side. */
+export const TEST_PRICE_CAP = 1.5;
+export const scaleTestPrice = (n: number): number =>
+  Math.min(TEST_PRICE_CAP, Math.round(n * TEST_PRICE_SCALE * 100) / 100);
 
 /**
  * Owner-ordered global price cut: ALL prices at 1/10 until the end of the

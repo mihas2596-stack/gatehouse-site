@@ -37,6 +37,7 @@ function response() {
 
 let currentMeta: Record<string, string>;
 let resendCalls: unknown[];
+let piCalls: Array<{ body: URLSearchParams; idem: string | undefined }>;
 let bt: string;
 
 beforeEach(() => {
@@ -48,6 +49,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   currentMeta = { ...CUSTOMER.metadata };
   resendCalls = [];
+  piCalls = [];
   bt = signBooking("link-secret", {
     bid: BID, email: CUSTOMER.email, name: CUSTOMER.name,
   }).token;
@@ -55,6 +57,13 @@ beforeEach(() => {
     const u = String(url);
     if (u.includes("/customers/search")) {
       return { ok: true, status: 200, json: async () => ({ data: [{ id: CUSTOMER.id, metadata: currentMeta }] }) };
+    }
+    if (u.includes("/payment_intents")) {
+      piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: undefined });
+      return { ok: true, status: 200, json: async () => ({ id: "pi_test_1", status: "succeeded" }) };
+    }
+    if (u.includes("/payment_methods")) {
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: "pm_test_1" }] }) };
     }
     if (u.includes("api.resend.com")) {
       resendCalls.push(init?.body);
@@ -182,17 +191,22 @@ describe("report portal", () => {
     expect(issueAgain.body["already"]).toBe(true);
     expect(currentMeta["gh_issue_reason"]).toBe("Missed the oven");
 
+    // Terms 5.2: approving charges the pinned amount immediately.
     const approve = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(postReq({ bt, action: "approve" }) as any, approve as any);
-    expect(approve.body["state"]).toBe("approved");
-    expect(currentMeta["gh_state"]).toBe("approved");
+    expect(approve.body["state"]).toBe("paid");
+    expect(currentMeta["gh_state"]).toBe("paid");
     expect(currentMeta["gh_issue_open"]).toBe("");
+    expect(piCalls).toHaveLength(1);
+    expect(piCalls[0].body.get("amount")).toBe("18900");
 
     const approveAgain = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(postReq({ bt, action: "approve" }) as any, approveAgain as any);
-    expect(approveAgain.body["already"]).toBe(true);
+    expect(approveAgain.code).toBe(409);
+    expect(approveAgain.body["error"]).toBe("already_paid");
+    expect(piCalls).toHaveLength(1);
   });
 
   it("operator approve also works after a report was sent (email-approval path)", async () => {

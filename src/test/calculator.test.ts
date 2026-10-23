@@ -94,7 +94,7 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       addons: {},
       testScale: true,
     });
-    expect(b!.first_total).toBe(2.19); // $219 / 100
+    expect(b!.first_total).toBe(1.5); // $219 / 100 = $2.19, capped at the $1.50 test ceiling
   });
   it("scales first and recurring totals including add-ons", () => {
     const b = priceBreakdown({
@@ -105,8 +105,8 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       addons: { insideOven: true },
       testScale: true,
     });
-    expect(b!.first_total).toBe(2.24); // $224 / 100
-    expect(b!.recurring_total).toBe(2.24);
+    expect(b!.first_total).toBe(1.5); // $224 / 100 = $2.24, capped at the $1.50 test ceiling
+    expect(b!.recurring_total).toBe(1.5);
   });
 });
 

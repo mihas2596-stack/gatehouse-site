@@ -60,8 +60,8 @@ describe("booking price confirmation", () => {
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     expect(screen.getByText(/Test mode: prices on this page are reduced to 1\/100/)).toBeInTheDocument();
-    // Regular $189 recurring M at 1/100, no add-ons.
-    expect(screen.getByText("First visit: $1.89", { exact: false })).toBeInTheDocument();
+    // Regular $189 recurring M at 1/100 = $1.89, capped at the $1.50 test ceiling.
+    expect(screen.getByText("First visit: $1.50", { exact: false })).toBeInTheDocument();
   });
 
   it("requires another review when the calculator changes after confirmation", () => {

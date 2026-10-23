@@ -76,6 +76,9 @@ const Quote = () => {
   const testToken = params.get("tp") ?? "";
   const testMode = testToken !== "" || priceCutActive();
   const dispPrice = (n: number): number => (testMode ? scaleTestPrice(n) : n);
+  // Money display: whole dollars stay "$224", cents always show two
+  // decimals ("$1.50", never "$1.5").
+  const fmt$ = (n: number): string => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
 
   const [insideOven, setInsideOven] = useState(false);
   const [insideFridge, setInsideFridge] = useState(false);
@@ -291,11 +294,11 @@ const Quote = () => {
           ? "Custom quote requested — home has 6+ bedrooms or 6+ full bathrooms, no table price"
           : isRecurring && breakdown
           ? answered
-            ? `First visit $${breakdown.first_total}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then $${breakdown.recurring_total} per visit, every other week`
-            : `From $${breakdown.recurring_total} per visit, every other week — answer the cleaning-history question to confirm the first-visit price`
+            ? `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+            : `From ${fmt$(breakdown.recurring_total)} per visit, every other week — answer the cleaning-history question to confirm the first-visit price`
           : breakdown
-            ? `Total $${breakdown.first_total} (one visit${breakdown.first_service === "deep" ? ", deep clean" : ""})`
-            : `Price $${mainPrice} per visit`,
+            ? `Total ${fmt$(breakdown.first_total)} (one visit${breakdown.first_service === "deep" ? ", deep clean" : ""})`
+            : `Price ${fmt$(mainPrice)} per visit`,
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
         extraZones.length ? `Extra areas to clean: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : "",
         scopeReview ? `Scope review needed: YES (${scopeReasons.join("; ")})` : "",
@@ -397,11 +400,11 @@ const Quote = () => {
         service === "standard" && breakdown
           ? isRecurring
             ? breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard"
-              ? `$${breakdown.recurring_total} per visit, every other week`
-              : `First visit $${breakdown.first_total}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then $${breakdown.recurring_total} per visit, every other week`
-            : `One-time: $${breakdown.first_total}`
+              ? `${fmt$(breakdown.recurring_total)} per visit, every other week`
+              : `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+            : `One-time: ${fmt$(breakdown.first_total)}`
           : mainPrice !== null
-            ? `$${mainPrice} one-time`
+            ? `${fmt$(mainPrice)} one-time`
             : "";
       navigate("/thank-you", {
         state: {
@@ -443,11 +446,11 @@ const Quote = () => {
   const includedAddons = ADDONS_INCLUDED_IN[service];
   // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
   const priceBlockAddons = [
-    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +$${dispPrice(ADDONS.insideOven.price)}` : "",
-    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +$${dispPrice(ADDONS.insideFridge.price)}` : "",
-    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +$${dispPrice(ADDONS.insideCabinets.price)}` : "",
-    interiorWindows > 0 ? `${interiorWindows} interior windows +$${dispPrice(interiorWindows * ADDONS.interiorWindow.price)}` : "",
-    pets ? `Pets +$${dispPrice(ADDONS.pets.price)}` : "",
+    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +$${fmt$(dispPrice(ADDONS.insideOven.price))}` : "",
+    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +$${fmt$(dispPrice(ADDONS.insideFridge.price))}` : "",
+    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +$${fmt$(dispPrice(ADDONS.insideCabinets.price))}` : "",
+    interiorWindows > 0 ? `${interiorWindows} interior windows +$${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))}` : "",
+    pets ? `Pets +$${fmt$(dispPrice(ADDONS.pets.price))}` : "",
   ].filter(Boolean).join(", ");
 
   return (
@@ -598,28 +601,28 @@ const Quote = () => {
                 {!includedAddons.includes("insideOven") && (
                   <label htmlFor="q-addon-oven" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-oven" type="checkbox" className="h-5 w-5" checked={insideOven} onChange={(e) => setInsideOven(e.target.checked)} />
-                    {ADDONS.insideOven.label} (+${dispPrice(ADDONS.insideOven.price)}) <span className="text-muted-foreground">{addonNote}</span>
+                    {ADDONS.insideOven.label} (+{fmt$(dispPrice(ADDONS.insideOven.price))}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
                 {!includedAddons.includes("insideFridge") && (
                   <label htmlFor="q-addon-fridge" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-fridge" type="checkbox" className="h-5 w-5" checked={insideFridge} onChange={(e) => setInsideFridge(e.target.checked)} />
-                    {ADDONS.insideFridge.label} (+${dispPrice(ADDONS.insideFridge.price)}) <span className="text-muted-foreground">{addonNote}</span>
+                    {ADDONS.insideFridge.label} (+{fmt$(dispPrice(ADDONS.insideFridge.price))}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
                 {!includedAddons.includes("insideCabinets") && (
                   <label htmlFor="q-addon-cabinets" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-cabinets" type="checkbox" className="h-5 w-5" checked={insideCabinets} onChange={(e) => setInsideCabinets(e.target.checked)} />
-                    {ADDONS.insideCabinets.label} (+${dispPrice(ADDONS.insideCabinets.price)}) <span className="text-muted-foreground">{addonNote}</span>
+                    {ADDONS.insideCabinets.label} (+{fmt$(dispPrice(ADDONS.insideCabinets.price))}) <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                 )}
                 <label htmlFor="q-addon-pets" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                   <input id="q-addon-pets" type="checkbox" className="h-5 w-5" checked={pets} onChange={(e) => setPets(e.target.checked)} />
-                  {ADDONS.pets.label} (+${dispPrice(ADDONS.pets.price)}) <span className="text-muted-foreground">{addonNote} — extra pet-hair cleanup</span>
+                  {ADDONS.pets.label} (+{fmt$(dispPrice(ADDONS.pets.price))}) <span className="text-muted-foreground">{addonNote} — extra pet-hair cleanup</span>
                 </label>
                 <div className="flex items-center gap-3 text-sm">
                   <label htmlFor="q-windows">
-                    {ADDONS.interiorWindow.label} (+${dispPrice(ADDONS.interiorWindow.price)} each){" "}
+                    {ADDONS.interiorWindow.label} (+{fmt$(dispPrice(ADDONS.interiorWindow.price))} each){" "}
                     <span className="text-muted-foreground">{addonNote}</span>
                   </label>
                   <input
@@ -670,7 +673,7 @@ const Quote = () => {
                     // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
                       <p className="font-heading text-4xl md:text-5xl font-bold text-primary">
-                        ${oneTimeTotal} <span className="text-xl font-semibold">one-time</span>
+                        {fmt$(oneTimeTotal ?? 0)} <span className="text-xl font-semibold">one-time</span>
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
                         {SERVICE_LABEL_CALC[service]}. Inside oven, fridge and cabinets are included — never charged twice.
@@ -680,8 +683,8 @@ const Quote = () => {
                     <div className="flex flex-col items-center gap-1">
                       <p className="text-base text-foreground">
                         {isRecurring
-                          ? <>Regular visits: <strong>${breakdown?.recurring_total}</strong> every other week.</>
-                          : <>One-time clean: <strong>${breakdown?.first_total}</strong>.</>}
+                          ? <>Regular visits: <strong>{fmt$(breakdown?.recurring_total ?? 0)}</strong> every other week.</>
+                          : <>One-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first.
@@ -692,21 +695,21 @@ const Quote = () => {
                       {isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
                         <>
                           <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                            ${breakdown.recurring_total} per visit
+                            {fmt$(breakdown.recurring_total)} per visit
                           </span>
                           <p className="text-base font-semibold text-foreground mt-1.5">
-                            First visit: ${breakdown.first_total} · then ${breakdown.recurring_total} per visit, every other week
+                            First visit: {fmt$(breakdown.first_total)} · then {fmt$(breakdown.recurring_total)} per visit, every other week
                           </p>
                         </>
                       ) : (
                         <>
                           <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                            First visit: ${breakdown.first_total}
+                            First visit: {fmt$(breakdown.first_total)}
                             {breakdown.first_service === "deep" && <span className="text-xl font-semibold"> — deep clean</span>}
                           </span>
                           {isRecurring && (
                             <p className="text-base font-semibold text-foreground mt-1.5">
-                              Then ${breakdown.recurring_total} per visit, every other week
+                              Then {fmt$(breakdown.recurring_total)} per visit, every other week
                             </p>
                           )}
                           {!isRecurring && (
@@ -933,7 +936,7 @@ const Quote = () => {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? `$${breakdown.recurring_total} per visit, every other week` : <>First visit ${breakdown.first_total}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then $${breakdown.recurring_total} every other week` : ", one-time"}</>}</> : <>${mainPrice} one-time</>}</dd>
+                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? `{fmt$(breakdown.recurring_total)} per visit, every other week` : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then {fmt$(breakdown.recurring_total)} every other week` : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
@@ -969,10 +972,10 @@ const Quote = () => {
             <p className="text-sm font-semibold text-foreground">
               <span className="block text-xs font-normal text-muted-foreground">Your price</span>
               {service === "standard" && breakdown && isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
-                <>${breakdown.recurring_total} per visit<span className="block text-xs">Every other week</span></>
+                <>{fmt$(breakdown.recurring_total)} per visit<span className="block text-xs">Every other week</span></>
               ) : (
-                <>${mainPrice} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
-                {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then ${breakdown.recurring_total} every other week</span>}</>
+                <>{fmt$(mainPrice ?? 0)} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
+                {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then {fmt$(breakdown.recurring_total)} every other week</span>}</>
               )}
             </p>
             <a
