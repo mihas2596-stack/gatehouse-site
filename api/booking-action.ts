@@ -261,6 +261,7 @@ type VisitRowLite = {
   id: string;
   report_status: string;
   checklist: unknown;
+  visit_date: string | null;
 };
 
 async function latestVisit(bookingId: string): Promise<VisitRowLite | null> {
@@ -1089,11 +1090,32 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
       });
+      let rotatedUrl: string | null = null;
       if (row) {
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { cleaner_name: name.slice(0, 80) });
+        // Reassignment revokes the previous cleaner's access: rotate the
+        // visit token so any link already handed out stops working, and
+        // return the fresh link for the newly assigned cleaner.
+        if (dbConfigured()) {
+          const token = newCleanerToken();
+          let expiresMs = Date.now() + 14 * 24 * 3600 * 1000;
+          if (row.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(row.visit_date)) {
+            const jobMs = Date.parse(`${row.visit_date}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
+            if (Number.isFinite(jobMs)) expiresMs = Math.max(expiresMs, jobMs);
+          }
+          const expires = new Date(expiresMs).toISOString();
+          const okRot = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+            cleaner_token_hash: hashToken(token),
+            cleaner_token_expires: expires,
+          });
+          if (okRot) {
+            rotatedUrl = `https://www.gatehousehomecleaning.com/cleaner?ct=${token}`;
+            await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires });
+          }
+        }
       }
       log("set_cleaner", { booking: bookingId });
-      return json(200, { ok: true, cleaner_name: name });
+      return json(200, { ok: true, cleaner_name: name, ...(rotatedUrl ? { url: rotatedUrl } : {}) });
     }
 
     if (action === "charge_fee") {
@@ -1189,7 +1211,15 @@ export default async function handler(req: Req, res: Res) {
         visit = created;
       }
       const token = newCleanerToken();
-      const expires = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString();
+      // Expiry must support jobs scheduled ahead: at least 14 days, and
+      // never earlier than two days after the visit date itself, so a
+      // link generated early cannot die before the job happens.
+      let expiresMs = Date.now() + 14 * 24 * 3600 * 1000;
+      if (visit.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(visit.visit_date)) {
+        const jobMs = Date.parse(`${visit.visit_date}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
+        if (Number.isFinite(jobMs)) expiresMs = Math.max(expiresMs, jobMs);
+      }
+      const expires = new Date(expiresMs).toISOString();
       const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
         cleaner_token_hash: hashToken(token),
         cleaner_token_expires: expires,

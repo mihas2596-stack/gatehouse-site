@@ -367,23 +367,57 @@ const Owner = () => {
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2">
                   <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={cleanerName} onChange={(e) => setCleanerName(e.target.value)} />
-                  <Button variant="outline" onClick={() => void runAction("Set cleaner", { action: "set_cleaner", booking_id: selected.booking_id, cleaner_name: cleanerName })}>
-                    Set cleaner
+                  <Button variant="outline" onClick={() => void runAction("Assign cleaner", { action: "set_cleaner", booking_id: selected.booking_id, cleaner_name: cleanerName }, (j) => {
+                        if (typeof j["url"] === "string") {
+                          setCleanerUrl(j["url"] as string);
+                          setCleanerMsg("");
+                        }
+                      })}>
+                    Assign / change cleaner
                   </Button>
                   <Button
                     variant="outline"
                     onClick={() =>
-                      void runAction("Cleaner link", { action: "cleaner_link", booking_id: selected.booking_id }, (j) => {
-                        if (typeof j["url"] === "string") setCleanerUrl(j["url"] as string);
+                      void runAction("Revoke & replace link", { action: "cleaner_link", booking_id: selected.booking_id }, (j) => {
+                        if (typeof j["url"] === "string") {
+                          setCleanerUrl(j["url"] as string);
+                          setCleanerMsg("");
+                        }
                       })
                     }
                   >
-                    Get cleaner link
+                    Revoke & replace link
                   </Button>
                 </div>
                 {cleanerUrl && (
                   <div className="mt-2">
-                    <p className="text-xs mb-1">Ready-to-send message for the cleaner (link valid 14 days):</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <Button
+                        variant="hero"
+                        size="sm"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(cleanerUrl);
+                          setActionMsg("Cleaner link copied.");
+                        }}
+                      >
+                        Copy cleaner link
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => window.open(cleanerUrl, "_blank")}
+                      >
+                        Preview cleaner workspace
+                      </Button>
+                    </div>
+                    <input
+                      readOnly
+                      className="w-full text-xs bg-muted rounded p-2 mb-2"
+                      value={cleanerUrl}
+                      onFocus={(e) => e.target.select()}
+                      aria-label="Cleaner link (select and copy if the button does not work)"
+                    />
+                    <p className="text-xs mb-1">Ready-to-send message for the cleaner — the link stays valid through the visit date + 2 days (at least 14 days). Replacing the link or changing the cleaner revokes the previous one:</p>
                     <textarea
                       readOnly
                       rows={7}
