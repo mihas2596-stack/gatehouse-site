@@ -752,12 +752,16 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
         const deepPara = firstVisitDeep
           ? `\nBecause the home hasn't been professionally cleaned in the last 3 months, the first visit is a deep clean. Regular visits after that cost less.\n`
           : "";
-        const priceDisplay = serverFirst ? `$${serverFirst}` : price ? `$${price}` : "—";
+        const fmtUsd = (v: string): string => {
+          const n = parseFloat(v);
+          return Number.isFinite(n) ? `$${n.toFixed(2)}` : `$${v}`;
+        };
+        const priceDisplay = serverFirst ? fmtUsd(serverFirst) : price ? fmtUsd(price) : "—";
         const testNote = testScale ? "\nThis is a test booking at reduced test prices (1/10) for an owner payment check.\n" : "";
         // Equal first and recurring prices collapse into one line — "$189 for
         // the first visit, then $189 per visit" reads like a typo.
         const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;
-        const recurringDisplay = serverRecurring && !sameVisitPrice ? `, then $${serverRecurring} per visit` : "";
+        const recurringDisplay = serverRecurring && !sameVisitPrice ? `, then ${fmtUsd(serverRecurring)} per visit` : "";
 
         const textBody = isQuote ? `Hi ${firstName},
 

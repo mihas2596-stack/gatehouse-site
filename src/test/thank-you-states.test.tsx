@@ -57,3 +57,20 @@ describe("/thank-you card states", () => {
     expect(screen.getByRole("button", { name: "Try saving your card again" })).toBeInTheDocument();
   });
 });
+
+describe("/thank-you revisit without router state", () => {
+  it("state A still shows the server price, service and date chip", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      json: async () => ({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08" } }),
+    }));
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/thank-you", state: { submitted: true, kind: "booking", bt: "v2.test-token", customerEmailSent: true } }]}>
+        <ThankYou />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("One last step: save your card")).toBeInTheDocument();
+    expect(screen.getByText("$21.90")).toBeInTheDocument();
+    expect(screen.getByText("Standard Cleaning")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
+  });
+});

@@ -19,6 +19,110 @@
 // collected later by the operator (booking-action charge_fee).
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
+import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
+
+// Booking-scoped truth: the Stripe customer is shared by every booking of
+// one email, so its metadata may describe a different booking. gh_visits
+// (pinned at submission) and gh_events (per-booking journal) win for any
+// booking the customer is not currently bound to.
+type BookingRow = {
+  id: string; booking_id: string; status: string | null;
+  amount_cents: number | null; cleaner_name: string | null;
+  report_sent_at: string | null; report_bounced: boolean | null;
+  access_notes: string | null; no_photo_zones: string | null;
+};
+type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
+  if (!dbConfigured()) return null;
+  const rows = await dbSelect<BookingRow>(
+    "gh_visits",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
+  if (!dbConfigured()) return [];
+  return dbSelect<BookingEvent>(
+    "gh_events",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
+  );
+}
+const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
+  events.find((e) => e.event === name) ?? null;
+const evStr = (ev: BookingEvent | null, key: string): string =>
+  ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+function issueOpenFrom(events: BookingEvent[]): boolean {
+  const opened = latestEvent(events, "issue_opened");
+  if (!opened) return false;
+  const resolved = latestEvent(events, "issue_resolved");
+  return !resolved || resolved.created_at < opened.created_at;
+}
+async function findCustomerByEmail(
+  secretKey: string,
+  email: string,
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
+  const query = `email:'${email.replace(/'/g, "")}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
+  const list = res.ok
+    ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
+    : [];
+  return list.length > 0
+    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+    : null;
+}
+// Rebuild the metadata view of THIS booking from its DB row + journal.
+function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: boolean): Record<string, string> {
+  const confirmEv = latestEvent(events, "visit_confirmed");
+  const proposedEv = latestEvent(events, "date_proposed");
+  const cancelledEv = latestEvent(events, "visit_cancelled");
+  const approvedEv = latestEvent(events, "report_approved");
+  const issueOpen = issueOpenFrom(events);
+  return {
+    gh_state: row.status === "paid" ? "paid"
+      : cancelledEv ? "cancelled"
+      : issueOpen ? "issue_open"
+      : approvedEv ? "approved"
+      : row.report_sent_at ? ""
+      : hasCard ? "card_ready" : "",
+    gh_report_sent_at: row.report_sent_at ?? "",
+    gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_recurring_price_cents: "",
+    gh_confirmed_date: evStr(confirmEv, "date"),
+    gh_confirmed_window: evStr(confirmEv, "window"),
+    gh_cleaner_name: row.cleaner_name ?? "",
+    gh_cleaner_photo: "",
+    gh_alt_dates: evStr(proposedEv, "alt_dates"),
+    gh_proposed_date: evStr(proposedEv, "date"),
+    gh_cancel_scope: evStr(cancelledEv, "scope"),
+    gh_access_notes: row.access_notes ?? "",
+    gh_no_photo_zones: row.no_photo_zones ?? "",
+    gh_payment_method: hasCard ? "1" : "",
+    gh_issue_open: issueOpen ? "1" : "",
+  };
+}
+// Write this booking's DB/journal state into the shared customer's
+// metadata before an action runs against it, so no field of another
+// booking leaks into this booking's writes.
+async function hydrateCustomerMeta(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+  row: BookingRow,
+  events: BookingEvent[],
+): Promise<void> {
+  const eff = buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]));
+  if (!eff["gh_state"] && customer.metadata["gh_state"]) eff["gh_state"] = customer.metadata["gh_state"];
+  const params: Record<string, string> = { "metadata[gh_booking_id]": row.booking_id };
+  for (const [k, v] of Object.entries(eff)) params[`metadata[${k}]`] = v;
+  params["metadata[gh_report_amount_cents]"] = row.amount_cents != null ? String(row.amount_cents) : "";
+  params["metadata[gh_report_bounced]"] = row.report_bounced ? "1" : "";
+  params["metadata[gh_booking_confirmed]"] = eff["gh_confirmed_date"] ? "1" : "";
+  await stripePost(secretKey, `/customers/${customer.id}`, params);
+  for (const [k, v] of Object.entries(eff)) customer.metadata[k] = v;
+  customer.metadata["gh_booking_id"] = row.booking_id;
+  customer.metadata["gh_report_amount_cents"] = params["metadata[gh_report_amount_cents]"];
+  customer.metadata["gh_report_bounced"] = params["metadata[gh_report_bounced]"];
+  customer.metadata["gh_booking_confirmed"] = params["metadata[gh_booking_confirmed]"];
+}
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const LATE_CANCEL_FEE_CENTS = 2500; // Terms: $25 inside 48 hours
@@ -332,7 +436,14 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const payload = verified.payload;
-    const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
+    const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
+    const row = await latestBookingRow(payload.bid);
+    const events = row ? await bookingEvents(payload.bid) : [];
+    let customer = boundCustomer;
+    if (!customer && payload.email) {
+      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+    }
+    const bound = Boolean(boundCustomer);
     if (customer) {
       try {
         await reconcileCard(STRIPE_SECRET_KEY, customer);
@@ -340,14 +451,30 @@ export default async function handler(req: Req, res: Res) {
         /* cached metadata still applies */
       }
     }
-    if (!customer) {
+    if (!customer && !row) {
       res.status(200).json({
         requestId, ok: true, state: "card_needed" as VisitState,
         booking: { service: payload.service ?? "", date: payload.date ?? "", first: payload.first ?? "" },
       });
       return;
     }
-    const meta = customer.metadata;
+    if (!customer) {
+      // Booking exists in the DB but no Stripe customer at all: the card
+      // was never saved. The view below renders from the DB row alone.
+      customer = { id: "", metadata: {}, email: payload.email, name: payload.name };
+    }
+    // Before any WRITE action on an unbound booking, sync the shared
+    // customer's metadata to this booking's own state.
+    if (req.method === "POST" && row && !bound && customer.id) {
+      try {
+        await hydrateCustomerMeta(STRIPE_SECRET_KEY, customer, row, events);
+      } catch {
+        /* actions below re-check state before writing */
+      }
+    }
+    const meta = row && !bound && req.method === "GET"
+      ? buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]))
+      : customer.metadata;
     const requestedDate = payload.date ?? "";
 
     const view = () => {
@@ -380,6 +507,10 @@ export default async function handler(req: Req, res: Res) {
 
     if (req.method === "GET") {
       res.status(200).json(view());
+      return;
+    }
+    if (!customer.id) {
+      res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
       return;
     }
 
@@ -420,6 +551,7 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_alt_dates]": "",
       });
       Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: date, gh_alt_dates: "" });
+      if (row) await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
       await notify(`Date accepted — booking ${payload.bid}`, `The client accepted the alternative date ${date} for booking ${payload.bid}.`, false);
       res.status(200).json(view());
       return;
@@ -442,6 +574,7 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_proposed_date]": date,
       });
       Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: "", gh_alt_dates: "", gh_proposed_date: date });
+      if (row) await logEvent(row.id, payload.bid, "client", "date_proposed", { date });
       await notify(`New date proposed — booking ${payload.bid}`, `The client proposed a new date: ${date} (booking ${payload.bid}). Confirm or decline it in the dashboard flow.`, false);
       res.status(200).json({ ...view(), proposed_date: date });
       return;
@@ -461,6 +594,10 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_cancelled_at]": new Date().toISOString(),
       });
       Object.assign(meta, { gh_state: "cancelled", gh_cancel_scope: scope, gh_cancel_fee_cents: String(fee) });
+      if (row) {
+        await logEvent(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { status: "cancelled" });
+      }
       const scopeText = scope === "stop"
         ? "This visit and all future recurring visits are cancelled."
         : "This visit is cancelled. Your recurring schedule stays in place — tell us if you want to stop it too.";
@@ -493,6 +630,12 @@ export default async function handler(req: Req, res: Res) {
         ...(notes !== null ? { gh_access_notes: notes } : {}),
         ...(zones !== null ? { gh_no_photo_zones: zones } : {}),
       });
+      if (row) {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          ...(notes !== null ? { access_notes: notes } : {}),
+          ...(zones !== null ? { no_photo_zones: zones } : {}),
+        });
+      }
       res.status(200).json(view());
       return;
     }

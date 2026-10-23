@@ -22,6 +22,97 @@
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, logEvent, storageSignDownload } from "./_db.js";
 
+// Booking-scoped truth: the Stripe customer is shared by every booking of
+// one email, so its metadata may describe a different booking. gh_visits
+// (pinned at submission) and gh_events (per-booking journal) win for any
+// booking the customer is not currently bound to.
+type BookingRow = {
+  id: string; booking_id: string; status: string | null;
+  amount_cents: number | null; report_sent_at: string | null;
+  report_bounced: boolean | null; cleaner_name: string | null;
+};
+type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
+  if (!dbConfigured()) return null;
+  const rows = await dbSelect<BookingRow>(
+    "gh_visits",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
+  if (!dbConfigured()) return [];
+  return dbSelect<BookingEvent>(
+    "gh_events",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
+  );
+}
+const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
+  events.find((e) => e.event === name) ?? null;
+const evStr = (ev: BookingEvent | null, key: string): string =>
+  ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+function issueOpenFrom(events: BookingEvent[]): boolean {
+  const opened = latestEvent(events, "issue_opened");
+  if (!opened) return false;
+  const resolved = latestEvent(events, "issue_resolved");
+  return !resolved || resolved.created_at < opened.created_at;
+}
+async function findCustomerByEmail(
+  secretKey: string,
+  email: string,
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
+  const query = `email:'${email.replace(/'/g, "")}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
+  const list = res.ok
+    ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
+    : [];
+  return list.length > 0
+    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+    : null;
+}
+function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<string, string> {
+  const confirmEv = latestEvent(events, "visit_confirmed");
+  const opened = latestEvent(events, "issue_opened");
+  const resolved = latestEvent(events, "issue_resolved");
+  const approvedEv = latestEvent(events, "report_approved");
+  const cancelledEv = latestEvent(events, "visit_cancelled");
+  const issueOpen = issueOpenFrom(events);
+  return {
+    gh_state: row.status === "paid" ? "paid"
+      : cancelledEv ? "cancelled"
+      : issueOpen ? "issue_open"
+      : approvedEv ? "approved" : "",
+    gh_report_sent_at: row.report_sent_at ?? "",
+    gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_report_bounced: row.report_bounced ? "1" : "",
+    gh_rp_source: row.report_sent_at ? "db" : "",
+    gh_confirmed_date: evStr(confirmEv, "date"),
+    gh_issue_open: issueOpen ? "1" : "",
+    gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
+    gh_issue_room: issueOpen ? evStr(opened, "room") : "",
+    gh_issue_resolved_at: resolved && !issueOpen ? resolved.created_at : "",
+    gh_reclean_date: resolved && !issueOpen ? evStr(resolved, "reclean_date") : "",
+  };
+}
+async function hydrateCustomerMeta(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+  row: BookingRow,
+  events: BookingEvent[],
+): Promise<void> {
+  const eff = buildEffectiveMeta(row, events);
+  const params: Record<string, string> = { "metadata[gh_booking_id]": row.booking_id };
+  for (const [k, v] of Object.entries(eff)) params[`metadata[${k}]`] = v;
+  params["metadata[gh_booking_confirmed]"] = eff["gh_confirmed_date"] ? "1" : "";
+  params["metadata[gh_cleaner_name]"] = row.cleaner_name ?? "";
+  await stripePost(secretKey, `/customers/${customer.id}`, params);
+  for (const [k, v] of Object.entries(eff)) customer.metadata[k] = v;
+  customer.metadata["gh_booking_id"] = row.booking_id;
+  customer.metadata["gh_booking_confirmed"] = params["metadata[gh_booking_confirmed]"];
+  customer.metadata["gh_cleaner_name"] = row.cleaner_name ?? "";
+}
+
 type BookingPayload = {
   bid: string;
   email: string;
@@ -334,14 +425,21 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const payload = verified.payload;
-    const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
+    const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
+    const row = await latestBookingRow(payload.bid);
+    const events = row ? await bookingEvents(payload.bid) : [];
+    let customer = boundCustomer;
+    if (!customer && payload.email) {
+      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+    }
+    const bound = Boolean(boundCustomer);
 
     const payloadBooking: Record<string, string> = {};
     if (payload.service) payloadBooking.service = payload.service;
     if (payload.date) payloadBooking.date = payload.date;
     if (payload.first) payloadBooking.first = payload.first;
 
-    if (!customer) {
+    if (!customer && !row) {
       // No Stripe customer yet (card never saved): a report cannot exist.
       if (req.method === "POST") {
         res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
@@ -353,8 +451,26 @@ export default async function handler(req: Req, res: Res) {
       });
       return;
     }
+    if (!customer) {
+      customer = { id: "", metadata: {}, email: payload.email, name: payload.name };
+    }
+    if (req.method === "POST" && !customer.id) {
+      res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
+      return;
+    }
+    // Before a WRITE on an unbound booking, sync the shared customer's
+    // metadata to this booking's own state (another booking may be bound).
+    if (req.method === "POST" && row && !bound) {
+      try {
+        await hydrateCustomerMeta(STRIPE_SECRET_KEY, customer, row, events);
+      } catch {
+        /* the action handlers re-check state before writing */
+      }
+    }
 
-    const meta = customer.metadata;
+    const meta = row && !bound
+      ? { ...customer.metadata, ...buildEffectiveMeta(row, events) }
+      : customer.metadata;
     // DB-sourced report photos: send_report no longer stores signed URLs
     // in Stripe metadata (they overflow it). Re-read the visit's photos
     // and sign fresh download URLs on every view — a link from an old
@@ -524,6 +640,7 @@ export default async function handler(req: Req, res: Res) {
       Object.assign(meta, {
         gh_state: "approved", gh_issue_open: "", gh_issue_reason: "",
       });
+      if (row) await logEvent(row.id, payload.bid, "client", "report_approved", {});
       res.status(200).json(view());
       return;
     }
@@ -551,6 +668,11 @@ export default async function handler(req: Req, res: Res) {
       gh_state: "issue_open", gh_issue_open: "1",
       gh_issue_reason: reason.slice(0, 200), gh_issue_room: room.slice(0, 60),
     });
+    if (row) {
+      await logEvent(row.id, payload.bid, "client", "issue_opened", {
+        reason: reason.slice(0, 200), room: room.slice(0, 60),
+      });
+    }
 
     // Best-effort notifications — the issue is already recorded on the
     // server at this point; an email failure changes nothing for the

@@ -327,6 +327,92 @@ async function reconcileCard(
   return pm;
 }
 
+// Booking-scoped truth: the Stripe customer is shared by every booking of
+// one email, so its metadata may describe a different booking. gh_visits
+// (pinned at submission) and gh_events (per-booking journal) win for any
+// booking the customer is not currently bound to; before acting on such a
+// booking we hydrate the metadata from its own record.
+type BookingRow = {
+  id: string; booking_id: string; status: string | null;
+  amount_cents: number | null; cleaner_name: string | null;
+  client_email: string | null; report_sent_at: string | null;
+  report_bounced: boolean | null; report_status: string | null;
+};
+type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
+  if (!dbConfigured()) return null;
+  const rows = await dbSelect<BookingRow>(
+    "gh_visits",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
+  if (!dbConfigured()) return [];
+  return dbSelect<BookingEvent>(
+    "gh_events",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
+  );
+}
+const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
+  events.find((e) => e.event === name) ?? null;
+const evStr = (ev: BookingEvent | null, key: string): string =>
+  ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+async function findCustomerByEmail(
+  secretKey: string,
+  email: string,
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
+  const query = `email:'${email.replace(/'/g, "")}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
+  const list = res.ok
+    ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
+    : [];
+  return list.length > 0
+    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+    : null;
+}
+async function hydrateCustomerMeta(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+  row: BookingRow,
+  events: BookingEvent[],
+): Promise<void> {
+  const confirmEv = latestEvent(events, "visit_confirmed");
+  const opened = latestEvent(events, "issue_opened");
+  const resolved = latestEvent(events, "issue_resolved");
+  const issueOpen = Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
+  const cancelledEv = latestEvent(events, "visit_cancelled");
+  const approvedEv = latestEvent(events, "report_approved");
+  const remindedEv = latestEvent(events, "reminder_sent");
+  const state = row.status === "paid" ? "paid"
+    : cancelledEv ? "cancelled"
+    : issueOpen ? "issue_open"
+    : approvedEv ? "approved"
+    : row.report_sent_at ? "report_sent"
+    : customer.metadata["gh_state"] ?? "";
+  const values: Record<string, string> = {
+    gh_booking_id: row.booking_id,
+    gh_state: state,
+    gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_recurring_price_cents: "",
+    gh_report_sent_at: row.report_sent_at ?? "",
+    gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_report_bounced: row.report_bounced ? "1" : "",
+    gh_booking_confirmed: confirmEv ? "1" : "",
+    gh_confirmed_date: evStr(confirmEv, "date"),
+    gh_confirmed_window: evStr(confirmEv, "window"),
+    gh_cleaner_name: row.cleaner_name ?? "",
+    gh_issue_open: issueOpen ? "1" : "",
+    gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
+    gh_issue_room: issueOpen ? evStr(opened, "room") : "",
+    gh_reminded_at: remindedEv ? remindedEv.created_at : "",
+  };
+  const params: Record<string, string> = {};
+  for (const [k, v] of Object.entries(values)) params[`metadata[${k}]`] = v;
+  await stripePost(secretKey, `/customers/${customer.id}`, params);
+  Object.assign(customer.metadata, values);
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
@@ -377,10 +463,24 @@ export default async function handler(req: Req, res: Res) {
     }
     const { action, booking_id: bookingId } = parsed.data;
 
-    const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
+    const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
+    const row = await latestBookingRow(bookingId);
+    const events = row ? await bookingEvents(bookingId) : [];
+    let customer = boundCustomer;
+    if (!customer && row?.client_email) {
+      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, row.client_email);
+    }
     if (!customer) {
       logErr("lookup", "booking not found");
       return json(404, { ok: false, error: "booking_not_found" });
+    }
+    const bound = Boolean(boundCustomer);
+    if (row && !bound) {
+      try {
+        await hydrateCustomerMeta(STRIPE_SECRET_KEY, customer, row, events);
+      } catch {
+        /* actions below re-check state before writing */
+      }
     }
     try {
       await reconcileCard(STRIPE_SECRET_KEY, customer);
@@ -490,6 +590,9 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
+      if (row && !already) {
+        await logEvent(row.id, bookingId, "owner", "visit_confirmed", { date, window: win });
+      }
       log("confirm", { booking: bookingId, emailSent, already });
       return json(200, {
         ok: true,
@@ -514,6 +617,9 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_issue_ever]": "1",
         "metadata[gh_issue_reason]": (parsed.data.reason ?? "").slice(0, 200),
       });
+      if (row) {
+        await logEvent(row.id, bookingId, "owner", "issue_opened", { reason: (parsed.data.reason ?? "").slice(0, 200) });
+      }
       log("dispute", { booking: bookingId });
       return json(200, { ok: true, state: "issue_open" });
     }
@@ -534,6 +640,9 @@ export default async function handler(req: Req, res: Res) {
           ? { "metadata[gh_reclean_date]": parsed.data.reclean_date }
           : {}),
       });
+      if (row) {
+        await logEvent(row.id, bookingId, "owner", "issue_resolved", { reclean_date: parsed.data.reclean_date ?? "" });
+      }
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
     }
@@ -550,6 +659,7 @@ export default async function handler(req: Req, res: Res) {
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "approved",
       });
+      if (row) await logEvent(row.id, bookingId, "owner", "report_approved", { via: "operator_approve" });
       log("approve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
     }
@@ -589,6 +699,21 @@ export default async function handler(req: Req, res: Res) {
       if (amountCents !== quotedCents) {
         logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
         return json(409, { ok: false, error: "amount_mismatch" });
+      }
+      // Agreed-price invariant: the amount must be THIS booking's pinned
+      // price (gh_visits.amount_cents, fixed server-side at submission) —
+      // or, for a bound booking, its own recurring price. Anything else
+      // means the surfaces disagree: flag the booking for a price review
+      // and stop the payment instead of picking a number.
+      if (row?.amount_cents) {
+        const recurringCents = bound ? parseInt(meta["gh_recurring_price_cents"] ?? "", 10) : NaN;
+        if (amountCents !== row.amount_cents && amountCents !== recurringCents) {
+          await logEvent(row.id, bookingId, "system", "price_review_flagged", {
+            amount_cents: amountCents, pinned_cents: row.amount_cents,
+          });
+          logErr("charge", `blocked: price review — amount ${amountCents} vs pinned ${row.amount_cents}`);
+          return json(409, { ok: false, error: "price_review_required", pinned_cents: row.amount_cents });
+        }
       }
       // Idempotency: one payment per booking+report version, no matter how
       // many times this is called or how often Stripe redelivers webhooks.
@@ -932,6 +1057,9 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
+      if (row) {
+        await logEvent(row.id, bookingId, "owner", "date_proposed", { alt_dates: alts.join(",") });
+      }
       log("decline_date", { booking: bookingId, alts: alts.length, emailed });
       return json(200, { ok: true, state: "date_declined", alt_dates: alts, email_sent: emailed });
     }
@@ -950,6 +1078,9 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
       });
+      if (row) {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { cleaner_name: name.slice(0, 80) });
+      }
       log("set_cleaner", { booking: bookingId });
       return json(200, { ok: true, cleaner_name: name });
     }

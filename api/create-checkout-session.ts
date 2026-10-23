@@ -437,16 +437,39 @@ export default async function handler(req: Req, res: Res) {
       }
     } else {
       // Link the existing customer to this booking (server-verified email only).
+      // The customer is shared by every booking of this email, and its
+      // metadata doubles as the lifecycle record — so rebinding MUST clear
+      // the previous booking's lifecycle keys. Anything left behind (a
+      // confirmed date, a sent report, a cleaner, an amount) would leak
+      // into THIS booking's pages and charges. Booking-scoped truth lives
+      // in gh_visits/gh_events and is re-hydrated on demand; clearing here
+      // loses nothing.
+      const clearStale: Record<string, string> = {};
+      for (const k of [
+        "gh_booking_confirmed", "gh_confirmed_date", "gh_confirmed_window",
+        "gh_proposed_date", "gh_alt_dates", "gh_cleaner_name", "gh_cleaner_photo",
+        "gh_report_sent_at", "gh_report_version", "gh_report_amount_cents",
+        "gh_report_bounced", "gh_report_email_id", "gh_rp_source",
+        "gh_rp_0", "gh_rp_1", "gh_rp_2", "gh_rp_3",
+        "gh_issue_open", "gh_issue_ever", "gh_issue_reason", "gh_issue_room",
+        "gh_issue_resolved_at", "gh_reclean_date",
+        "gh_cancel_scope", "gh_cancel_fee_cents", "gh_cancelled_at",
+        "gh_receipt_email_id", "gh_charge_id", "gh_last_payment",
+        "gh_reminded_at", "gh_card_email_sent",
+        "gh_postpay_issue", "gh_postpay_issue_reason", "gh_postpay_issue_room", "gh_postpay_issue_at",
+        "gh_report_client_action", "gh_report_responded_at", "gh_access_notes", "gh_no_photo_zones",
+      ]) clearStale[`metadata[${k}]`] = "";
       try {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+          ...clearStale,
           "metadata[gh_booking_id]": bookingId,
           "metadata[gh_state]": "awaiting_card",
           ...(toCents(bookingSummary.first) !== null
             ? { "metadata[gh_first_price_cents]": String(toCents(bookingSummary.first)) }
-            : {}),
+            : { "metadata[gh_first_price_cents]": "" }),
           ...(toCents(bookingSummary.recurring) !== null
             ? { "metadata[gh_recurring_price_cents]": String(toCents(bookingSummary.recurring)) }
-            : {}),
+            : { "metadata[gh_recurring_price_cents]": "" }),
         }, `customer_meta_${bookingId}`);
       } catch (err) {
         logErr("customer_meta", err);

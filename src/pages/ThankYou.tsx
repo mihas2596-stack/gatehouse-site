@@ -90,6 +90,10 @@ const ThankYou = () => {
   const recap = submission.recap ?? {};
 
   const [card, setCard] = useState<CardState>({ kind: "checking", slow: false });
+  // The server booking summary from the latest card-status response —
+  // kept for EVERY state, so a revisit (no router state) still shows the
+  // real service, price and requested date in states A and D too.
+  const [statusBooking, setStatusBooking] = useState<CardStatusBooking | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(false);
   const slowTimer = useRef<number | null>(null);
@@ -109,6 +113,7 @@ const ThankYou = () => {
       .then((data: { booking?: CardStatusBooking | null }) => {
         if (slowTimer.current) window.clearTimeout(slowTimer.current);
         const b = data.booking ?? null;
+        setStatusBooking(b);
         if (b?.has_card === "1" && b?.booking_confirmed === "1") {
           setCard({ kind: "confirmed", booking: b });
         } else if (b?.has_card === "1") {
@@ -177,11 +182,12 @@ const ThankYou = () => {
 
   // Summary values: the fresh submission wins; a revisit falls back to the
   // server-verified booking summary from card-status.
-  const statusBooking = card.kind === "saved" || card.kind === "confirmed" ? card.booking : null;
-  const first = typeof plan.first === "number" ? plan.first : parseMoney(statusBooking?.first ?? recapPriceFirst(recap.price));
-  const recurring = typeof plan.recurring === "number" ? plan.recurring : parseMoney(statusBooking?.recurring);
-  const serviceLabel = plan.service ?? statusBooking?.service ?? "Cleaning";
-  const requestedDate = recap.date ?? statusBooking?.date ?? "";
+  const cardBooking = card.kind === "saved" || card.kind === "confirmed" ? card.booking : null;
+  const summaryBooking = statusBooking ?? cardBooking;
+  const first = typeof plan.first === "number" ? plan.first : parseMoney(summaryBooking?.first ?? recapPriceFirst(recap.price));
+  const recurring = typeof plan.recurring === "number" ? plan.recurring : parseMoney(summaryBooking?.recurring);
+  const serviceLabel = plan.service ?? summaryBooking?.service ?? "Cleaning";
+  const requestedDate = recap.date ?? summaryBooking?.date ?? "";
   const confirmedDate = card.kind === "confirmed" ? card.booking?.confirmed_date ?? "" : "";
   const confirmedWindow = card.kind === "confirmed" ? card.booking?.confirmed_window ?? "" : "";
 

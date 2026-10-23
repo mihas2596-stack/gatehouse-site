@@ -24,6 +24,84 @@
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
 import { sendReceiptEmailOnce } from "./booking-action.js";
+import { dbConfigured, dbSelect, logEvent } from "./_db.js";
+
+// Booking-scoped pass: the metadata search only sees the booking the
+// shared customer is currently bound to. A report sent for another
+// booking of the same client lives in gh_visits — find those rows,
+// resolve the client by email and hydrate the customer's metadata from
+// the booking's own record before the charge/reminder selection runs.
+type BookingRow = {
+  id: string; booking_id: string; status: string | null;
+  amount_cents: number | null; cleaner_name: string | null;
+  client_email: string | null; report_sent_at: string | null;
+  report_bounced: boolean | null; report_status: string | null;
+};
+type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
+  if (!dbConfigured()) return [];
+  return dbSelect<BookingEvent>(
+    "gh_events",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
+  );
+}
+const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
+  events.find((e) => e.event === name) ?? null;
+const evStr = (ev: BookingEvent | null, key: string): string =>
+  ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+async function findCustomerByEmail(
+  secretKey: string,
+  email: string,
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
+  const query = `email:'${email.replace(/'/g, "")}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
+  const list = res.ok
+    ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
+    : [];
+  return list.length > 0
+    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+    : null;
+}
+async function hydrateCustomerMeta(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+  row: BookingRow,
+  events: BookingEvent[],
+): Promise<void> {
+  const confirmEv = latestEvent(events, "visit_confirmed");
+  const opened = latestEvent(events, "issue_opened");
+  const resolved = latestEvent(events, "issue_resolved");
+  const issueOpen = Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
+  const cancelledEv = latestEvent(events, "visit_cancelled");
+  const approvedEv = latestEvent(events, "report_approved");
+  const remindedEv = latestEvent(events, "reminder_sent");
+  const state = row.status === "paid" ? "paid"
+    : cancelledEv ? "cancelled"
+    : issueOpen ? "issue_open"
+    : approvedEv ? "approved"
+    : row.report_sent_at ? "report_sent"
+    : customer.metadata["gh_state"] ?? "";
+  const values: Record<string, string> = {
+    gh_booking_id: row.booking_id,
+    gh_state: state,
+    gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_recurring_price_cents: "",
+    gh_report_sent_at: row.report_sent_at ?? "",
+    gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+    gh_report_bounced: row.report_bounced ? "1" : "",
+    gh_booking_confirmed: confirmEv ? "1" : "",
+    gh_confirmed_date: evStr(confirmEv, "date"),
+    gh_confirmed_window: evStr(confirmEv, "window"),
+    gh_cleaner_name: row.cleaner_name ?? "",
+    gh_issue_open: issueOpen ? "1" : "",
+    gh_issue_ever: opened ? "1" : "",
+    gh_reminded_at: remindedEv ? remindedEv.created_at : "",
+  };
+  const params: Record<string, string> = {};
+  for (const [k, v] of Object.entries(values)) params[`metadata[${k}]`] = v;
+  await stripePost(secretKey, `/customers/${customer.id}`, params);
+  Object.assign(customer.metadata, values);
+}
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const MAX_PER_RUN = 25;
@@ -214,6 +292,28 @@ export default async function handler(req: Req, res: Res) {
   try {
     const now = Date.now();
     const candidates = await findReportSentCustomers(STRIPE_SECRET_KEY);
+    // DB pass: reports sent for bookings the shared customer is not
+    // currently bound to (invisible to the metadata search above).
+    try {
+      if (dbConfigured()) {
+        const rows = await dbSelect<BookingRow>(
+          "gh_visits",
+          "report_status=eq.sent&order=report_sent_at.asc&limit=50",
+        );
+        const seen = new Set(candidates.map((c) => c.metadata["gh_booking_id"]));
+        for (const r of rows) {
+          if (!r.booking_id || seen.has(r.booking_id) || !r.client_email) continue;
+          const cust = await findCustomerByEmail(STRIPE_SECRET_KEY, r.client_email);
+          if (!cust) continue;
+          const events = await bookingEvents(r.booking_id);
+          await hydrateCustomerMeta(STRIPE_SECRET_KEY, cust, r, events);
+          candidates.push({ id: cust.id, email: cust.email, name: cust.name, metadata: cust.metadata });
+          seen.add(r.booking_id);
+        }
+      }
+    } catch (err) {
+      logErr("db_pass", err);
+    }
     // Reconcile saved cards with Stripe before selecting due charges: a
     // booking whose card-save webhook was missed still has its card.
     for (const c of candidates) {
@@ -346,7 +446,15 @@ export default async function handler(req: Req, res: Res) {
           if (resp.ok) {
             await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
               "metadata[gh_reminded_at]": new Date().toISOString(),
+              ...(m["gh_booking_id"] ? { "metadata[gh_reminder_for]": m["gh_booking_id"] } : {}),
             });
+            if (m["gh_booking_id"]) {
+              const vrows = await dbSelect<{ id: string }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
+              );
+              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", {});
+            }
             reminded++;
           }
         } catch (err) {
