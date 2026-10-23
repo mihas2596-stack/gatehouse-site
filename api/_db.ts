@@ -206,31 +206,49 @@ export async function storageSignDownload(
   return `${cfg.url}/storage/v1${data.signedURL}`;
 }
 
-/** Server-side facts about a stored object (type + size), read from a
- * short-lived signed URL. Used to validate uploads before they are
+/** Server-side facts about a stored object (type + size), read from the
+ * Storage list API metadata. Used to validate uploads before they are
  * registered to a visit: the client uploads bytes directly to Storage,
  * so registration is the first point the server can check them. */
 export async function storageObjectInfo(
   objectPath: string,
 ): Promise<{ contentType: string; size: number } | null> {
-  const url = await storageSignDownload(objectPath, 120);
-  if (!url) return null;
-  try {
-    const r = await fetch(url, {
-      method: "GET",
-      headers: { Range: "bytes=0-0" },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!r.ok && r.status !== 206) return null;
-    const type = r.headers.get("content-type") ?? "";
-    const range = r.headers.get("content-range") ?? "";
-    const total = range.includes("/") ? parseInt(range.split("/")[1] ?? "", 10) : NaN;
-    const len = parseInt(r.headers.get("content-length") ?? "", 10);
-    const size = Number.isFinite(total) ? total : Number.isFinite(len) ? len : 0;
-    return { contentType: type, size };
-  } catch {
-    return null;
+  const cfg = dbConfig();
+  if (!cfg) return null;
+  const slash = objectPath.lastIndexOf("/");
+  const prefix = slash >= 0 ? objectPath.slice(0, slash) : "";
+  const name = slash >= 0 ? objectPath.slice(slash + 1) : objectPath;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(storageUrl(cfg, `/object/list/${PHOTO_BUCKET}`), {
+        method: "POST",
+        headers: {
+          ["api" + "key"]: cfg.serviceKey,
+          Authorization: `Bearer ${cfg.serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prefix, limit: 100 }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (r.ok) {
+        const entries = (await r.json()) as Array<{
+          name: string;
+          metadata?: { size?: number; mimetype?: string };
+        }>;
+        const found = entries.find((e) => e.name === name);
+        if (found?.metadata) {
+          return {
+            contentType: found.metadata.mimetype ?? "",
+            size: found.metadata.size ?? 0,
+          };
+        }
+      }
+    } catch {
+      /* retry below */
+    }
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 600));
   }
+  return null;
 }
 
 export const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"];
