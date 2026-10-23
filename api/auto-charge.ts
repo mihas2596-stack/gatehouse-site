@@ -153,6 +153,35 @@ function authed(req: Req): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Reconcile the saved-card state with Stripe itself: the webhook normally
+// maintains gh_payment_method, but a missing webhook secret or a dropped
+// event must not hide a card that Stripe actually holds. Backfills the
+// metadata cache when a card is found.
+async function reconcileCard(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+): Promise<string> {
+  const existing = customer.metadata["gh_payment_method"] ?? "";
+  if (existing) return existing;
+  const res = await stripeGet(
+    secretKey,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+  );
+  if (!res.ok) return "";
+  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  const pm = list[0]?.id ?? "";
+  if (!pm) return "";
+  const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
+  const state = customer.metadata["gh_state"] ?? "";
+  if (!state || state === "awaiting_card" || state === "card_failed") {
+    patch["metadata[gh_state]"] = "card_ready";
+  }
+  await stripePost(secretKey, `/customers/${customer.id}`, patch);
+  customer.metadata["gh_payment_method"] = pm;
+  if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
+  return pm;
+}
+
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
   const log = (step: string, info?: unknown) =>
@@ -185,6 +214,17 @@ export default async function handler(req: Req, res: Res) {
   try {
     const now = Date.now();
     const candidates = await findReportSentCustomers(STRIPE_SECRET_KEY);
+    // Reconcile saved cards with Stripe before selecting due charges: a
+    // booking whose card-save webhook was missed still has its card.
+    for (const c of candidates) {
+      if (!c.metadata["gh_payment_method"]) {
+        try {
+          await reconcileCard(STRIPE_SECRET_KEY, c);
+        } catch {
+          /* selection below simply skips it, as before */
+        }
+      }
+    }
     const due = selectDue(candidates, now).slice(0, MAX_PER_RUN);
     let charged = 0;
     let failed = 0;

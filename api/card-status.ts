@@ -192,23 +192,152 @@ async function stripeGet(
 const q = (v: string | string[] | undefined): string =>
   Array.isArray(v) ? v[0] ?? "" : v ?? "";
 
+async function stripePost(
+  secretKey: string,
+  path: string,
+  params: Record<string, string>,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const response = await fetch(`${STRIPE_API}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(15000),
+  });
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    /* ignore */
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+// Reconcile the saved-card state with Stripe itself. The webhook normally
+// maintains gh_payment_method on the customer, but a missing webhook secret
+// or a dropped event must not make the whole site believe there is no card:
+// Stripe's own payment-method list is the source of truth. When a card is
+// found there, the metadata cache is backfilled so every other reader
+// (visit page, operator actions, auto-charge) sees the same truth.
+async function reconcileCard(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+): Promise<string> {
+  const existing = customer.metadata["gh_payment_method"] ?? "";
+  if (existing) return existing;
+  const res = await stripeGet(
+    secretKey,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+  );
+  if (!res.ok) return "";
+  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  const pm = list[0]?.id ?? "";
+  if (!pm) return "";
+  const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
+  const state = customer.metadata["gh_state"] ?? "";
+  if (!state || state === "awaiting_card" || state === "card_failed") {
+    patch["metadata[gh_state]"] = "card_ready";
+  }
+  await stripePost(secretKey, `/customers/${customer.id}`, patch);
+  customer.metadata["gh_payment_method"] = pm;
+  if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
+  return pm;
+}
+
+const fmtMoney = (dollars: string): string => {
+  const n = parseFloat(dollars);
+  if (!Number.isFinite(n)) return dollars ? `$${dollars}` : "";
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+};
+
+// One-time "card saved" email. Guarded by gh_card_email_sent on the Stripe
+// customer: a claim is written before sending and cleared on failure, so
+// refreshes, repeat status checks and the webhook cannot duplicate it.
+async function maybeSendCardSavedEmail(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string>; email?: string; name?: string },
+  payload: BookingPayload | null,
+): Promise<void> {
+  const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+  if (!RESEND_API_KEY) return;
+  if (customer.metadata["gh_card_email_sent"]) return;
+  const to = (customer.email ?? payload?.email ?? "").trim();
+  if (!to) return;
+  const claim = String(Date.now());
+  await stripePost(secretKey, `/customers/${customer.id}`, {
+    "metadata[gh_card_email_sent]": claim,
+  });
+  customer.metadata["gh_card_email_sent"] = claim;
+  const firstName = (customer.name ?? payload?.name ?? "").trim().split(/\s+/)[0] || "there";
+  const firstCents = parseInt(customer.metadata["gh_first_price_cents"] ?? "", 10);
+  const price = Number.isFinite(firstCents) && firstCents > 0
+    ? fmtMoney(String(firstCents / 100))
+    : fmtMoney(payload?.first ?? "");
+  const service = payload?.service || "Standard cleaning";
+  const date = payload?.date ?? "";
+  let visitUrl = "https://www.gatehousehomecleaning.com/visit";
+  if (payload?.bid) {
+    const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
+    visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
+  }
+  const text =
+    `Hi ${firstName},\n\n` +
+    "Your card is saved and your request is received.\n\n" +
+    "Card saved \u00b7 $0 charged today.\n\n" +
+    "Your visit date isn't confirmed yet. We'll confirm your date and arrival window by email within one business day.\n\n" +
+    `Your request: ${service}${price ? ` \u2014 first visit ${price}` : ""}${date ? ` \u00b7 requested date ${date}` : ""}.\n\n` +
+    "Your visit page \u2014 status, your cleaner, reschedule or cancel:\n" +
+    `${visitUrl}\n\n` +
+    "Nick\n\nGatehouse Home Cleaning\n\nhello@gatehousehomecleaning.com";
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [to],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: "Card saved \u2014 your request is received",
+        text,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (resp.ok) {
+      const data = (await resp.json().catch(() => ({}))) as { id?: string };
+      await stripePost(secretKey, `/customers/${customer.id}`, {
+        "metadata[gh_card_email_sent]": "1",
+        ...(data.id ? { "metadata[gh_card_email_id]": data.id } : {}),
+      });
+      customer.metadata["gh_card_email_sent"] = "1";
+    } else {
+      await stripePost(secretKey, `/customers/${customer.id}`, { "metadata[gh_card_email_sent]": "" });
+      customer.metadata["gh_card_email_sent"] = "";
+    }
+  } catch {
+    await stripePost(secretKey, `/customers/${customer.id}`, { "metadata[gh_card_email_sent]": "" }).catch(() => undefined);
+    customer.metadata["gh_card_email_sent"] = "";
+  }
+}
+
 // Find the Stripe Customer carrying this booking_id in metadata.
 async function findCustomerByBooking(
   secretKey: string,
   bookingId: string,
-): Promise<{ id: string; metadata: Record<string, string> } | null> {
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `metadata['gh_booking_id']:'${bookingId.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "1" })}`);
   if (res.ok) {
-    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {} };
+    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
+    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name };
     return null;
   }
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
   if (!listRes.ok) return null;
-  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
-  return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
+  return found ? { id: found.id, metadata: found.metadata ?? {}, email: found.email, name: found.name } : null;
 }
 
 export default async function handler(req: Req, res: Res) {
@@ -275,7 +404,12 @@ export default async function handler(req: Req, res: Res) {
         try {
           const cust = await findCustomerByBooking(revisitKey, bookingId);
           if (cust) {
-            if (cust.metadata["gh_payment_method"]) booking.has_card = "1";
+            const pm = await reconcileCard(revisitKey, cust);
+            if (pm) {
+              booking.has_card = "1";
+              await maybeSendCardSavedEmail(revisitKey, cust, p);
+            }
+            if (cust.metadata["gh_state"]) booking.card_state = cust.metadata["gh_state"];
             if (cust.metadata["gh_booking_confirmed"] === "1") {
               booking.booking_confirmed = "1";
               if (cust.metadata["gh_confirmed_date"]) booking.confirmed_date = cust.metadata["gh_confirmed_date"];
@@ -345,6 +479,29 @@ export default async function handler(req: Req, res: Res) {
     }
 
     // Verified: a card was saved on the session's customer for this booking.
+    // Backfill the customer metadata right here instead of relying solely
+    // on the webhook, then send the one-time card-saved email.
+    try {
+      const custId = typeof s["customer"] === "string" ? (s["customer"] as string) : "";
+      if (custId && bookingId) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(custId)}`);
+        if (custRes.ok) {
+          const cust = {
+            id: custId,
+            metadata: (custRes.data["metadata"] as Record<string, string> | undefined) ?? {},
+            email: typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : undefined,
+            name: typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : undefined,
+          };
+          const pm = await reconcileCard(STRIPE_SECRET_KEY, cust);
+          if (pm) {
+            if (booking) booking.has_card = "1";
+            await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, null);
+          }
+        }
+      }
+    } catch {
+      /* verification already succeeded — backfill is best-effort */
+    }
     // NOTE: card numbers / CVC never leave Stripe; we only see IDs.
     res.status(200).json({
       requestId,

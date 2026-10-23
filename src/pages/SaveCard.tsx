@@ -143,9 +143,14 @@ const SaveCard = () => {
               day. Nothing was charged — your card is charged when you approve your photo report,
               or 24 hours after we send it if you haven&apos;t reported an issue.
             </p>
-            <Button variant="hero" size="lg" asChild>
-              <Link to="/">Back to Home</Link>
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button variant="hero" size="lg" asChild>
+                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
+              </Button>
+              <Button variant="outline" size="lg" asChild>
+                <Link to="/">Back to Home</Link>
+              </Button>
+            </div>
           </>
         )}
         {(verify.kind === "pending" || verify.kind === "failed" || verify.kind === "unknown") && (
@@ -186,9 +191,14 @@ const SaveCard = () => {
               photo report, or automatically 24 hours after we send it if you haven&apos;t reported
               an issue.
             </p>
-            <Button variant="hero" size="lg" asChild>
-              <Link to="/">Back to Home</Link>
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button variant="hero" size="lg" asChild>
+                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
+              </Button>
+              <Button variant="outline" size="lg" asChild>
+                <Link to="/">Back to Home</Link>
+              </Button>
+            </div>
           </>
         )}
         {verify.kind === "none" && hasCard && !isConfirmed && (
@@ -199,9 +209,14 @@ const SaveCard = () => {
               Your card is already on file for this booking — no need to save it again. We&apos;ll
               confirm availability for your requested date by email within one business day.
             </p>
-            <Button variant="hero" size="lg" asChild>
-              <Link to="/">Back to Home</Link>
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button variant="hero" size="lg" asChild>
+                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
+              </Button>
+              <Button variant="outline" size="lg" asChild>
+                <Link to="/">Back to Home</Link>
+              </Button>
+            </div>
           </>
         )}
         {verify.kind === "none" && !hasCard && (

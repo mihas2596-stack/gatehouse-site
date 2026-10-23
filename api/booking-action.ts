@@ -298,6 +298,35 @@ const DEFAULT_CHECKLIST = {
   ],
 };
 
+// Reconcile the saved-card state with Stripe itself: the webhook normally
+// maintains gh_payment_method, but a missing webhook secret or a dropped
+// event must not hide a card that Stripe actually holds. Backfills the
+// metadata cache when a card is found.
+async function reconcileCard(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+): Promise<string> {
+  const existing = customer.metadata["gh_payment_method"] ?? "";
+  if (existing) return existing;
+  const res = await stripeGet(
+    secretKey,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+  );
+  if (!res.ok) return "";
+  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  const pm = list[0]?.id ?? "";
+  if (!pm) return "";
+  const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
+  const state = customer.metadata["gh_state"] ?? "";
+  if (!state || state === "awaiting_card" || state === "card_failed") {
+    patch["metadata[gh_state]"] = "card_ready";
+  }
+  await stripePost(secretKey, `/customers/${customer.id}`, patch);
+  customer.metadata["gh_payment_method"] = pm;
+  if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
+  return pm;
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
@@ -352,6 +381,11 @@ export default async function handler(req: Req, res: Res) {
     if (!customer) {
       logErr("lookup", "booking not found");
       return json(404, { ok: false, error: "booking_not_found" });
+    }
+    try {
+      await reconcileCard(STRIPE_SECRET_KEY, customer);
+    } catch {
+      /* cached metadata still applies */
     }
     const meta = customer.metadata;
     const state = meta["gh_state"] ?? "unknown";
@@ -419,6 +453,13 @@ export default async function handler(req: Req, res: Res) {
         const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
         if (custEmail) {
           const firstName = custName.trim().split(/\s+/)[0] || "there";
+          const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId,
+            email: custEmail,
+            name: custName,
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const visitLink = `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`;
           const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
           const priceLine = Number.isFinite(cents) && cents > 0
             ? `\nFirst visit: $${(cents / 100).toFixed(2).replace(/\.00$/, "")}.`
@@ -438,6 +479,7 @@ export default async function handler(req: Req, res: Res) {
                 text:
                   `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${priceLine}\n\n` +
                   "Your card is charged only after the visit — when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.\n\n" +
+                  `Your visit page — status, your cleaner, reschedule or cancel:\n${visitLink}\n\n` +
                   "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
               }),
               signal: AbortSignal.timeout(15000),

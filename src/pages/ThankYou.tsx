@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
@@ -21,51 +21,116 @@ type SubmissionState = {
   plan?: Plan;
 };
 
+type CardStatusBooking = {
+  first?: string;
+  recurring?: string;
+  service?: string;
+  date?: string;
+  has_card?: string;
+  card_state?: string;
+  booking_confirmed?: string;
+  confirmed_date?: string;
+  confirmed_window?: string;
+};
+
+// Card states, always driven by the server (card-status reconciles with
+// Stripe itself). A URL parameter or a return from Stripe is never proof.
 type CardState =
-  | { kind: "checking" }
+  | { kind: "checking"; slow: boolean }
   | { kind: "needed" }
-  | { kind: "saved" }
-  | { kind: "confirmed"; date?: string; window?: string };
+  | { kind: "failed" }
+  | { kind: "saved"; booking: CardStatusBooking | null }
+  | { kind: "confirmed"; booking: CardStatusBooking | null };
+
+const fmtMoney = (n: number): string => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
+const parseMoney = (v?: string): number | null => {
+  if (!v) return null;
+  const n = parseFloat(v.replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) ? n : null;
+};
+
+const STEPS = [
+  "We confirm your visit.",
+  "We clean your home.",
+  "You receive your photo report.",
+  "You review the report and pay.",
+];
 
 const ThankYou = () => {
   const { state } = useLocation();
+  const [searchParams] = useSearchParams();
   const submission = (state ?? {}) as SubmissionState;
-  const received = submission.submitted === true;
-  const isBooking = submission.kind === "booking";
-  const bt = submission.bt ?? "";
+
+  // The booking token comes from the submit navigation, an explicit ?bt=
+  // link, or this tab's session (so a refresh or a reopened tab still
+  // shows the true status instead of a generic page).
+  const [bt] = useState<string>(() => {
+    if (submission.bt) return submission.bt;
+    const fromUrl = searchParams.get("bt");
+    if (fromUrl) return fromUrl;
+    try {
+      return sessionStorage.getItem("gh_last_bt") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  useEffect(() => {
+    if (submission.bt) {
+      try {
+        sessionStorage.setItem("gh_last_bt", submission.bt);
+      } catch {
+        /* private mode */
+      }
+    }
+  }, [submission.bt]);
+
+  const received = submission.submitted === true || bt !== "";
+  const isBooking = submission.kind === "booking" || (submission.kind === undefined && bt !== "");
   const plan = submission.plan ?? {};
   const recap = submission.recap ?? {};
 
-  const [card, setCard] = useState<CardState>({ kind: bt ? "checking" : "needed" });
+  const [card, setCard] = useState<CardState>({ kind: "checking", slow: false });
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(false);
+  const slowTimer = useRef<number | null>(null);
 
-  // The merged finish step still never guesses card state: if the booking
-  // already has a verified card (returning client, second tab), this page
-  // shows the saved state instead of a second add-card button.
-  useEffect(() => {
-    if (!bt) return;
-    let cancelled = false;
+  const checkCard = useCallback(() => {
+    if (!bt) {
+      setCard({ kind: "needed" });
+      return;
+    }
+    setCard({ kind: "checking", slow: false });
+    if (slowTimer.current) window.clearTimeout(slowTimer.current);
+    slowTimer.current = window.setTimeout(() => {
+      setCard((c) => (c.kind === "checking" ? { kind: "checking", slow: true } : c));
+    }, 8000);
     fetch(`/api/card-status?bt=${encodeURIComponent(bt)}`)
       .then((r) => r.json())
-      .then((data: { booking?: { has_card?: string; booking_confirmed?: string; confirmed_date?: string; confirmed_window?: string } | null }) => {
-        if (cancelled) return;
-        const b = data.booking;
+      .then((data: { booking?: CardStatusBooking | null }) => {
+        if (slowTimer.current) window.clearTimeout(slowTimer.current);
+        const b = data.booking ?? null;
         if (b?.has_card === "1" && b?.booking_confirmed === "1") {
-          setCard({ kind: "confirmed", date: b.confirmed_date, window: b.confirmed_window });
+          setCard({ kind: "confirmed", booking: b });
         } else if (b?.has_card === "1") {
-          setCard({ kind: "saved" });
+          setCard({ kind: "saved", booking: b });
+        } else if (b?.card_state === "card_failed") {
+          setCard({ kind: "failed" });
         } else {
           setCard({ kind: "needed" });
         }
       })
       .catch(() => {
-        if (!cancelled) setCard({ kind: "needed" });
+        if (slowTimer.current) window.clearTimeout(slowTimer.current);
+        setCard({ kind: "needed" });
       });
-    return () => {
-      cancelled = true;
-    };
   }, [bt]);
+
+  useEffect(() => {
+    checkCard();
+    return () => {
+      if (slowTimer.current) window.clearTimeout(slowTimer.current);
+    };
+  }, [checkCard]);
 
   const startCard = async () => {
     if (!bt || starting) return;
@@ -110,145 +175,236 @@ const ThankYou = () => {
     );
   }
 
+  // Summary values: the fresh submission wins; a revisit falls back to the
+  // server-verified booking summary from card-status.
+  const statusBooking = card.kind === "saved" || card.kind === "confirmed" ? card.booking : null;
+  const first = typeof plan.first === "number" ? plan.first : parseMoney(statusBooking?.first ?? recapPriceFirst(recap.price));
+  const recurring = typeof plan.recurring === "number" ? plan.recurring : parseMoney(statusBooking?.recurring);
+  const serviceLabel = plan.service ?? statusBooking?.service ?? "Cleaning";
+  const requestedDate = recap.date ?? statusBooking?.date ?? "";
+  const confirmedDate = card.kind === "confirmed" ? card.booking?.confirmed_date ?? "" : "";
+  const confirmedWindow = card.kind === "confirmed" ? card.booking?.confirmed_window ?? "" : "";
+
+  const summaryCard = (
+    <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
+      <dl className="space-y-3 text-base">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+          <dt className="font-semibold">Service</dt>
+          <dd>
+            {serviceLabel}
+            {plan.firstIsDeep ? " · first visit is a deep clean" : ""}
+          </dd>
+        </div>
+        {first !== null && (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+            <dt className="font-semibold">First visit</dt>
+            <dd><strong>{fmtMoney(first)}</strong></dd>
+          </div>
+        )}
+        {recurring !== null && (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+            <dt className="font-semibold">Then</dt>
+            <dd>
+              <strong>{fmtMoney(recurring)}</strong> per visit, every other week
+            </dd>
+          </div>
+        )}
+        {confirmedDate ? (
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <dt className="font-semibold">Confirmed visit</dt>
+            <dd className="flex flex-wrap items-center gap-2">
+              <span>
+                {formatDateLong(confirmedDate)}
+                {confirmedWindow ? <> · {confirmedWindow}</> : null}
+              </span>
+              <span className="rounded-full bg-sage/40 px-2.5 py-0.5 text-xs font-semibold">Confirmed</span>
+            </dd>
+          </div>
+        ) : requestedDate ? (
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <dt className="font-semibold">Requested date</dt>
+            <dd className="flex flex-wrap items-center gap-2">
+              <span>
+                {formatDateLong(requestedDate)}
+                {recap.window ? <> · {recap.window}</> : null}
+              </span>
+              <span className="rounded-full bg-peach/50 px-2.5 py-0.5 text-xs font-semibold">Awaiting confirmation</span>
+            </dd>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-border pt-3">
+          <dt className="font-semibold">Due today</dt>
+          <dd><strong>$0</strong></dd>
+        </div>
+      </dl>
+    </div>
+  );
+
+  const emailNotice = submission.customerEmailSent === false && (
+    <p className="text-sm text-muted-foreground mb-6">
+      Your request reached us safely — no need to send it again. The automatic confirmation email
+      didn&apos;t go through (check your spam folder just in case); we&apos;ll still confirm
+      everything by email within one business day.
+    </p>
+  );
+
+  const shell = (children: React.ReactNode) => (
+    <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
+      <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
+      <div className="container max-w-xl py-12 pb-24 md:pb-12">{children}</div>
+    </div>
+  );
+
+  // State B — checking with Stripe.
+  if (card.kind === "checking") {
+    return shell(
+      <div className="text-center">
+        <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" strokeWidth={1.5} aria-hidden="true" />
+        <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Checking your card…</h1>
+        <p className="text-lg text-foreground mb-6">
+          We&apos;re confirming with Stripe whether your card was saved. This usually takes a few seconds.
+        </p>
+        {card.slow && (
+          <>
+            <p className="text-base text-muted-foreground mb-6">
+              Still checking — your request is saved either way. You can keep waiting, check again, or
+              email us at{" "}
+              <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">
+                hello@gatehousehomecleaning.com
+              </a>
+              .
+            </p>
+            <Button variant="hero" size="lg" onClick={checkCard}>
+              Check again
+            </Button>
+          </>
+        )}
+      </div>,
+    );
+  }
+
+  // State C — card saved (visit not yet confirmed, or confirmed).
   if (card.kind === "saved" || card.kind === "confirmed") {
-    return (
-      <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
-        <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
-        <div className="container max-w-xl py-12 pb-24 text-center md:pb-12">
+    return shell(
+      <>
+        <div className="text-center">
           <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved. Your request is complete.</h1>
+          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">You&apos;re all set — your request is received</h1>
+          {emailNotice}
+          <p className="text-lg text-foreground mb-2">
+            <strong>Card saved · $0 charged today</strong>
+          </p>
           <p className="text-lg text-foreground mb-6">
             {card.kind === "confirmed" ? (
               <>
                 Your visit is confirmed
-                {card.date ? <> for <strong>{formatDateLong(card.date)}</strong></> : null}
-                {card.window ? <> · {card.window}</> : null}. Your card is charged when you approve
-                your photo report, or 24 hours after we send it if you haven&apos;t reported an issue.
+                {confirmedDate ? <> for <strong>{formatDateLong(confirmedDate)}</strong></> : null}
+                {confirmedWindow ? <> · {confirmedWindow}</> : null}.
               </>
             ) : (
-              <>We&apos;ll confirm availability for your requested date by email within one business day.</>
+              <>No further action is needed right now. We&apos;ll confirm your visit date and arrival window by email within one business day.</>
             )}
           </p>
-          <Button variant="hero" size="lg" asChild>
-            <Link to="/">Back to Home</Link>
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Booking received: ONE finish step. Summary + one explanation + one
-  // button that opens Stripe directly — no second save-card screen.
-  const first = typeof plan.first === "number" ? plan.first : null;
-  const recurring = typeof plan.recurring === "number" ? plan.recurring : null;
-  return (
-    <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
-      <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Finish Your Request | Gatehouse Home Cleaning" description="Add your card to finish your cleaning request. $0 charged today." noindex />
-      <div className="container max-w-xl py-12 pb-24 md:pb-12">
-        <div className="text-center">
-          <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Finish your cleaning request</h1>
-          {submission.customerEmailSent === false && (
-            <p className="text-sm text-muted-foreground mb-6">
-              Your request reached us safely — no need to send it again. The automatic confirmation email
-              didn&apos;t go through (check your spam folder just in case); we&apos;ll still confirm
-              everything by email within one business day.
+          {recap.email && (
+            <p className="text-base text-muted-foreground mb-6">
+              Confirmation goes to <strong>{recap.email}</strong>
             </p>
           )}
         </div>
 
+        {summaryCard}
+
         <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
-          <dl className="space-y-3 text-base">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-              <dt className="font-semibold">Service</dt>
-              <dd>
-                {plan.service ?? "Cleaning"}
-                {plan.firstIsDeep ? " · first visit is a deep clean" : ""}
-              </dd>
-            </div>
-            {first !== null && (
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-                <dt className="font-semibold">First visit</dt>
-                <dd><strong>${first}</strong></dd>
-              </div>
-            )}
-            {recurring !== null && (
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-                <dt className="font-semibold">Then</dt>
-                <dd>
-                  <strong>${recurring}</strong> per visit, every other week
-                </dd>
-              </div>
-            )}
-            {recap.date && (
-              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-                <dt className="font-semibold">Requested date</dt>
-                <dd className="flex flex-wrap items-center gap-2">
-                  <span>
-                    {formatDateLong(recap.date)}
-                    {recap.window ? <> · {recap.window}</> : null}
-                  </span>
-                  <span className="rounded-full bg-peach/50 px-2.5 py-0.5 text-xs font-semibold">Awaiting confirmation</span>
-                </dd>
-              </div>
-            )}
-            <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-border pt-3">
-              <dt className="font-semibold">Due today</dt>
-              <dd><strong>$0</strong></dd>
-            </div>
-          </dl>
+          <h2 className="font-heading text-lg font-bold mb-3">What happens next</h2>
+          <ol className="list-decimal list-inside space-y-1.5 text-base">
+            {STEPS.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <p className="mt-4 text-base leading-relaxed">
+            Your card is charged when you approve the report, or automatically 24 hours after we
+            send it if you haven&apos;t reported an issue. If you report an issue within that
+            window, the charge stays paused while we review it with you.
+          </p>
         </div>
 
-        <p className="mb-4 text-base leading-relaxed">
-          After your cleaning, we&apos;ll email your photo report. We charge the agreed visit price
-          {first !== null ? <> — <strong>${first}</strong> for your first visit</> : null} when you
-          approve it, or 24 hours after we send it if you haven&apos;t reported an issue. Reporting
-          an issue within that window pauses the charge until it&apos;s resolved.
-        </p>
-        <p className="mb-8 text-base leading-relaxed">
-          Your card is only for paying after the cleaning. We confirm your date by email within one
-          business day after you add it.
-        </p>
-
-        {startError && (
-          <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
-            Something went wrong opening the secure card page. Your request is saved — please try
-            again, or use the save-card link in your email.
-          </p>
-        )}
-        <Button
-          variant="hero"
-          size="xl"
-          className="w-full"
-          onClick={startCard}
-          disabled={starting || card.kind === "checking" || !bt}
-        >
-          {starting || card.kind === "checking" ? (
-            <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
-              {card.kind === "checking" ? "Checking your request…" : "Opening Stripe…"}
-            </>
-          ) : (
-            "Add card — $0 today"
-          )}
+        <Button variant="hero" size="xl" className="w-full" asChild>
+          <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
         </Button>
-        <p className="mt-3 text-center text-sm text-muted-foreground">
-          You&apos;ll enter your card securely on Stripe. No Link account is required.
-        </p>
+      </>,
+    );
+  }
 
-        <p className="mt-8 text-sm leading-relaxed text-muted-foreground">
-          Free cancellation until 48 hours before your visit; after that a $25 fee applies. If we
-          arrive and can&apos;t get in — and can&apos;t reach you — the visit is charged in full.
-          See our{" "}
-          <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
-          Need to change something before then? Email{" "}
-          <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">
-            hello@gatehousehomecleaning.com
-          </a>
-          .
-        </p>
+  // States A (not saved yet) and D (save failed / was cancelled).
+  const failed = card.kind === "failed";
+  return shell(
+    <>
+      <div className="text-center">
+        <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+        <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
+          {failed ? "Your card wasn't saved" : "One last step: save your card"}
+        </h1>
+        {emailNotice}
       </div>
-    </div>
+
+      {summaryCard}
+
+      {failed ? (
+        <p className="mb-8 text-base leading-relaxed">
+          Nothing was charged, and your visit isn&apos;t confirmed. Your request is still saved —
+          save your card to continue. Your card is only used to pay after the cleaning, once
+          you&apos;ve seen the photo report.
+        </p>
+      ) : (
+        <p className="mb-8 text-base leading-relaxed">
+          Saving your card costs $0 today and doesn&apos;t book anything by itself. We confirm your
+          date by email within one business day after you add it. Your card is charged only after
+          the cleaning — when you approve the photo report, or 24 hours after we send it if you
+          haven&apos;t reported an issue.
+        </p>
+      )}
+
+      {startError && (
+        <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+          Something went wrong opening the secure card page. Your request is saved — please try
+          again, or use the save-card link in your email.
+        </p>
+      )}
+      <Button variant="hero" size="xl" className="w-full" onClick={startCard} disabled={starting || !bt}>
+        {starting ? (
+          <>
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
+            Opening Stripe…
+          </>
+        ) : failed ? (
+          "Try saving your card again"
+        ) : (
+          "Save card — $0 today"
+        )}
+      </Button>
+      <p className="mt-3 text-center text-sm text-muted-foreground">
+        You&apos;ll enter your card securely on Stripe. No Link account is required.
+      </p>
+
+      <p className="mt-8 text-sm leading-relaxed text-muted-foreground">
+        Free cancellation until 48 hours before your visit; after that a $25 fee applies. If we
+        arrive and can&apos;t get in — and can&apos;t reach you — the visit is charged in full.
+        See our{" "}
+        <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
+        Need to change something before then? Email{" "}
+        <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">
+          hello@gatehousehomecleaning.com
+        </a>
+        .
+      </p>
+    </>,
   );
 };
+
+function recapPriceFirst(price?: string): string | undefined {
+  if (!price) return undefined;
+  const m = /\$([0-9]+(?:\.[0-9]+)?)/.exec(price);
+  return m ? m[1] : undefined;
+}
+
 export default ThankYou;

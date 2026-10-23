@@ -256,6 +256,35 @@ function money(cents: number | null): string | null {
 const q = (v: string | string[] | undefined): string =>
   Array.isArray(v) ? v[0] ?? "" : v ?? "";
 
+// Reconcile the saved-card state with Stripe itself: the webhook normally
+// maintains gh_payment_method, but a missing webhook secret or a dropped
+// event must not hide a card that Stripe actually holds. Backfills the
+// metadata cache when a card is found.
+async function reconcileCard(
+  secretKey: string,
+  customer: { id: string; metadata: Record<string, string> },
+): Promise<string> {
+  const existing = customer.metadata["gh_payment_method"] ?? "";
+  if (existing) return existing;
+  const res = await stripeGet(
+    secretKey,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+  );
+  if (!res.ok) return "";
+  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  const pm = list[0]?.id ?? "";
+  if (!pm) return "";
+  const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
+  const state = customer.metadata["gh_state"] ?? "";
+  if (!state || state === "awaiting_card" || state === "card_failed") {
+    patch["metadata[gh_state]"] = "card_ready";
+  }
+  await stripePost(secretKey, `/customers/${customer.id}`, patch);
+  customer.metadata["gh_payment_method"] = pm;
+  if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
+  return pm;
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   const o = Array.isArray(origin) ? origin[0] : origin;
@@ -304,6 +333,13 @@ export default async function handler(req: Req, res: Res) {
     }
     const payload = verified.payload;
     const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
+    if (customer) {
+      try {
+        await reconcileCard(STRIPE_SECRET_KEY, customer);
+      } catch {
+        /* cached metadata still applies */
+      }
+    }
     if (!customer) {
       res.status(200).json({
         requestId, ok: true, state: "card_needed" as VisitState,
