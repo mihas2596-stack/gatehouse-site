@@ -20,10 +20,10 @@ const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
 // Used to verify the browser-sent price instead of trusting it blindly.
 type TierKey = "S" | "M" | "L";
 const SERVER_PRICES: Record<string, Record<TierKey, number>> = {
-  standardOnetime: { S: 14.9, M: 21.9, L: 27.9 },
-  deep: { S: 24.9, M: 32.9, L: 39.9 },
-  moveinout: { S: 27.9, M: 36.9, L: 44.9 },
-  recurring: { S: 12.9, M: 18.9, L: 23.9 },
+  standardOnetime: { S: 149, M: 219, L: 279 },
+  deep: { S: 249, M: 329, L: 399 },
+  moveinout: { S: 279, M: 369, L: 449 },
+  recurring: { S: 129, M: 189, L: 239 },
 };
 function serverTierFor(bedrooms: number, fullBaths: number): TierKey | null {
   if (!Number.isFinite(bedrooms) || !Number.isFinite(fullBaths)) return null;
@@ -44,11 +44,11 @@ type ServerAddonSel = {
   pets?: boolean;
 };
 const SERVER_ADDON_PRICES: Record<string, number> = {
-  insideOven: 3.5,
-  insideFridge: 3.5,
-  insideCabinets: 4.5,
-  interiorWindow: 0.8,
-  pets: 1.5,
+  insideOven: 35,
+  insideFridge: 35,
+  insideCabinets: 45,
+  interiorWindow: 8,
+  pets: 15,
 };
 const SERVER_ADDONS_INCLUDED: Record<string, string[]> = {
   standard: [],
@@ -108,10 +108,10 @@ export function serverBreakdown(opts: {
       first_service,
     };
   }
-  const foundingRecurringBase = Math.round(recurringBase * 0.7 * 10) / 10;
+  const foundingRecurringBase = Math.round(recurringBase * 0.7);
   const founding_recurring = foundingRecurringBase + serverAddonsTotal(opts.addons, "standard");
   if (!deepFirst) {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7 * 10) / 10;
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
     return {
       first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "standard"),
       recurring_total: founding_recurring,
@@ -119,7 +119,7 @@ export function serverBreakdown(opts: {
     };
   }
   if (SERVER_FOUNDING_DEEP_RULE === "discounted") {
-    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7 * 10) / 10;
+    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7);
     return {
       first_total: discountedDeep + serverAddonsTotal(opts.addons, "deep"),
       recurring_total: founding_recurring,
@@ -127,7 +127,7 @@ export function serverBreakdown(opts: {
     };
   }
   if (SERVER_FOUNDING_DEEP_RULE === "flat") {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7 * 10) / 10;
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
     return {
       first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "deep"),
       recurring_total: founding_recurring,
@@ -744,9 +744,9 @@ I'll confirm your estimate, date and arrival window by the end of the next busin
 
 How payment works:
 
-After the clean, you get a photo report of every room. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If the report email doesn't reach you, we pause and check manually — silence never triggers a charge you weren't told about.
+After the clean, you get a photo report of every room. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If we learn the report email could not be delivered, the charge is paused until the report reaches you another way.
 
-Something wrong with the visit? Reply to the report email within 24 hours — or write to hello@gatehousehomecleaning.com — and the charge stays paused until we fix it.
+Something wrong with the visit? Reply to the report email within 24 hours — or write to hello@gatehousehomecleaning.com — and the charge stays paused while we review it with you.
 
 If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.
 

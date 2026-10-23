@@ -30,7 +30,7 @@ const steps = [
   },
   {
     title: "An issue pauses the charge",
-    text: "Flagged something? Your card isn't charged until we've fixed it — missed checklist items are re-cleaned free within 72 hours.",
+    text: "Flagged something? The charge stays paused while we review it with you — missed checklist items are re-cleaned free within 72 hours.",
   },
 ];
 

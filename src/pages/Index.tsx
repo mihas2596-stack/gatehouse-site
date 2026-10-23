@@ -46,8 +46,8 @@ const howItWorks = [
   {
     n: "4",
     Icon: CheckCircle2,
-    title: "You approve, we charge",
-    text: "Tap Approve when you're happy with the clean. Do nothing and your card is charged automatically 24 hours after we send the report. Flag an issue and the charge waits until we fix it.",
+    title: "Review, approve, pay",
+    text: "Tap Approve when you're happy with the clean. Do nothing and your card is charged automatically 24 hours after we send the report. Flag an issue and the charge stays paused while we review it with you.",
     highlight: true,
   },
 ];
@@ -56,8 +56,8 @@ const howItWorks = [
 // Card capture is live via Stripe Checkout (setup mode) — see SaveCard flow.
 const paymentSteps = [
   ["1", "$0 to book", "booking is free. Nothing is charged when you request your visit."],
-  ["2", "You approve first", "after every clean you get a room-by-room photo report. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue."],
-  ["3", "Charged on approval", "no surprises: approve the report and we charge your card — or it happens automatically 24 hours after we send it, unless you flag an issue."],
+  ["2", "Review your report", "after every clean you get a room-by-room photo report. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue."],
+  ["3", "Approve to pay, or automatic payment after 24 hours", "no surprises: approve the report and we charge your card — or it happens automatically 24 hours after we send it, unless you flag an issue. Flagging an issue pauses the charge while we review it with you."],
 ];
 
 const trustBadges = [

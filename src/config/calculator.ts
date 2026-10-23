@@ -35,15 +35,15 @@ export function tierFor(bedrooms: number, fullBaths: number): TierKey | null {
 }
 
 export const PRICES: Record<"standardOnetime" | "deep" | "moveinout" | "recurring", Record<TierKey, number>> = {
-  standardOnetime: { S: 14.9, M: 21.9, L: 27.9 },
-  deep: { S: 24.9, M: 32.9, L: 39.9 },
-  moveinout: { S: 27.9, M: 36.9, L: 44.9 },
-  recurring: { S: 12.9, M: 18.9, L: 23.9 },
+  standardOnetime: { S: 149, M: 219, L: 279 },
+  deep: { S: 249, M: 329, L: 399 },
+  moveinout: { S: 279, M: 369, L: 449 },
+  recurring: { S: 129, M: 189, L: 239 },
 };
 
 /** Founding client: 30% off, first clean and the recurring rate for 6 months. */
 export const FOUNDING_DISCOUNT = 0.3;
-const founding = (n: number) => Math.round(n * (1 - FOUNDING_DISCOUNT) * 10) / 10;
+const founding = (n: number) => Math.round(n * (1 - FOUNDING_DISCOUNT));
 export const FOUNDING_FIRST_CLEAN: Record<TierKey, number> = {
   S: founding(PRICES.standardOnetime.S),
   M: founding(PRICES.standardOnetime.M),
@@ -105,11 +105,11 @@ export const EXTRA_ZONE_LABEL: Record<ExtraZoneKey, string> = Object.fromEntries
 
 /** Fixed-price add-ons, charged on every visit. */
 export const ADDONS = {
-  insideOven: { label: "Inside oven", price: 3.5 },
-  insideFridge: { label: "Inside fridge", price: 3.5 },
-  insideCabinets: { label: "Inside cabinets", price: 4.5 },
-  interiorWindow: { label: "Interior windows (per window)", price: 0.8 },
-  pets: { label: "Pets", price: 1.5 },
+  insideOven: { label: "Inside oven", price: 35 },
+  insideFridge: { label: "Inside fridge", price: 35 },
+  insideCabinets: { label: "Inside cabinets", price: 45 },
+  interiorWindow: { label: "Interior windows (per window)", price: 8 },
+  pets: { label: "Pets", price: 15 },
 } as const;
 
 export const ADDONS_CHARGED = "every visit" as const;
@@ -281,7 +281,7 @@ export function priceBreakdown(opts: {
     };
   }
   if (FOUNDING_DEEP_RULE === "discounted") {
-    const discountedDeep = Math.round(PRICES.deep[tier] * (1 - FOUNDING_DISCOUNT) * 10) / 10;
+    const discountedDeep = Math.round(PRICES.deep[tier] * (1 - FOUNDING_DISCOUNT));
     return {
       tier,
       first_service,
