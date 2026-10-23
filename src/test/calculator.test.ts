@@ -1,6 +1,10 @@
 // Tests for the unified price breakdown — the single source of truth for
 // every price shown on /quote and signed into the booking token.
 // Mirrors api/send-contact-email.ts serverBreakdown(); the two MUST agree.
+//
+// The Founding Clients program was closed to new bookings on 2026-10-23:
+// every scenario below prices from the regular tables. The owner's signed
+// price-test mode (testScale) prices at 1/10 and is covered separately.
 import { describe, it, expect } from "vitest";
 import { priceBreakdown, tierFor, addonsTotal } from "../config/calculator";
 
@@ -29,33 +33,25 @@ describe("addonsTotal", () => {
 
 describe("priceBreakdown — confirmed scenario (P0-1)", () => {
   // 3 bedrooms, 2 full bathrooms, ZIP 30024, Standard, every other week,
-  // cleaned in last 3 months = Yes, founding on, inside oven +$35.
+  // cleaned in last 3 months = Yes, inside oven +$35.
   const scenario = {
     bedrooms: 3,
     fullBaths: 2,
     frequency: "every2weeks" as const,
-    founding: true,
     recentlyCleaned: true,
     addons: { insideOven: true },
   };
-  it("shows ONE first-visit total including the add-on and founding discount", () => {
+  it("shows ONE first-visit total including the add-on at regular prices", () => {
     const b = priceBreakdown(scenario);
     expect(b).not.toBeNull();
-    // 30% off the $219 one-time M price = $153, plus $35 oven = $188.
-    expect(b!.first_total).toBe(188);
+    // Recurring plan, cleaned recently: first visit at the $189 recurring
+    // M rate, plus $35 oven = $224.
+    expect(b!.first_total).toBe(224);
     expect(b!.first_service).toBe("standard");
-    expect(b!.founding_applies).toBe(true);
   });
-  it("shows the founding recurring rate including the add-on", () => {
+  it("shows the regular recurring rate including the add-on", () => {
     const b = priceBreakdown(scenario);
-    // 30% off the $189 recurring M price = $132, plus $35 oven = $167.
-    expect(b!.recurring_total).toBe(167);
-    expect(b!.founding_recurring).toBe(132);
-  });
-  it("shows the post-founding price (what the client pays after 6 months)", () => {
-    const b = priceBreakdown({ ...scenario, founding: false });
     expect(b!.recurring_total).toBe(189 + 35); // $224
-    expect(b!.first_total).toBe(189 + 35);
   });
 });
 
@@ -65,7 +61,6 @@ describe("priceBreakdown — deep first visit", () => {
       bedrooms: 3,
       fullBaths: 2,
       frequency: "every2weeks",
-      founding: false,
       recentlyCleaned: false,
       addons: { insideOven: true },
     });
@@ -74,42 +69,43 @@ describe("priceBreakdown — deep first visit", () => {
     expect(b!.first_total).toBe(329);
     expect(b!.recurring_total).toBe(189 + 35);
   });
-  it("founding deep-first: full deep price by default (owner rule)", () => {
-    const b = priceBreakdown({
-      bedrooms: 3,
-      fullBaths: 2,
-      frequency: "every2weeks",
-      founding: true,
-      recentlyCleaned: false,
-      addons: { insideOven: true },
-    });
-    expect(b!.first_total).toBe(329); // no founding discount on the deep clean
-    expect(b!.recurring_total).toBe(132 + 35); // founding rate on recurring
-    expect(b!.founding_applies).toBe(true);
-  });
 });
 
 describe("priceBreakdown — one-time", () => {
-  it("one-time standard without founding", () => {
+  it("one-time standard is the regular one-time price", () => {
     const b = priceBreakdown({
       bedrooms: 3,
       fullBaths: 2,
       frequency: "onetime",
-      founding: false,
       recentlyCleaned: true,
       addons: {},
     });
     expect(b!.first_total).toBe(219);
   });
-  it("one-time standard with founding: 30% off the one-time price", () => {
+});
+
+describe("priceBreakdown — owner price-test mode (testScale)", () => {
+  it("scales a one-time standard total to 1/10", () => {
     const b = priceBreakdown({
       bedrooms: 3,
       fullBaths: 2,
       frequency: "onetime",
-      founding: true,
       recentlyCleaned: true,
       addons: {},
+      testScale: true,
     });
-    expect(b!.first_total).toBe(153); // matches advertised $104/$153/$195
+    expect(b!.first_total).toBe(21.9); // $219 / 10
+  });
+  it("scales first and recurring totals including add-ons", () => {
+    const b = priceBreakdown({
+      bedrooms: 3,
+      fullBaths: 2,
+      frequency: "every2weeks",
+      recentlyCleaned: true,
+      addons: { insideOven: true },
+      testScale: true,
+    });
+    expect(b!.first_total).toBe(22.4); // $224 / 10
+    expect(b!.recurring_total).toBe(22.4);
   });
 });

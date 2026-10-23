@@ -121,10 +121,10 @@ const About = () => {
         <div className="container text-center max-w-2xl">
           <h2 className="font-heading text-3xl font-bold mb-4">Want to Be Part of Our Story?</h2>
           <p className="text-foreground/80 text-lg mb-8">
-            We're choosing our first 10 founding clients now. Claim a founding spot.
+            See your price online and book your first clean in a few minutes.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote?founding=true">Claim a founding spot</Link>
+            <Link to="/quote">See My Price</Link>
           </Button>
         </div>
       </section>

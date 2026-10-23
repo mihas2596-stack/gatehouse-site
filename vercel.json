@@ -23,5 +23,12 @@
     "api/create-checkout-session.ts": {
       "maxDuration": 40
     }
-  }
+  },
+  "redirects": [
+    {
+      "source": "/founding",
+      "destination": "/quote",
+      "permanent": true
+    }
+  ]
 }

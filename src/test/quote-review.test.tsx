@@ -29,19 +29,32 @@ describe("booking price confirmation", () => {
     expect(screen.getByText("Then $189 per visit, every other week")).toBeInTheDocument();
   });
 
-  it("shows one unified founding total for the confirmed scenario", () => {
-    // 3bd/2ba, Standard, every other week, cleaned=Yes, founding on, oven +$35:
-    // first visit $188 (153 + 35), then $167 (132 + 35), $224 after 6 months.
+  it("shows one unified regular total for the confirmed scenario", () => {
+    // 3bd/2ba, Standard, every other week, cleaned=Yes, oven +$35:
+    // first visit $224 (189 + 35), then $224 per visit. The Founding
+    // Clients program is closed — no founding checkbox exists anymore.
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
-    fireEvent.click(screen.getByLabelText(/claiming a founding spot/));
+    expect(screen.queryByLabelText(/claiming a founding spot/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Inside oven/));
-    expect(screen.getByText("First visit: $188", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("Then $167 per visit, every other week")).toBeInTheDocument();
-    expect(screen.getByText("After 6 months: $224 per visit.")).toBeInTheDocument();
-    // No contradictory numbers: the old $224 headline / $153-off-$254 lines are gone.
-    expect(screen.queryByText(/30% off the \$254/)).not.toBeInTheDocument();
+    expect(screen.getByText("First visit: $224", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("First visit: $224 · then $224 per visit, every other week")).toBeInTheDocument();
+    // No founding language anywhere on the page.
+    expect(screen.queryByText(/founding/i)).not.toBeInTheDocument();
+  });
+
+  it("shows 1/10 prices in owner test mode (tp token in the URL)", () => {
+    render(
+      <MemoryRouter initialEntries={["/quote?tp=tp1.9999999999.token"]}>
+        <Quote />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    expect(screen.getByText(/Test mode: prices on this page are 1\/10/)).toBeInTheDocument();
+    // Regular $189 recurring M at 1/10, no add-ons.
+    expect(screen.getByText("First visit: $18.9", { exact: false })).toBeInTheDocument();
   });
 
   it("requires another review when the calculator changes after confirmation", () => {

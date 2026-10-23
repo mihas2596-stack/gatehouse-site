@@ -10,7 +10,6 @@ import Index from "./pages/Index";
 
 const Services = lazy(() => import("./pages/Services"));
 const About = lazy(() => import("./pages/About"));
-const Reviews = lazy(() => import("./pages/Reviews"));
 const Areas = lazy(() => import("./pages/Areas"));
 const Contact = lazy(() => import("./pages/Contact"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -58,7 +57,7 @@ const App = () => (
             <Route path="/visit" element={<Visit />} />
             <Route path="/availability" element={<Navigate to="/quote" replace />} />
             <Route path="/about" element={<About />} />
-            <Route path="/founding" element={<Reviews />} />
+            <Route path="/founding" element={<Navigate to="/quote" replace />} />
             <Route path="/reviews" element={<Navigate to="/quote" replace />} />
             <Route path="/gallery" element={<Navigate to="/quote" replace />} />
             <Route path="/areas" element={<Areas />} />

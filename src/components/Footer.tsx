@@ -42,7 +42,6 @@ const Footer = () => {
           <nav aria-label="Footer navigation" className="flex flex-wrap justify-center items-center gap-x-4 gap-y-1">
             <Link to="/about" className="inline-flex min-h-[44px] items-center text-sm">About Nick</Link>
             <Link to="/contact" className="inline-flex min-h-[44px] items-center text-sm">Contact</Link>
-            <Link to="/founding" className="inline-flex min-h-[44px] items-center text-sm">Founding Clients</Link>
             <Link to="/whats-included" className="inline-flex min-h-[44px] items-center px-1 text-[#3D2B1F]/75 hover:text-[#5C3D2E] text-sm transition-colors md:min-h-0 md:px-0">
               What's Included
             </Link>

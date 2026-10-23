@@ -82,7 +82,6 @@ const Contact = () => {
           date: "",
           time: "",
           message: formData.message.trim(),
-          founding: false,
           source: "contact",
           attribution: campaignAttribution(),
         }),

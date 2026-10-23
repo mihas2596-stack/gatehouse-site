@@ -9,7 +9,6 @@ const navLinks = [
   { label: "What's Included", to: "/whats-included" },
   { label: "FAQ", to: "/faq" },
   { label: "About Us", to: "/about" },
-  { label: "Founding Clients", to: "/founding" },
   { label: "Areas", to: "/areas" },
   { label: "Contact", to: "/contact" },
 ];

@@ -10,8 +10,6 @@ type Plan = {
   first?: number | null;
   recurring?: number | null;
   firstIsDeep?: boolean;
-  founding?: boolean;
-  afterFoundingRecurring?: number | null;
 };
 
 type SubmissionState = {
@@ -181,13 +179,6 @@ const ThankYou = () => {
                   <strong>${recurring}</strong> per visit, every other week
                 </dd>
               </div>
-            )}
-            {plan.founding && (
-              <p className="text-sm text-muted-foreground">
-                {recurring !== null
-                  ? `Founding Clients price for your first 6 months${plan.afterFoundingRecurring ? ` — then $${plan.afterFoundingRecurring} per visit` : ""}.`
-                  : "Founding Clients price — 30% off this visit."}
-              </p>
             )}
             {recap.date && (
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">

@@ -15,7 +15,6 @@ import CityPage from "../src/pages/CityPage";
 import Contact from "../src/pages/Contact";
 import WhatsIncluded from "../src/pages/WhatsIncluded";
 import FAQ from "../src/pages/FAQ";
-import Reviews from "../src/pages/Reviews";
 import Privacy from "../src/pages/Privacy";
 import Terms from "../src/pages/Terms";
 import ThankYou from "../src/pages/ThankYou";
@@ -25,7 +24,7 @@ import ThankYou from "../src/pages/ThankYou";
 const routes = [
   ["/", Index], ["/services", Services], ["/quote", Quote], ["/about", About],
   ["/areas", Areas], ["/contact", Contact], ["/whats-included", WhatsIncluded],
-  ["/faq", FAQ], ["/founding", Reviews], ["/privacy", Privacy], ["/terms", Terms],
+  ["/faq", FAQ], ["/privacy", Privacy], ["/terms", Terms],
   ["/thank-you", ThankYou],
 ] as const;
 const dist = resolve("dist");

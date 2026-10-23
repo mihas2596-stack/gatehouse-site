@@ -181,8 +181,7 @@
     background: linear-gradient(180deg, hsl(var(--ivory)) 0%, hsl(var(--warm-cream)) 50%, hsl(var(--background)) 100%);
   }
 
-  .pricing-cta-section,
-  .founding-10-section {
+  .pricing-cta-section {
     background: hsl(var(--card));
   }
 }

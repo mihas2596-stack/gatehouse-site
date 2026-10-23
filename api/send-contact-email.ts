@@ -68,78 +68,88 @@ function serverAddonsTotal(a: ServerAddonSel, serviceKey: string): number {
     windows * (SERVER_ADDON_PRICES["interiorWindow"] ?? 0)
   );
 }
-// Owner decision: how the founding discount treats a deep first visit.
-// "full" (default) = full deep-clean price; discount applies to recurring only.
-// Must match FOUNDING_DEEP_RULE in src/config/calculator.ts.
-export const SERVER_FOUNDING_DEEP_RULE = "full";
+// The Founding Clients program was closed to new bookings by the owner on
+// 2026-10-23. A `founding` flag sent by a stale open tab is accepted by the
+// schema and IGNORED — new bookings always price from the regular tables.
+// Existing bookings keep their pinned prices; nothing here touches them.
+//
+// Owner price-test mode: a booking submitted with a valid signed test
+// token (see verifyTestPriceToken) prices at TEST_PRICE_SCALE so the owner
+// can run a real-card payment check at 1/10 of the regular price. The
+// token is bound to the owner's email and expires; regular bookings are
+// never affected.
+export const TEST_PRICE_SCALE = 0.1;
+const moneyRound = (n: number): number => Math.round(n * 100) / 100;
+
+export function verifyTestPriceToken(
+  token: string,
+  email: string,
+  adminToken: string | undefined,
+  nowSec: number,
+): boolean {
+  if (!token || !adminToken) return false;
+  const parts = token.split(".");
+  if (parts.length !== 4 || parts[0] !== "tp1") return false;
+  const exp = parseInt(parts[1] ?? "", 10);
+  if (!Number.isFinite(exp) || exp < nowSec || exp > nowSec + 48 * 3600) return false;
+  let tokenEmail = "";
+  try {
+    tokenEmail = Buffer.from(parts[2] ?? "", "base64url").toString("utf8");
+  } catch {
+    return false;
+  }
+  if (!tokenEmail || tokenEmail !== (email ?? "").trim().toLowerCase()) return false;
+  const key = createHash("sha256").update(`gatehouse-test-price:${adminToken}`).digest();
+  const expected = createHmac("sha256", key).update(`tp1.${parts[1]}.${parts[2]}`).digest("base64url");
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(parts[3] ?? "", "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export function serverBreakdown(opts: {
   bedroomsRaw: string | undefined;
   bathroomsRaw: string | undefined;
   serviceKey: string | undefined;
   frequency: string | undefined;
-  founding: boolean | undefined;
   cleanedRecently: boolean | undefined;
   addons: ServerAddonSel;
+  testScale?: boolean;
 }): { first_total: number; recurring_total: number; first_service: "deep" | "standard" } | null {
   const bedrooms = parseInt(opts.bedroomsRaw ?? "", 10);
   const fullBaths = parseInt((opts.bathroomsRaw ?? "").split(".")[0], 10);
   const tier = serverTierFor(bedrooms, fullBaths);
   if (!tier) return null;
   const serviceKey = opts.serviceKey ?? "standard";
-  // Deep / move-in-out are one-time; founding never applies to them.
+  let result: { first_total: number; recurring_total: number; first_service: "deep" | "standard" };
+  // Deep / move-in-out are one-time services.
   if (serviceKey === "deep" || serviceKey === "moveinout") {
     const base = SERVER_PRICES[serviceKey][tier];
     const total = base + serverAddonsTotal(opts.addons, serviceKey);
-    return { first_total: total, recurring_total: total, first_service: "deep" };
-  }
-  const deepFirst = !(opts.cleanedRecently ?? true);
-  const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
-  const recurringBase = SERVER_PRICES.recurring[tier];
-  const recurring_total = recurringBase + serverAddonsTotal(opts.addons, "standard");
-  if (!opts.founding) {
+    result = { first_total: total, recurring_total: total, first_service: "deep" };
+  } else {
+    const deepFirst = !(opts.cleanedRecently ?? true);
+    const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
+    const recurringBase = SERVER_PRICES.recurring[tier];
+    const recurring_total = recurringBase + serverAddonsTotal(opts.addons, "standard");
     // One-time visits price from the one-time table; recurring plans price
     // the first visit at the recurring rate (or deep when needed).
     const standardBase =
       opts.frequency === "onetime" ? SERVER_PRICES.standardOnetime[tier] : SERVER_PRICES.recurring[tier];
     const base = deepFirst ? SERVER_PRICES.deep[tier] : standardBase;
-    return {
+    result = {
       first_total: base + serverAddonsTotal(opts.addons, first_service),
       recurring_total,
       first_service,
     };
   }
-  const foundingRecurringBase = Math.round(recurringBase * 0.7);
-  const founding_recurring = foundingRecurringBase + serverAddonsTotal(opts.addons, "standard");
-  if (!deepFirst) {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
-    return {
-      first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "standard"),
-      recurring_total: founding_recurring,
-      first_service,
+  if (opts.testScale) {
+    result = {
+      ...result,
+      first_total: moneyRound(result.first_total * TEST_PRICE_SCALE),
+      recurring_total: moneyRound(result.recurring_total * TEST_PRICE_SCALE),
     };
   }
-  if (SERVER_FOUNDING_DEEP_RULE === "discounted") {
-    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7);
-    return {
-      first_total: discountedDeep + serverAddonsTotal(opts.addons, "deep"),
-      recurring_total: founding_recurring,
-      first_service,
-    };
-  }
-  if (SERVER_FOUNDING_DEEP_RULE === "flat") {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
-    return {
-      first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "deep"),
-      recurring_total: founding_recurring,
-      first_service,
-    };
-  }
-  // "full": full deep-clean price for a founding deep first visit.
-  return {
-    first_total: SERVER_PRICES.deep[tier] + serverAddonsTotal(opts.addons, "deep"),
-    recurring_total: founding_recurring,
-    first_service,
-  };
+  return result;
 }
 
 const b64urlEncode = (s: string): string =>
@@ -351,6 +361,7 @@ const ContactSchema = z.object({
   time: z.string().max(50).optional().or(z.literal("")),
   message: z.string().max(5000).optional().or(z.literal("")),
   founding: z.boolean().optional(),
+  test_token: z.string().max(300).optional(),
   extra_zones: z.string().max(200).optional(),
   scope_review: z.boolean().optional(),
   scope_reasons: z.string().max(300).optional(),
@@ -523,7 +534,6 @@ export default async function handler(req: Req, res: Res) {
       date,
       time,
       message,
-      founding,
       extra_zones,
       scope_review,
       scope_reasons,
@@ -545,6 +555,7 @@ export default async function handler(req: Req, res: Res) {
     let visitUrl: string | null = null;
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
+    let testScale = false;
     let serverRecurring: string | undefined;
     if (isQuote) {
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
@@ -553,17 +564,38 @@ export default async function handler(req: Req, res: Res) {
         return json(500, { ok: false, error: "server_error" });
       }
       // Server-side price verification: recompute the EXACT breakdown from
-      // the quote inputs (bedrooms, bathrooms, service, frequency, founding,
+      // the quote inputs (bedrooms, bathrooms, service, frequency,
       // cleaning history, add-ons). The browser-sent price is never trusted
       // for the signed token: any mismatch is replaced and logged (tamper
       // attempt or stale calculator).
+      // Owner price-test token: when present it MUST verify — an invalid
+      // or expired token rejects the submission instead of silently
+      // repricing the booking at regular prices.
+      const testToken = (parsed.data.test_token ?? "").trim();
+      if (testToken) {
+        testScale = verifyTestPriceToken(
+          testToken,
+          email ?? "",
+          process.env["ADMIN_TOKEN"],
+          Math.floor(Date.now() / 1000),
+        );
+        if (!testScale) {
+          return json(400, {
+            ok: false,
+            errors: {
+              test_token:
+                "This test-price link is invalid or has expired. Regular prices apply — please reload the quote page.",
+            },
+          });
+        }
+      }
       const server = serverBreakdown({
         bedroomsRaw: bedrooms,
         bathroomsRaw: bathrooms,
         serviceKey: parsed.data.service_key,
         frequency: parsed.data.frequency,
-        founding,
         cleanedRecently: parsed.data.cleaned_recently,
+        testScale,
         addons: {
           insideOven: parsed.data.addons?.insideOven,
           insideFridge: parsed.data.addons?.insideFridge,
@@ -650,8 +682,8 @@ export default async function handler(req: Req, res: Res) {
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background:${founding ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${founding ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${founding ? "#8B4513" : "#444"};">
-          ${isQuote ? (founding ? "FOUNDING CLIENT REQUEST — Verify offer eligibility before confirming" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
+        <div style="background:${testScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale ? "#8B4513" : "#444"};">
+          ${isQuote ? (testScale ? "TEST BOOKING — owner price test at 1/10 prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
@@ -669,7 +701,7 @@ export default async function handler(req: Req, res: Res) {
           ${date ? row("Preferred Date", escapeHtml(date)) : ""}
           ${time ? row("Preferred Time", escapeHtml(time)) : ""}
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
-${isQuote ? row("First-clean discount requested", founding ? "YES" : "NO") : ""}
+${isQuote ? row("Test price mode (1/10)", testScale ? "YES" : "NO") : ""}
 ${isQuote && extra_zones ? row("Extra areas to clean", extra_zones) : ""}
 ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "check scope"}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
@@ -717,6 +749,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
           ? `\nBecause the home hasn't been professionally cleaned in the last 3 months, the first visit is a deep clean. Regular visits after that cost less.\n`
           : "";
         const priceDisplay = serverFirst ? `$${serverFirst}` : price ? `$${price}` : "—";
+        const testNote = testScale ? "\nThis is a test booking at reduced test prices (1/10) for an owner payment check.\n" : "";
         // Equal first and recurring prices collapse into one line — "$189 for
         // the first visit, then $189 per visit" reads like a typo.
         const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;
@@ -739,7 +772,7 @@ ${homeDetails} · ZIP ${zip || ""}
 Service: ${serviceLabel}
 
 Your estimate: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.
-${deepPara}
+${testNote}${deepPara}
 I'll confirm your estimate, date and arrival window by the end of the next business day. Your final confirmation comes in a separate email.
 
 How payment works:

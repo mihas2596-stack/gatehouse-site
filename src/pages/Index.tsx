@@ -7,8 +7,7 @@ import IncludedRooms from "@/components/IncludedRooms";
 import ReportShowcase from "@/components/ReportShowcase";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
-import { OFFER_TEXT } from "@/config/offer";
-import { PRICES, TIERS, FOUNDING_FIRST_CLEAN } from "@/config/calculator";
+import { PRICES, TIERS } from "@/config/calculator";
 
 const heroTrust = [
   { Icon: Tag, label: "See your price" },
@@ -328,21 +327,6 @@ const Index = () => (
             <Link to="/quote">See My Price</Link>
           </Button>
         </div>
-      </div>
-    </section>
-
-    {/* 6. FOUNDING CLIENTS */}
-    <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
-      <div className="container max-w-3xl text-center">
-        <p className="eyebrow mb-2 text-primary">First 10 Homes</p>
-        <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">Become a founding client</h2>
-        <p className="mt-4 text-left text-base leading-relaxed text-foreground md:text-lg">
-          {OFFER_TEXT}
-        </p>
-        <p className="mt-3 text-base font-semibold text-sage-foreground">Founding first-clean price: ${FOUNDING_FIRST_CLEAN.S} / ${FOUNDING_FIRST_CLEAN.M} / ${FOUNDING_FIRST_CLEAN.L} for small / medium / large homes.</p>
-        <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
-          Limited to the first 10 households in our service area. The founding price applies to the first booking. Founding rate is held for six months from the first clean. If your first visit needs a deep clean, it is priced at the standard deep-clean rate — the founding discount then applies to your recurring visits. After the six months, regular recurring rates apply: ${PRICES.recurring.S} / ${PRICES.recurring.M} / ${PRICES.recurring.L} per visit for small / medium / large homes.
-        </p>
       </div>
     </section>
 

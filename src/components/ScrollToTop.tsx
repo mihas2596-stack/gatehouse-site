@@ -23,7 +23,7 @@ export default function ScrollToTop() {
   }, [pathname, hash]);
 
   useEffect(() => {
-    const publicPath = /^\/(?:services|quote|about|areas(?:\/(?:sugar-hill|suwanee|buford|duluth|johns-creek|alpharetta|roswell))?|contact|whats-included|faq|founding|privacy|terms|thank-you)?$/.test(pathname) ? pathname : "/other";
+    const publicPath = /^\/(?:services|quote|about|areas(?:\/(?:sugar-hill|suwanee|buford|duluth|johns-creek|alpharetta|roswell))?|contact|whats-included|faq|privacy|terms|thank-you)?$/.test(pathname) ? pathname : "/other";
     let reported = false;
     const report = () => {
       if (reported) return;
