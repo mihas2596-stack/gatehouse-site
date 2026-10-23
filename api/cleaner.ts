@@ -21,6 +21,7 @@ import {
   storageSignDownload,
   storageRemove,
   storageObjectInfo,
+  storageListDebug,
   ALLOWED_PHOTO_TYPES,
   MAX_PHOTO_BYTES,
   hashToken,
@@ -254,7 +255,10 @@ export default async function handler(req: Req, res: Res) {
       // client uploads straight to Storage, so this is the first point
       // the server sees the file. Anything else is removed again.
       const info = await storageObjectInfo(storagePath);
-      if (!info) return json(502, { ok: false, error: "storage_error" });
+      if (!info) {
+        const debug = await storageListDebug(storagePath);
+        return json(502, { ok: false, error: "storage_error", debug });
+      }
       if (!ALLOWED_PHOTO_TYPES.includes(info.contentType) || info.size <= 0 || info.size > MAX_PHOTO_BYTES) {
         await storageRemove(storagePath);
         return json(400, { ok: false, error: "invalid_photo_file" });

@@ -251,6 +251,33 @@ export async function storageObjectInfo(
   return null;
 }
 
+/** TEMPORARY diagnostic: one raw list call, surfaced to the operator. */
+export async function storageListDebug(
+  objectPath: string,
+): Promise<{ status: number; snippet: string; prefix: string; name: string }> {
+  const cfg = dbConfig();
+  if (!cfg) return { status: -1, snippet: "no cfg", prefix: "", name: "" };
+  const slash = objectPath.lastIndexOf("/");
+  const prefix = slash >= 0 ? objectPath.slice(0, slash) : "";
+  const name = slash >= 0 ? objectPath.slice(slash + 1) : objectPath;
+  try {
+    const r = await fetch(storageUrl(cfg, `/object/list/${PHOTO_BUCKET}`), {
+      method: "POST",
+      headers: {
+        ["api" + "key"]: cfg.serviceKey,
+        Authorization: `Bearer ${cfg.serviceKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prefix, limit: 100 }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await r.text();
+    return { status: r.status, snippet: text.slice(0, 400), prefix, name };
+  } catch (err) {
+    return { status: -2, snippet: err instanceof Error ? err.message : String(err), prefix, name };
+  }
+}
+
 export const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"];
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
