@@ -701,7 +701,8 @@ export default async function handler(req: Req, res: Res) {
           ${address ? row("Street address", escapeHtml(address)) : ""}
           ${bedrooms ? row("Bedrooms", escapeHtml(bedrooms)) : ""}
           ${bathrooms ? row("Bathrooms", escapeHtml(bathrooms)) : ""}
-          ${price ? row("Client-side estimate — verify", `$${escapeHtml(price)}`) : ""}
+          ${serverFirst ? row("Server-verified estimate", `$${escapeHtml(serverFirst)}`) : price ? row("Client-side estimate — verify", `$${escapeHtml(price)}`) : ""}
+          ${serverFirst && price && parseFloat(String(price).replace(/[^0-9.]/g, "")) !== parseFloat(serverFirst) ? row("Browser showed (replaced)", `$${escapeHtml(price)} — the browser tab priced differently; the server price above is the one that counts`) : ""}
           ${date ? row("Preferred Date", escapeHtml(date)) : ""}
           ${time ? row("Preferred Time", escapeHtml(time)) : ""}
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}

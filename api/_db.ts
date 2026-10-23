@@ -206,76 +206,55 @@ export async function storageSignDownload(
   return `${cfg.url}/storage/v1${data.signedURL}`;
 }
 
-/** Server-side facts about a stored object (type + size), read from the
- * Storage list API metadata. Used to validate uploads before they are
- * registered to a visit: the client uploads bytes directly to Storage,
- * so registration is the first point the server can check them. */
+/** Server-side facts about a stored object (type + size). Used to
+ * validate uploads before they are registered to a visit: the client
+ * uploads bytes directly to Storage, so registration is the first
+ * point the server can check them. Primary probe: an authenticated
+ * HEAD on the object endpoint; fallback: headers of a signed download
+ * URL. Retried — a just-uploaded object can take a moment to appear. */
 export async function storageObjectInfo(
   objectPath: string,
 ): Promise<{ contentType: string; size: number } | null> {
   const cfg = dbConfig();
   if (!cfg) return null;
-  const slash = objectPath.lastIndexOf("/");
-  const prefix = slash >= 0 ? objectPath.slice(0, slash) : "";
-  const name = slash >= 0 ? objectPath.slice(slash + 1) : objectPath;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const r = await fetch(storageUrl(cfg, `/object/list/${PHOTO_BUCKET}`), {
-        method: "POST",
+      const r = await fetch(storageUrl(cfg, `/object/${PHOTO_BUCKET}/${objectPath}`), {
+        method: "HEAD",
         headers: {
           ["api" + "key"]: cfg.serviceKey,
           Authorization: `Bearer ${cfg.serviceKey}`,
-          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ prefix, limit: 100 }),
         signal: AbortSignal.timeout(15000),
       });
       if (r.ok) {
-        const entries = (await r.json()) as Array<{
-          name: string;
-          metadata?: { size?: number; mimetype?: string };
-        }>;
-        const found = entries.find((e) => e.name === name);
-        if (found?.metadata) {
+        const size = parseInt(r.headers.get("content-length") ?? "", 10);
+        return {
+          contentType: r.headers.get("content-type") ?? "",
+          size: Number.isFinite(size) ? size : 0,
+        };
+      }
+    } catch {
+      /* fall through to the signed-URL probe */
+    }
+    try {
+      const signed = await storageSignDownload(objectPath, 120);
+      if (signed) {
+        const r = await fetch(signed, { method: "HEAD", signal: AbortSignal.timeout(15000) });
+        if (r.ok) {
+          const size = parseInt(r.headers.get("content-length") ?? "", 10);
           return {
-            contentType: found.metadata.mimetype ?? "",
-            size: found.metadata.size ?? 0,
+            contentType: r.headers.get("content-type") ?? "",
+            size: Number.isFinite(size) ? size : 0,
           };
         }
       }
     } catch {
       /* retry below */
     }
-    if (attempt < 2) await new Promise((res) => setTimeout(res, 600));
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 700));
   }
   return null;
-}
-
-/** TEMPORARY diagnostic: one raw list call, surfaced to the operator. */
-export async function storageListDebug(
-  objectPath: string,
-): Promise<{ status: number; snippet: string; prefix: string; name: string }> {
-  const cfg = dbConfig();
-  if (!cfg) return { status: -1, snippet: "no cfg", prefix: "", name: "" };
-  const slash = objectPath.lastIndexOf("/");
-  const prefix = slash >= 0 ? objectPath.slice(0, slash) : "";
-  const name = slash >= 0 ? objectPath.slice(slash + 1) : objectPath;
-  try {
-    const r = await fetch(storageUrl(cfg, `/object/list/${PHOTO_BUCKET}`), {
-      method: "POST",
-      headers: {
-        ["api" + "key"]: cfg.serviceKey,
-        Authorization: `Bearer ${cfg.serviceKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prefix, limit: 100 }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const text = await r.text();
-    return { status: r.status, snippet: text.slice(0, 400), prefix, name };
-  } catch (err) {
-    return { status: -2, snippet: err instanceof Error ? err.message : String(err), prefix, name };
-  }
 }
 
 export const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"];
