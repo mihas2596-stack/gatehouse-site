@@ -63,3 +63,10 @@ describe("submit gate: every room needs an after-photo or a skip reason", () => 
     ).toEqual([]);
   });
 });
+
+describe("night fixes 2026-10-22", () => {
+  it("sanitizeChecklist rejects an empty rooms array", () => {
+    expect(sanitizeChecklist({ rooms: [] })).toBeNull();
+  });
+
+});

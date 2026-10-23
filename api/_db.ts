@@ -23,17 +23,25 @@ async function rest(
   init: RequestInit & { prefer?: string } = {},
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const { prefer, ...restInit } = init;
-  const response = await fetch(`${cfg.url}/rest/v1/${path}`, {
-    ...restInit,
-    headers: {
-      apikey: cfg.key,
-      Authorization: `Bearer ${cfg.key}`,
-      "Content-Type": "application/json",
-      ...(prefer ? { Prefer: prefer } : {}),
-      ...(restInit.headers ?? {}),
-    },
-    signal: AbortSignal.timeout(15000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${cfg.url}/rest/v1/${path}`, {
+      ...restInit,
+      headers: {
+        apikey: cfg.key,
+        Authorization: `Bearer ${cfg.key}`,
+        "Content-Type": "application/json",
+        ...(prefer ? { Prefer: prefer } : {}),
+        ...(restInit.headers ?? {}),
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    // Network/DNS/invalid-URL: the DB is unreachable. Degrade to the
+    // legacy behavior (callers already treat !ok / empty as "no DB row")
+    // instead of crashing the whole function.
+    return { ok: false, status: 0, data: null };
+  }
   let data: unknown = null;
   const text = await response.text();
   if (text) {
@@ -142,23 +150,32 @@ export async function storageSignUpload(
 ): Promise<{ signedUrl: string } | null> {
   const cfg = dbConfig();
   if (!cfg) return null;
-  const r = await fetch(
-    storageUrl(cfg, `/object/upload/sign/${PHOTO_BUCKET}/${objectPath}`),
-    {
-      method: "POST",
-      headers: {
-        apikey: cfg.key,
-        Authorization: `Bearer ${cfg.key}`,
-        "Content-Type": "application/json",
+  let r: Response;
+  try {
+    r = await fetch(
+      storageUrl(cfg, `/object/upload/sign/${PHOTO_BUCKET}/${objectPath}`),
+      {
+        method: "POST",
+        headers: {
+          apikey: cfg.key,
+          Authorization: `Bearer ${cfg.key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(15000),
       },
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(15000),
-    },
-  );
+    );
+  } catch {
+    return null;
+  }
   if (!r.ok) return null;
-  const data = (await r.json()) as { signedURL?: string };
-  if (!data.signedURL) return null;
-  return { signedUrl: `${cfg.url}/storage/v1${data.signedURL}` };
+  // The upload-sign endpoint returns { url: "/object/upload/sign/..." }
+  // (verified against @supabase/storage-js createSignedUploadUrl, which
+  // reads data.url — NOT signedURL; that field belongs to download-sign).
+  const data = (await r.json()) as { url?: string; signedURL?: string };
+  const rel = data.url ?? data.signedURL;
+  if (!rel) return null;
+  return { signedUrl: `${cfg.url}/storage/v1${rel}` };
 }
 
 /** Signed read URL for one private object. */
@@ -168,16 +185,21 @@ export async function storageSignDownload(
 ): Promise<string | null> {
   const cfg = dbConfig();
   if (!cfg) return null;
-  const r = await fetch(storageUrl(cfg, `/object/sign/${PHOTO_BUCKET}/${objectPath}`), {
-    method: "POST",
-    headers: {
-      apikey: cfg.key,
-      Authorization: `Bearer ${cfg.key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ expiresIn: expiresInSeconds }),
-    signal: AbortSignal.timeout(15000),
-  });
+  let r: Response;
+  try {
+    r = await fetch(storageUrl(cfg, `/object/sign/${PHOTO_BUCKET}/${objectPath}`), {
+      method: "POST",
+      headers: {
+        apikey: cfg.key,
+        Authorization: `Bearer ${cfg.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expiresIn: expiresInSeconds }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return null;
+  }
   if (!r.ok) return null;
   const data = (await r.json()) as { signedURL?: string };
   if (!data.signedURL) return null;
@@ -187,16 +209,21 @@ export async function storageSignDownload(
 export async function storageRemove(objectPath: string): Promise<boolean> {
   const cfg = dbConfig();
   if (!cfg) return false;
-  const r = await fetch(storageUrl(cfg, `/object/${PHOTO_BUCKET}`), {
-    method: "DELETE",
-    headers: {
-      apikey: cfg.key,
-      Authorization: `Bearer ${cfg.key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ prefixes: [objectPath] }),
-    signal: AbortSignal.timeout(15000),
-  });
+  let r: Response;
+  try {
+    r = await fetch(storageUrl(cfg, `/object/${PHOTO_BUCKET}`), {
+      method: "DELETE",
+      headers: {
+        apikey: cfg.key,
+        Authorization: `Bearer ${cfg.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prefixes: [objectPath] }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return false;
+  }
   return r.ok;
 }
 

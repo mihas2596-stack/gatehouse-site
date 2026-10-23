@@ -76,7 +76,7 @@ const roomSlug = (room: string): string =>
 export function sanitizeChecklist(raw: unknown): Checklist | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as { rooms?: unknown; problem_note?: unknown };
-  if (!Array.isArray(c.rooms) || c.rooms.length > 20) return null;
+  if (!Array.isArray(c.rooms) || c.rooms.length === 0 || c.rooms.length > 20) return null;
   const rooms: ChecklistRoom[] = [];
   for (const r of c.rooms as Array<Record<string, unknown>>) {
     if (!r || typeof r.name !== "string" || !Array.isArray(r.items) || r.items.length > 40) return null;
