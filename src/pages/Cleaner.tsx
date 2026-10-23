@@ -308,7 +308,9 @@ const Cleaner = () => {
         {locked && (
           <div className="mt-4 space-y-4">
             {checklist.rooms.map((room) => {
-              const roomPhotos = photos.filter((ph) => ph.room === room.name);
+              // The customer's own problem-report photos (kind "client")
+              // belong to the owner review, not the cleaner's summary.
+              const roomPhotos = photos.filter((ph) => ph.room === room.name && ph.kind !== "client");
               if (roomPhotos.length === 0 && !room.skip_reason) return null;
               return (
                 <div key={room.name} className="rounded-xl border border-border bg-card p-4">
