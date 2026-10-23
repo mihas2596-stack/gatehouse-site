@@ -723,7 +723,14 @@ export default async function handler(req: Req, res: Res) {
         }
       }
       const photosJson = JSON.stringify(finalPhotos);
-      if (photosJson.length > 450 * 4) {
+      // DB-sourced photos (the visit pipeline) are NOT stored in Stripe
+      // metadata: signed URLs are long, and 4+ photos overflow the
+      // 4 x 450-char chunk budget. /api/report re-reads them from the
+      // database and signs fresh URLs at view time (gh_rp_source=db).
+      // Only the legacy path (operator-passed URLs, no visit record)
+      // still chunks URLs into metadata and keeps the size guard.
+      const rpSource = visitRow ? "db" : "";
+      if (!rpSource && photosJson.length > 450 * 4) {
         return json(400, { ok: false, error: "photo_payload_too_large" });
       }
       // Pin the agreed amount for THIS visit's report. The operator may
@@ -746,7 +753,12 @@ export default async function handler(req: Req, res: Res) {
       if (amountCents === undefined || !Number.isFinite(amountCents) || amountCents <= 0) {
         return json(409, { ok: false, error: "quote_missing" });
       }
-      const photoHash = createHash("sha256").update(photosJson).digest("hex").slice(0, 16);
+      // For DB photos the signed URLs change on every send, so the
+      // double-send guard hashes the stable storage paths instead.
+      const hashInput = rpSource
+        ? finalPhotos.map((p) => p.url.split("?")[0]).join("|")
+        : photosJson;
+      const photoHash = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
       const prevSentMs = Date.parse(meta["gh_report_sent_at"] ?? "");
       if (
         meta["gh_state"] === "report_sent" &&
@@ -768,8 +780,9 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_report_bounced]": "",
         "metadata[gh_rp_hash]": photoHash,
       };
+      params["metadata[gh_rp_source]"] = rpSource;
       for (let i = 0; i < 4; i++) {
-        params[`metadata[gh_rp_${i}]`] = photosJson.slice(i * 450, (i + 1) * 450);
+        params[`metadata[gh_rp_${i}]`] = rpSource ? "" : photosJson.slice(i * 450, (i + 1) * 450);
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
       let emailSent = false;

@@ -20,7 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, logEvent, storageSignDownload } from "./_db.js";
 
 type BookingPayload = {
   bid: string;
@@ -355,6 +355,40 @@ export default async function handler(req: Req, res: Res) {
     }
 
     const meta = customer.metadata;
+    // DB-sourced report photos: send_report no longer stores signed URLs
+    // in Stripe metadata (they overflow it). Re-read the visit's photos
+    // and sign fresh download URLs on every view — a link from an old
+    // email keeps working for the whole 90-day retention window.
+    let dbPhotoItems: PhotoItem[] | null = null;
+    if (meta["gh_rp_source"] === "db" && dbConfigured()) {
+      try {
+        const vrows = await dbSelect<{ id: string }>(
+          "gh_visits",
+          `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
+        );
+        const vid = vrows[0]?.id;
+        if (vid) {
+          const rows = await dbSelect<{ room: string; storage_path: string; note: string | null }>(
+            "gh_photos",
+            `visit_id=eq.${vid}&order=created_at.asc&limit=60`,
+          );
+          const items: PhotoItem[] = [];
+          for (const r of rows) {
+            const url = await storageSignDownload(r.storage_path, 24 * 3600);
+            if (url) {
+              items.push({
+                url,
+                room: r.room,
+                ...(r.note ? { note: r.note } : {}),
+              });
+            }
+          }
+          dbPhotoItems = items;
+        }
+      } catch {
+        dbPhotoItems = null;
+      }
+    }
     const booking: Record<string, string> = { ...payloadBooking };
     const firstPrice = money(meta["gh_first_price_cents"]);
     if (firstPrice) booking.first = firstPrice;
@@ -365,7 +399,7 @@ export default async function handler(req: Req, res: Res) {
       const deadline = sentAt
         ? new Date(Date.parse(sentAt) + 24 * 3600 * 1000).toISOString()
         : null;
-      const items = readPhotoItems(meta);
+      const items = dbPhotoItems ?? readPhotoItems(meta);
       const amountCents = parseInt(
         meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "",
         10,
