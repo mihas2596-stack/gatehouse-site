@@ -9,6 +9,7 @@ import {
   calcPrice,
   priceBreakdown,
   scaleTestPrice,
+  priceCutActive,
   tierFor,
   ADDONS,
   ADDONS_INCLUDED_IN,
@@ -73,7 +74,7 @@ const Quote = () => {
   // owner's email, expiring) before honoring the scaled totals; an
   // invalid token rejects the submission instead of repricing silently.
   const testToken = params.get("tp") ?? "";
-  const testMode = testToken !== "";
+  const testMode = testToken !== "" || priceCutActive();
   const dispPrice = (n: number): number => (testMode ? scaleTestPrice(n) : n);
 
   const [insideOven, setInsideOven] = useState(false);

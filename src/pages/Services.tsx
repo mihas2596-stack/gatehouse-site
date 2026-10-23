@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
-import { PRICES, ADDONS } from "@/config/calculator";
+import { PRICES, ADDONS , fmtPrice} from "@/config/calculator";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 type ServiceCard = {
@@ -146,9 +146,9 @@ const Services = () => {
                 </tr>
                 <tr>
                   <th className="font-semibold">Price — small / medium / large</th>
-                  <td>${PRICES.standardOnetime.S} / ${PRICES.standardOnetime.M} / ${PRICES.standardOnetime.L} one-time<br />${PRICES.recurring.S} / ${PRICES.recurring.M} / ${PRICES.recurring.L} every other week</td>
-                  <td>${PRICES.deep.S} / ${PRICES.deep.M} / ${PRICES.deep.L}</td>
-                  <td>${PRICES.moveinout.S} / ${PRICES.moveinout.M} / ${PRICES.moveinout.L}</td>
+                  <td>{fmtPrice(PRICES.standardOnetime.S)} / {fmtPrice(PRICES.standardOnetime.M)} / {fmtPrice(PRICES.standardOnetime.L)} one-time<br />{fmtPrice(PRICES.recurring.S)} / {fmtPrice(PRICES.recurring.M)} / {fmtPrice(PRICES.recurring.L)} every other week</td>
+                  <td>{fmtPrice(PRICES.deep.S)} / {fmtPrice(PRICES.deep.M)} / {fmtPrice(PRICES.deep.L)}</td>
+                  <td>{fmtPrice(PRICES.moveinout.S)} / {fmtPrice(PRICES.moveinout.M)} / {fmtPrice(PRICES.moveinout.L)}</td>
                 </tr>
               </tbody>
             </table>

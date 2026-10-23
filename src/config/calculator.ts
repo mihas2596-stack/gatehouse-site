@@ -148,6 +148,20 @@ export type CalcInput = {
 export const TEST_PRICE_SCALE = 0.1;
 export const scaleTestPrice = (n: number): number => Math.round(n * TEST_PRICE_SCALE * 100) / 100;
 
+/**
+ * Owner-ordered global price cut: ALL prices at 1/10 until the end of the
+ * window, then regular prices return automatically — no deploy needed.
+ * Window: 2026-10-23 → 2026-10-25 11:49 Europe/Minsk (08:49 UTC).
+ * Must match PRICE_CUT_END_MS in api/send-contact-email.ts.
+ */
+export const PRICE_CUT_END_MS = Date.parse("2026-10-25T08:49:00.000Z");
+export const priceCutActive = (now: number = Date.now()): boolean => now < PRICE_CUT_END_MS;
+/** Display helper: applies the global cut while it is active, formats $X or $X.XX. */
+export const fmtPrice = (n: number): string => {
+  const v = priceCutActive() ? scaleTestPrice(n) : n;
+  return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(2)}`;
+};
+
 /** Base price of a single visit, before add-ons. Null = larger than tier L. */
 export function basePrice({
   bedrooms,

@@ -3,6 +3,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
+// The owner-ordered global price-cut window is time-based; pin it OFF here
+// so these price assertions stay deterministic. Token test mode has its
+// own cases below.
+vi.mock("@/config/calculator", async (importActual) => {
+  const actual = await importActual<typeof import("@/config/calculator")>();
+  return { ...actual, priceCutActive: () => false };
+});
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);

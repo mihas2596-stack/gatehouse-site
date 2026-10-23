@@ -7,7 +7,7 @@ import IncludedRooms from "@/components/IncludedRooms";
 import ReportShowcase from "@/components/ReportShowcase";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
-import { PRICES, TIERS } from "@/config/calculator";
+import { PRICES, TIERS , fmtPrice} from "@/config/calculator";
 
 const heroTrust = [
   { Icon: Tag, label: "See your price" },
@@ -25,7 +25,7 @@ const howItWorks = [
     n: "1",
     Icon: Calculator,
     title: "See your price",
-    text: `Answer a few questions about your home. Your price appears instantly — $${PRICES.recurring.S}, $${PRICES.recurring.M} or $${PRICES.recurring.L}. No phone call needed.`,
+    text: `Answer a few questions about your home. Your price appears instantly — ${fmtPrice(PRICES.recurring.S)}, ${fmtPrice(PRICES.recurring.M)} or ${fmtPrice(PRICES.recurring.L)}. No phone call needed.`,
     highlight: false,
   },
   {
@@ -277,7 +277,7 @@ const Index = () => (
                 {biweeklyRows.map(({ label, price }) => (
                   <tr key={label} className="border-b border-border/60 last:border-0">
                     <th scope="row" className="py-2 pr-3 text-sm font-medium text-foreground">{label}</th>
-                    <td className="py-2 text-sm text-foreground">${price}</td>
+                    <td className="py-2 text-sm text-foreground">{fmtPrice(price)}</td>
                   </tr>
                 ))}
               </tbody>

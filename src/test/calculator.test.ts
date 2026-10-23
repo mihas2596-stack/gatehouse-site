@@ -6,7 +6,7 @@
 // every scenario below prices from the regular tables. The owner's signed
 // price-test mode (testScale) prices at 1/10 and is covered separately.
 import { describe, it, expect } from "vitest";
-import { priceBreakdown, tierFor, addonsTotal } from "../config/calculator";
+import { priceBreakdown, tierFor, addonsTotal, priceCutActive } from "../config/calculator";
 
 describe("tierFor", () => {
   it("maps 3bd/2ba to M", () => {
@@ -107,5 +107,14 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
     });
     expect(b!.first_total).toBe(22.4); // $224 / 10
     expect(b!.recurring_total).toBe(22.4);
+  });
+});
+
+describe("global price-cut window", () => {
+  it("is active before the end and inactive after", () => {
+    expect(priceCutActive(Date.parse("2026-10-24T00:00:00.000Z"))).toBe(true);
+    expect(priceCutActive(Date.parse("2026-10-25T08:48:59.000Z"))).toBe(true);
+    expect(priceCutActive(Date.parse("2026-10-25T08:49:00.000Z"))).toBe(false);
+    expect(priceCutActive(Date.parse("2026-10-26T00:00:00.000Z"))).toBe(false);
   });
 });

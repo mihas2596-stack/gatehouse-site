@@ -556,6 +556,10 @@ export default async function handler(req: Req, res: Res) {
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
     let testScale = false;
+    // Owner-ordered global price cut: every booking at 1/10 until
+    // PRICE_CUT_END_MS (2026-10-25 08:49 UTC), then regular prices return
+    // automatically. Must match PRICE_CUT_END_MS in src/config/calculator.ts.
+    const cutScale = Date.now() < Date.parse("2026-10-25T08:49:00.000Z");
     let serverRecurring: string | undefined;
     if (isQuote) {
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
@@ -595,7 +599,7 @@ export default async function handler(req: Req, res: Res) {
         serviceKey: parsed.data.service_key,
         frequency: parsed.data.frequency,
         cleanedRecently: parsed.data.cleaned_recently,
-        testScale,
+        testScale: testScale || cutScale,
         addons: {
           insideOven: parsed.data.addons?.insideOven,
           insideFridge: parsed.data.addons?.insideFridge,
@@ -682,8 +686,8 @@ export default async function handler(req: Req, res: Res) {
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background:${testScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale ? "#8B4513" : "#444"};">
-          ${isQuote ? (testScale ? "TEST BOOKING — owner price test at 1/10 prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
+        <div style="background:${testScale || cutScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale || cutScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale || cutScale ? "#8B4513" : "#444"};">
+          ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at 1/10 prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
@@ -701,7 +705,7 @@ export default async function handler(req: Req, res: Res) {
           ${date ? row("Preferred Date", escapeHtml(date)) : ""}
           ${time ? row("Preferred Time", escapeHtml(time)) : ""}
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
-${isQuote ? row("Test price mode (1/10)", testScale ? "YES" : "NO") : ""}
+${isQuote ? row("Test price mode (1/10)", testScale || cutScale ? "YES" : "NO") : ""}
 ${isQuote && extra_zones ? row("Extra areas to clean", extra_zones) : ""}
 ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "check scope"}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
