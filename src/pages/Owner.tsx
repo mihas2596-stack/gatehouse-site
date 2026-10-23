@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { convertToJpeg } from "@/lib/imageConvert";
 
 type Visit = {
   id: string;
@@ -22,7 +23,7 @@ type Visit = {
   report_bounced: boolean;
   paid_at: string | null;
   is_test: boolean;
-  checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string };
+  checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
   photo_count?: number;
 };
 
@@ -48,6 +49,11 @@ const Owner = () => {
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
   const [cleanerName, setCleanerName] = useState("");
+  const [acting, setActing] = useState("");
+  const [publishMsg, setPublishMsg] = useState("");
+  const [cleanerMsg, setCleanerMsg] = useState("");
+  const [ownerRoom, setOwnerRoom] = useState("Kitchen");
+  const [ownerKind, setOwnerKind] = useState<"before" | "after">("after");
 
   const headers = useCallback(
     () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }),
@@ -117,8 +123,10 @@ const Owner = () => {
   };
 
   const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void) => {
+    setActing(label);
     setActionMsg(`${label}: working…`);
     const j = await act(payload);
+    setActing("");
     if (j.ok) {
       setActionMsg(`${label}: done.`);
       after?.(j);
@@ -130,6 +138,40 @@ const Owner = () => {
     } else {
       setActionMsg(`${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
     }
+  };
+
+  const ownerUpload = async (files: FileList | null) => {
+    if (!selected || !files || files.length === 0) return;
+    setActing("Owner upload");
+    setActionMsg("Owner upload: working…");
+    try {
+      for (const f of Array.from(files)) {
+        const blob = await convertToJpeg(f);
+        const sign = await act({ action: "owner_photo_sign", booking_id: selected.booking_id, room: ownerRoom, kind: ownerKind });
+        if (!sign.ok || typeof sign["upload_url"] !== "string" || typeof sign["storage_path"] !== "string") {
+          throw new Error("sign failed");
+        }
+        const put = await fetch(sign["upload_url"] as string, {
+          method: "PUT",
+          headers: { "Content-Type": "image/jpeg", "x-upsert": "false" },
+          body: blob,
+        });
+        if (!put.ok) throw new Error("upload failed");
+        const reg = await act({
+          action: "owner_photo_register",
+          booking_id: selected.booking_id,
+          room: ownerRoom,
+          kind: ownerKind,
+          storage_path: sign["storage_path"],
+        });
+        if (!reg.ok) throw new Error(typeof reg.error === "string" ? reg.error : "register failed");
+      }
+      setActionMsg("Owner upload: done.");
+      void openVisit(selected);
+    } catch (err) {
+      setActionMsg(`Owner upload: ${err instanceof Error ? err.message : "failed"}`);
+    }
+    setActing("");
   };
 
   if (!token) {
@@ -173,6 +215,35 @@ const Owner = () => {
         </div>
         {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
         {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
+
+        {!selected && visits.some((v) => v.report_status === "submitted") && (
+          <div className="mb-5">
+            <h2 className="font-heading text-xl font-bold mb-2">Reports awaiting review</h2>
+            <div className="space-y-2">
+              {visits
+                .filter((v) => v.report_status === "submitted")
+                .map((v) => {
+                  const since = v.checklist?.submitted_at ? Date.parse(v.checklist.submitted_at) : NaN;
+                  const hours = Number.isFinite(since) ? Math.max(0, Math.round((Date.now() - since) / 3600000)) : null;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      className="w-full text-left rounded-xl border border-amber-500/60 bg-amber-50 p-4 hover:border-primary"
+                      onClick={() => void openVisit(v)}
+                    >
+                      <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
+                      <span className="text-sm text-muted-foreground">
+                        {v.visit_date ?? ""} · {v.photo_count ?? 0} photos
+                        {hours !== null ? <> · waiting {hours < 1 ? "<1" : hours}h</> : null}
+                        {v.checklist?.problem_note ? <> · cleaner note attached</> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         {!selected && (
           <div className="space-y-2">
@@ -228,20 +299,61 @@ const Owner = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-4">
-              {photos.map((p) => (
-                <div key={p.id} className="relative">
-                  {p.url ? (
-                    <img src={p.url} alt={`${p.room} ${p.kind}`} className="rounded-lg object-cover w-full h-24" />
-                  ) : (
-                    <div className="rounded-lg bg-muted w-full h-24" />
-                  )}
-                  <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
-                    {p.room} · {p.kind}
-                  </span>
+            {(selected.checklist?.rooms ?? []).length > 0 && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-4">
+                <p className="font-semibold mb-2">Checklist & exceptions</p>
+                <ul className="space-y-1 text-sm">
+                  {(selected.checklist?.rooms ?? []).map((r) => {
+                    const done = r.items.filter((i) => i.done).length;
+                    return (
+                      <li key={r.name}>
+                        <span className="font-medium">{r.name}:</span> {done}/{r.items.length} done
+                        {r.skip_reason ? (
+                          <> · <span className="text-amber-700">Exception: {r.skip_reason}</span></>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {Object.entries(
+              photos.reduce<Record<string, Photo[]>>((acc, ph) => {
+                (acc[ph.room] ??= []).push(ph);
+                return acc;
+              }, {}),
+            ).map(([room, items]) => (
+              <div key={room} className="mb-4">
+                <p className="font-semibold mb-2">{room}</p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {[...items]
+                    .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
+                    .map((ph) => (
+                      <div key={ph.id} className="relative">
+                        {ph.url ? (
+                          <img src={ph.url} alt={`${ph.room} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
+                        ) : (
+                          <div className="rounded-lg bg-muted w-full h-24" />
+                        )}
+                        <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
+                          {ph.kind === "client" ? "From customer" : ph.kind === "before" ? "Before" : "After"}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Delete photo"
+                          className="absolute right-1 top-1 bg-black/60 text-white rounded px-1.5 py-0.5 text-[10px]"
+                          onClick={() =>
+                            void runAction("Delete photo", { action: "owner_photo_delete", booking_id: selected.booking_id, photo_id: ph.id })
+                          }
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
 
             <div className="rounded-xl border border-border bg-card p-4 mb-4 space-y-4">
               <div>
@@ -270,32 +382,98 @@ const Owner = () => {
                   </Button>
                 </div>
                 {cleanerUrl && (
-                  <p className="text-xs mt-2 break-all bg-muted rounded p-2">
-                    Send this link to the cleaner (valid 14 days):<br />{cleanerUrl}
-                  </p>
+                  <div className="mt-2">
+                    <p className="text-xs mb-1">Ready-to-send message for the cleaner (link valid 14 days):</p>
+                    <textarea
+                      readOnly
+                      rows={7}
+                      className="w-full text-xs bg-muted rounded p-2"
+                      value={cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1"
+                      onClick={() => {
+                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
+                        void navigator.clipboard?.writeText(text);
+                        setCleanerMsg(text);
+                        setActionMsg("Cleaner message copied.");
+                      }}
+                    >
+                      Copy message
+                    </Button>
+                  </div>
                 )}
               </div>
 
               <div>
-                <p className="font-semibold mb-2">Report</p>
+                <p className="font-semibold mb-2">Report review</p>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="hero"
-                    disabled={selected.report_status !== "submitted" && selected.report_status !== "sent"}
-                    onClick={() => void runAction("Send report to client", { action: "send_report", booking_id: selected.booking_id })}
+                    disabled={acting !== "" || (selected.report_status !== "submitted" && selected.report_status !== "sent")}
+                    onClick={() =>
+                      void runAction("Publish & notify customer", { action: "send_report", booking_id: selected.booking_id }, (j) => {
+                        setPublishMsg(
+                          j["email_sent"] === true
+                            ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
+                            : "Published and saved, but the customer email was NOT delivered — the review period is paused. Check the report email status and publish again to retry.",
+                        );
+                      })
+                    }
                   >
-                    Approve & send report to client
+                    Publish & notify customer
                   </Button>
-                </div>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="Note for the cleaner (why the report goes back)" value={returnNote} onChange={(e) => setReturnNote(e.target.value)} />
                   <Button
                     variant="outline"
-                    disabled={selected.report_status !== "submitted"}
-                    onClick={() => void runAction("Return report", { action: "return_report", booking_id: selected.booking_id, note: returnNote })}
+                    disabled={acting !== ""}
+                    onClick={() =>
+                      void runAction("Preview", { action: "preview_link", booking_id: selected.booking_id }, (j) => {
+                        if (typeof j["report_url"] === "string") window.open(j["report_url"] as string, "_blank");
+                      })
+                    }
                   >
-                    Return to cleaner
+                    Preview customer report
                   </Button>
+                </div>
+                {publishMsg && <p className="text-sm mt-2" role="status">{publishMsg}</p>}
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What needs to change? (the cleaner sees this note)" value={returnNote} onChange={(e) => setReturnNote(e.target.value)} />
+                  <Button
+                    variant="outline"
+                    disabled={acting !== "" || selected.report_status !== "submitted"}
+                    onClick={() => void runAction("Request changes", { action: "return_report", booking_id: selected.booking_id, note: returnNote })}
+                  >
+                    Request changes
+                  </Button>
+                </div>
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="text-sm font-medium mb-2">Add photos yourself (fallback — e.g. the cleaner texted them to you)</p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerRoom} onChange={(e) => setOwnerRoom(e.target.value)}>
+                      {[...(selected.checklist?.rooms ?? []).map((r) => r.name), "Other areas"].map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                    <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerKind} onChange={(e) => setOwnerKind(e.target.value as "before" | "after")}>
+                      <option value="after">After</option>
+                      <option value="before">Before</option>
+                    </select>
+                    <label className="rounded-lg border border-border px-3 py-2 text-sm cursor-pointer">
+                      Choose photos
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          void ownerUpload(e.target.files);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
                 </div>
               </div>
 

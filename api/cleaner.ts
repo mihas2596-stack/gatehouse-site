@@ -20,6 +20,9 @@ import {
   storageSignUpload,
   storageSignDownload,
   storageRemove,
+  storageObjectInfo,
+  ALLOWED_PHOTO_TYPES,
+  MAX_PHOTO_BYTES,
   hashToken,
 } from "./_db.js";
 
@@ -246,6 +249,15 @@ export default async function handler(req: Req, res: Res) {
       const storagePath = typeof body["storage_path"] === "string" ? (body["storage_path"] as string) : "";
       if (!room || !storagePath.startsWith(`visits/${visit.id}/`)) {
         return json(400, { ok: false, error: "invalid_photo" });
+      }
+      // Server-side validation of the uploaded bytes (type + size): the
+      // client uploads straight to Storage, so this is the first point
+      // the server sees the file. Anything else is removed again.
+      const info = await storageObjectInfo(storagePath);
+      if (!info) return json(502, { ok: false, error: "storage_error" });
+      if (!ALLOWED_PHOTO_TYPES.includes(info.contentType) || info.size <= 0 || info.size > MAX_PHOTO_BYTES) {
+        await storageRemove(storagePath);
+        return json(400, { ok: false, error: "invalid_photo_file" });
       }
       const existing = await photosOf(visit.id);
       if (existing.some((p) => p.storage_path === storagePath)) {

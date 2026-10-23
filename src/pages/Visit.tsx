@@ -37,6 +37,7 @@ type VisitData = {
   access_notes?: string;
   no_photo_zones?: string;
   has_card?: boolean;
+  report_preparing?: boolean;
   error?: string;
 };
 
@@ -193,6 +194,15 @@ const Visit = () => {
                   : "This visit is cancelled. Your recurring schedule, if you have one, stays in place."}{" "}
                 Your saved card stays on file for future bookings — email us any time to have it removed.
               </p>
+            )}
+            {data.report_preparing && data.state !== "report_sent" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <p className="text-foreground font-semibold mb-1">Your cleaning is complete.</p>
+                <p className="text-sm text-muted-foreground">
+                  We&apos;re preparing your photo report. Your review period has not started —
+                  it begins only when the report reaches you.
+                </p>
+              </div>
             )}
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") && (
               <p className="text-lg text-foreground mb-6 text-center">

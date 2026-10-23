@@ -24,7 +24,7 @@
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
 import { sendReceiptEmailOnce } from "./booking-action.js";
-import { dbConfigured, dbSelect, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbDelete, logEvent, storageRemove } from "./_db.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
 // shared customer is currently bound to. A report sent for another
@@ -463,6 +463,35 @@ export default async function handler(req: Req, res: Res) {
           logErr("reminder", err);
         }
       }
+    }
+
+    // --- Photo retention pass: report photos are advertised as kept
+    // for 90 days and then deleted. Enforce it: for visits whose report
+    // was sent more than 90 days ago, remove the stored objects and
+    // their rows (the visit record itself stays).
+    try {
+      if (dbConfigured()) {
+        const cutoff = new Date(now - 90 * 24 * 3600 * 1000).toISOString();
+        const old = await dbSelect<{ id: string; booking_id: string }>(
+          "gh_visits",
+          `report_sent_at=lt.${encodeURIComponent(cutoff)}&order=report_sent_at.asc&limit=20`,
+        );
+        for (const v of old) {
+          const photos = await dbSelect<{ id: string; storage_path: string }>(
+            "gh_photos",
+            `visit_id=eq.${v.id}&limit=200`,
+          );
+          for (const ph of photos) {
+            await storageRemove(ph.storage_path);
+            await dbDelete("gh_photos", `id=eq.${ph.id}`);
+          }
+          if (photos.length > 0) {
+            await logEvent(v.id, v.booking_id, "system", "photos_retention_deleted", { count: photos.length });
+          }
+        }
+      }
+    } catch (err) {
+      logErr("retention", err);
     }
 
     // --- Receipt-retry pass: a paid visit whose receipt email failed

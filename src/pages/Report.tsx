@@ -13,7 +13,7 @@ type ReportStateName =
   | "paid"
   | "payment_issue";
 
-type PhotoItem = { url: string; room?: string; note?: string };
+type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
 
 type ReportData = {
   ok: boolean;
@@ -60,6 +60,8 @@ const Report = () => {
   const [paidIssueOpen, setPaidIssueOpen] = useState(false);
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
+  const [zoom, setZoom] = useState<string | null>(null);
+  const [failedPhotos, setFailedPhotos] = useState<Set<string>>(new Set());
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
 
@@ -216,19 +218,41 @@ const Report = () => {
                   <div key={room}>
                     <h2 className="font-heading text-lg font-bold mb-2">{room}</h2>
                     <div className="grid grid-cols-2 gap-3">
-                      {items.map((p, i) => (
-                        <figure key={i}>
-                          <img
-                            src={p.url}
-                            alt={`${room} — cleaning photo ${i + 1}`}
-                            loading="lazy"
-                            className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
-                          />
-                          {p.note ? (
-                            <figcaption className="text-xs text-muted-foreground mt-1">{p.note}</figcaption>
-                          ) : null}
-                        </figure>
-                      ))}
+                      {[...items]
+                        .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
+                        .map((p, i) => (
+                          <figure key={i}>
+                            {failedPhotos.has(p.url) ? (
+                              <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
+                                <p className="text-xs text-muted-foreground">
+                                  This photo couldn&apos;t load. Check your connection, or email
+                                  hello@gatehousehomecleaning.com and we&apos;ll resend it.
+                                </p>
+                                <button
+                                  type="button"
+                                  className="text-xs underline"
+                                  onClick={() => void load()}
+                                >
+                                  Try again
+                                </button>
+                              </div>
+                            ) : (
+                              <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${room} photo`}>
+                                <img
+                                  src={p.url}
+                                  alt={`${room} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                                  loading="lazy"
+                                  onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
+                                  className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                                />
+                              </button>
+                            )}
+                            <figcaption className="text-xs text-muted-foreground mt-1">
+                              <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                              {p.note ? <> — {p.note}</> : null}
+                            </figcaption>
+                          </figure>
+                        ))}
                     </div>
                   </div>
                 ))}
@@ -249,6 +273,23 @@ const Report = () => {
               <p className="text-foreground mb-6 text-center">
                 The photos for this visit are attached to the email we sent you.
               </p>
+            )}
+            {zoom && (
+              <div
+                className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+                role="dialog"
+                aria-label="Enlarged photo"
+                onClick={() => setZoom(null)}
+              >
+                <img src={zoom} alt="Enlarged cleaning photo" className="max-w-full max-h-full object-contain rounded-lg" />
+                <button
+                  type="button"
+                  className="absolute top-4 right-4 text-white text-sm bg-white/10 rounded-lg px-3 py-2"
+                  onClick={() => setZoom(null)}
+                >
+                  Close
+                </button>
+              </div>
             )}
             <p className="text-xs text-muted-foreground mb-6 text-left">
               About these photos: they exist only for your private report. We photograph rooms, not

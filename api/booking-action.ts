@@ -27,8 +27,9 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
-  dbConfigured, dbSelect, dbUpdate, dbUpsert, logEvent,
+  dbConfigured, dbSelect, dbInsert, dbDelete, dbUpdate, dbUpsert, logEvent,
   newCleanerToken, hashToken, storageSignDownload,
+  storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 
 type BookingPayload = {
@@ -107,7 +108,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card", "cleaner_link", "return_report"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card", "cleaner_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -1213,6 +1214,68 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(visit.id, bookingId, "owner", "report_returned", { note: noteText });
       log("return_report", { booking: bookingId });
       return json(200, { ok: true, report_status: "returned" });
+    }
+
+    if (action === "preview_link") {
+      // Fresh personal links so the owner can preview exactly what the
+      // customer sees (report + visit pages) before publishing.
+      const email = row?.client_email || (typeof customer.email === "string" ? customer.email : "");
+      const name = typeof customer.name === "string" ? customer.name : "";
+      if (!email) return json(400, { ok: false, error: "no_client_email" });
+      const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+        bid: bookingId, email, name, ts: Math.floor(Date.now() / 1000),
+      });
+      return json(200, {
+        ok: true,
+        report_url: `https://www.gatehousehomecleaning.com/report?bt=${token}`,
+        visit_url: `https://www.gatehousehomecleaning.com/visit?bt=${token}`,
+      });
+    }
+
+    if (action === "owner_photo_sign" || action === "owner_photo_register" || action === "owner_photo_delete") {
+      // Owner fallback: photos the cleaner sent another way (text/email)
+      // can be uploaded into the same visit by the owner.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (action === "owner_photo_sign") {
+        const room = typeof body["room"] === "string" ? (body["room"] as string).slice(0, 60) : "";
+        if (!room) return json(400, { ok: false, error: "invalid_room" });
+        const slug = room.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "room";
+        const objectPath = `visits/${row.id}/${slug}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+        const signed = await storageSignUpload(objectPath);
+        if (!signed) return json(502, { ok: false, error: "storage_error" });
+        return json(200, { ok: true, upload_url: signed.signedUrl, storage_path: objectPath });
+      }
+      if (action === "owner_photo_register") {
+        const room = typeof body["room"] === "string" ? (body["room"] as string).slice(0, 60) : "";
+        const kind = body["kind"] === "before" ? "before" : "after";
+        const storagePath = typeof body["storage_path"] === "string" ? (body["storage_path"] as string) : "";
+        if (!room || !storagePath.startsWith(`visits/${row.id}/`)) {
+          return json(400, { ok: false, error: "invalid_photo" });
+        }
+        const info = await storageObjectInfo(storagePath);
+        if (!info) return json(502, { ok: false, error: "storage_error" });
+        if (!ALLOWED_PHOTO_TYPES.includes(info.contentType) || info.size <= 0 || info.size > MAX_PHOTO_BYTES) {
+          await storageRemove(storagePath);
+          return json(400, { ok: false, error: "invalid_photo_file" });
+        }
+        const inserted = await dbInsert("gh_photos", {
+          visit_id: row.id, room, storage_path: storagePath, kind, note: "Added by the owner",
+        });
+        if (!inserted) return json(502, { ok: false, error: "db_error" });
+        await logEvent(row.id, bookingId, "owner", "owner_photo_added", { room, kind });
+        return json(200, { ok: true });
+      }
+      const photoId = typeof body["photo_id"] === "string" ? (body["photo_id"] as string) : "";
+      const photos = await dbSelect<{ id: string; storage_path: string }>(
+        "gh_photos", `visit_id=eq.${row.id}&id=eq.${encodeURIComponent(photoId)}&limit=1`,
+      );
+      const target = photos[0];
+      if (!target) return json(404, { ok: false, error: "photo_not_found" });
+      await dbDelete("gh_photos", `id=eq.${target.id}&visit_id=eq.${row.id}`);
+      await storageRemove(target.storage_path);
+      await logEvent(row.id, bookingId, "owner", "owner_photo_deleted", {});
+      return json(200, { ok: true });
     }
 
     return json(400, { ok: false, error: "invalid_request" });

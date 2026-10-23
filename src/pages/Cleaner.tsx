@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Camera, CheckCircle, AlertTriangle, Loader2, Trash2, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { convertToJpeg } from "@/lib/imageConvert";
 
 type ChecklistItem = { label: string; done: boolean };
 type ChecklistRoom = { name: string; items: ChecklistItem[]; skip_reason?: string };
@@ -36,47 +37,15 @@ type CleanerView = {
   error?: string;
 };
 
-type UploadState = { room: string; label: string; status: "working" | "error"; error?: string };
+type UploadState = {
+  room: string;
+  kind: "before" | "after";
+  label: string;
+  status: "working" | "error";
+  error?: string;
+  file?: File;
+};
 
-async function convertToJpeg(file: File): Promise<Blob> {
-  let bitmap: ImageBitmap | null = null;
-  try {
-    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-  } catch {
-    bitmap = null;
-  }
-  if (!bitmap) {
-    try {
-      bitmap = await createImageBitmap(file);
-    } catch {
-      bitmap = null;
-    }
-  }
-  if (!bitmap) {
-    const name = file.name.toLowerCase();
-    if (file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif")) {
-      throw new Error(
-        "This photo is in HEIC format and couldn't be converted on this phone. " +
-          "On iPhone: Settings → Camera → Formats → “Most Compatible”, then take the photo again — " +
-          "or pick it from the gallery instead.",
-      );
-    }
-    if (["image/jpeg", "image/png", "image/webp"].includes(file.type)) return file;
-    throw new Error("This file isn't a photo we can use. Please take a photo or pick a JPG/PNG from the gallery.");
-  }
-  const maxSide = 2048;
-  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Couldn't process this photo on this phone. Please try again.");
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-  if (!blob) throw new Error("Couldn't process this photo on this phone. Please try again.");
-  return blob; // canvas re-encode also strips EXIF / location metadata
-}
 
 const Cleaner = () => {
   const [searchParams] = useSearchParams();
@@ -134,9 +103,22 @@ const Cleaner = () => {
     [post],
   );
 
+  const seenFiles = useRef<Set<string>>(new Set());
+
   const uploadPhoto = async (room: string, kind: "after" | "before", file: File) => {
     const tempId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setUploads((u) => ({ ...u, [tempId]: { room, label: file.name || "photo", status: "working" } }));
+    const signature = `${room}|${kind}|${file.name}|${file.size}|${file.lastModified}`;
+    if (seenFiles.current.has(signature)) {
+      setUploads((u) => ({
+        ...u,
+        [tempId]: {
+          room, kind, label: file.name || "photo", status: "error",
+          error: "This looks like the same photo you already added for this room — skipped to avoid a duplicate.",
+        },
+      }));
+      return;
+    }
+    setUploads((u) => ({ ...u, [tempId]: { room, kind, label: file.name || "photo", status: "working", file } }));
     try {
       const blob = await convertToJpeg(file);
       const sign = await post({ action: "photo_sign", room, kind });
@@ -155,13 +137,19 @@ const Cleaner = () => {
         kind,
         storage_path: sign["storage_path"],
       });
-      if (!reg.ok) throw new Error("The photo uploaded but couldn't be saved. Please retry.");
+      if (!reg.ok) {
+        if (reg.error === "invalid_photo_file") {
+          throw new Error("That file isn't a usable photo (JPG/PNG/HEIC, up to 15 MB). Please pick another one.");
+        }
+        throw new Error("The photo uploaded but couldn't be saved. Please retry.");
+      }
+      seenFiles.current.add(signature);
       await load();
     } catch (err) {
       setUploads((u) => ({
         ...u,
         [tempId]: {
-          room,
+          room, kind, file,
           label: file.name || "photo",
           status: "error",
           error: err instanceof Error ? err.message : "Upload failed. Please retry.",
@@ -175,6 +163,23 @@ const Cleaner = () => {
       return next;
     });
   };
+
+  const retryUpload = (tempId: string) => {
+    const u = uploads[tempId];
+    if (!u?.file) return;
+    setUploads((prev) => {
+      const next = { ...prev };
+      delete next[tempId];
+      return next;
+    });
+    void uploadPhoto(u.room, u.kind, u.file);
+  };
+  const dismissUpload = (tempId: string) =>
+    setUploads((prev) => {
+      const next = { ...prev };
+      delete next[tempId];
+      return next;
+    });
 
   const deletePhoto = async (photo: Photo) => {
     const r = await post({ action: "photo_delete", photo_id: photo.id });
@@ -269,6 +274,15 @@ const Cleaner = () => {
             never used for marketing without separate consent.
           </p>
         </div>
+        <div className="rounded-xl border border-border bg-card p-4 mt-4">
+          <p className="text-sm text-foreground">
+            <strong>How to photograph:</strong> take a “before” photo of each area before you
+            start, and an “after” photo when you finish — from a similar angle, so the client
+            can compare. Add a close-up only where it helps (inside the oven, a stain you
+            couldn&apos;t remove, damage you found). A photo counts as uploaded only when it
+            appears above with its picture.
+          </p>
+        </div>
 
         {data.report_status === "returned" && data.owner_note && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4">
@@ -279,8 +293,8 @@ const Cleaner = () => {
         {data.report_status === "submitted" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report sent for review</p>
-            <p className="text-sm text-muted-foreground">The owner reviews it before the client sees it. You&apos;re done here — thank you!</p>
+            <p className="font-semibold">Report submitted.</p>
+            <p className="text-sm text-muted-foreground">Gatehouse will review it before sharing it with the customer. You&apos;re done here — thank you!</p>
           </div>
         )}
 
@@ -344,10 +358,20 @@ const Cleaner = () => {
                       </div>
                     ))}
                 </div>
-                {Object.values(uploads)
-                  .filter((u) => u.room === room.name && u.status === "error")
-                  .map((u, i) => (
-                    <p key={i} className="text-sm text-destructive mb-2" role="alert">{u.error}</p>
+                {Object.entries(uploads)
+                  .filter(([, u]) => u.room === room.name && u.status === "error")
+                  .map(([tempId, u]) => (
+                    <div key={tempId} className="mb-2 flex items-start gap-2">
+                      <p className="text-sm text-destructive flex-1" role="alert">{u.error}</p>
+                      {u.file && (
+                        <button type="button" className="text-sm underline shrink-0" onClick={() => retryUpload(tempId)}>
+                          Retry
+                        </button>
+                      )}
+                      <button type="button" className="text-sm text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
+                        Dismiss
+                      </button>
+                    </div>
                   ))}
 
                 <div className="flex gap-2">
@@ -374,10 +398,11 @@ const Cleaner = () => {
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
                       className="hidden"
                       onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void uploadPhoto(room.name, "after", f);
+                        const files = Array.from(e.target.files ?? []);
+                        for (const f of files) void uploadPhoto(room.name, "after", f);
                         e.target.value = "";
                       }}
                     />
@@ -389,6 +414,7 @@ const Cleaner = () => {
                     <input
                       type="file"
                       accept="image/*"
+                      capture="environment"
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0];

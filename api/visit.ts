@@ -506,6 +506,9 @@ export default async function handler(req: Req, res: Res) {
         access_notes: meta["gh_access_notes"] ?? "",
         no_photo_zones: meta["gh_no_photo_zones"] ?? "",
         has_card: Boolean(meta["gh_payment_method"]),
+        // The cleaner has submitted the report and the owner has not
+        // published it yet: the customer's review period has NOT started.
+        report_preparing: Boolean(row && row.report_status === "submitted" && !row.report_sent_at),
       };
     };
 

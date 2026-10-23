@@ -20,7 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, logEvent, storageSignDownload } from "./_db.js";
+import { dbConfigured, dbSelect, dbInsert, logEvent, storageSignDownload, storagePut } from "./_db.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -321,7 +321,7 @@ function deriveState(meta: Record<string, string>): ReportState {
   return "not_ready";
 }
 
-export type PhotoItem = { url: string; room?: string; note?: string };
+export type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
 
 function readPhotoItems(meta: Record<string, string>): PhotoItem[] {
   let json = "";
@@ -484,17 +484,19 @@ export default async function handler(req: Req, res: Res) {
         );
         const vid = vrows[0]?.id;
         if (vid) {
-          const rows = await dbSelect<{ room: string; storage_path: string; note: string | null }>(
+          const rows = await dbSelect<{ room: string; storage_path: string; note: string | null; kind: string }>(
             "gh_photos",
             `visit_id=eq.${vid}&order=created_at.asc&limit=60`,
           );
           const items: PhotoItem[] = [];
           for (const r of rows) {
+            if (r.kind === "client") continue; // customer-submitted photos are not part of the report
             const url = await storageSignDownload(r.storage_path, 24 * 3600);
             if (url) {
               items.push({
                 url,
                 room: r.room,
+                kind: r.kind === "before" ? "before" : "after",
                 ...(r.note ? { note: r.note } : {}),
               });
             }
@@ -672,6 +674,28 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(row.id, payload.bid, "client", "issue_opened", {
         reason: reason.slice(0, 200), room: room.slice(0, 60),
       });
+      // Persist the customer's own photo on the visit (it is also emailed
+      // to the owner below) so it stays visible in the owner review
+      // instead of living only in an email attachment.
+      if (photoB64) {
+        try {
+          const bytes = Buffer.from(photoB64, "base64");
+          if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
+            const path = `visits/${row.id}/client-issue/${Date.now()}.jpg`;
+            if (await storagePut(path, bytes, "image/jpeg")) {
+              await dbInsert("gh_photos", {
+                visit_id: row.id,
+                room: room || "Client photo",
+                storage_path: path,
+                kind: "client",
+                note: reason.slice(0, 300) || null,
+              });
+            }
+          }
+        } catch {
+          /* the emailed copy still reaches the owner */
+        }
+      }
     }
 
     // Best-effort notifications — the issue is already recorded on the
