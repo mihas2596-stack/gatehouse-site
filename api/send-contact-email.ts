@@ -20,10 +20,10 @@ const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
 // Used to verify the browser-sent price instead of trusting it blindly.
 type TierKey = "S" | "M" | "L";
 const SERVER_PRICES: Record<string, Record<TierKey, number>> = {
-  standardOnetime: { S: 149, M: 219, L: 279 },
-  deep: { S: 249, M: 329, L: 399 },
-  moveinout: { S: 279, M: 369, L: 449 },
-  recurring: { S: 129, M: 189, L: 239 },
+  standardOnetime: { S: 14.9, M: 21.9, L: 27.9 },
+  deep: { S: 24.9, M: 32.9, L: 39.9 },
+  moveinout: { S: 27.9, M: 36.9, L: 44.9 },
+  recurring: { S: 12.9, M: 18.9, L: 23.9 },
 };
 function serverTierFor(bedrooms: number, fullBaths: number): TierKey | null {
   if (!Number.isFinite(bedrooms) || !Number.isFinite(fullBaths)) return null;
@@ -44,11 +44,11 @@ type ServerAddonSel = {
   pets?: boolean;
 };
 const SERVER_ADDON_PRICES: Record<string, number> = {
-  insideOven: 35,
-  insideFridge: 35,
-  insideCabinets: 45,
-  interiorWindow: 8,
-  pets: 15,
+  insideOven: 3.5,
+  insideFridge: 3.5,
+  insideCabinets: 4.5,
+  interiorWindow: 0.8,
+  pets: 1.5,
 };
 const SERVER_ADDONS_INCLUDED: Record<string, string[]> = {
   standard: [],
@@ -108,10 +108,10 @@ export function serverBreakdown(opts: {
       first_service,
     };
   }
-  const foundingRecurringBase = Math.round(recurringBase * 0.7);
+  const foundingRecurringBase = Math.round(recurringBase * 0.7 * 10) / 10;
   const founding_recurring = foundingRecurringBase + serverAddonsTotal(opts.addons, "standard");
   if (!deepFirst) {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7 * 10) / 10;
     return {
       first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "standard"),
       recurring_total: founding_recurring,
@@ -119,7 +119,7 @@ export function serverBreakdown(opts: {
     };
   }
   if (SERVER_FOUNDING_DEEP_RULE === "discounted") {
-    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7);
+    const discountedDeep = Math.round(SERVER_PRICES.deep[tier] * 0.7 * 10) / 10;
     return {
       first_total: discountedDeep + serverAddonsTotal(opts.addons, "deep"),
       recurring_total: founding_recurring,
@@ -127,7 +127,7 @@ export function serverBreakdown(opts: {
     };
   }
   if (SERVER_FOUNDING_DEEP_RULE === "flat") {
-    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7);
+    const foundingFirstBase = Math.round(SERVER_PRICES.standardOnetime[tier] * 0.7 * 10) / 10;
     return {
       first_total: foundingFirstBase + serverAddonsTotal(opts.addons, "deep"),
       recurring_total: founding_recurring,
