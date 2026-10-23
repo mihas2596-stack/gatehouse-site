@@ -80,8 +80,8 @@ describe("owner price-test mode parity (testScale = 1/100)", () => {
       addons: {},
       testScale: true,
     });
-    expect(client!.first_total).toBe(21.9); // $219 / 10
-    expect(server!.first_total).toBe(21.9);
+    expect(client!.first_total).toBe(2.19); // $219 / 100
+    expect(server!.first_total).toBe(2.19);
     expect(server!.recurring_total).toBe(client!.recurring_total);
   });
 });
