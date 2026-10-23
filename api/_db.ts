@@ -261,23 +261,20 @@ export const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/heic", "im
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
 /** Upload raw bytes server-side (service role). Used for files the
- * server itself receives, e.g. a customer's problem-report photo. */
+ * server itself receives, e.g. a customer's problem-report photo.
+ * Goes through the signed-upload flow — the same path browser uploads
+ * use — instead of a direct object POST. */
 export async function storagePut(
   objectPath: string,
   bytes: Uint8Array,
   contentType: string,
 ): Promise<boolean> {
-  const cfg = dbConfig();
-  if (!cfg) return false;
+  const signed = await storageSignUpload(objectPath);
+  if (!signed) return false;
   try {
-    const r = await fetch(storageUrl(cfg, `/object/${PHOTO_BUCKET}/${objectPath}`), {
-      method: "POST",
-      headers: {
-        ["api" + "key"]: cfg.serviceKey,
-        Authorization: `Bearer ${cfg.serviceKey}`,
-        "Content-Type": contentType,
-        "x-upsert": "false",
-      },
+    const r = await fetch(signed.signedUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType, "x-upsert": "false" },
       body: bytes as unknown as BodyInit,
       signal: AbortSignal.timeout(20000),
     });

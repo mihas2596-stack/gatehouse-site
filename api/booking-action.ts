@@ -833,7 +833,10 @@ export default async function handler(req: Req, res: Res) {
         if (visitRow.report_status !== "submitted" && visitRow.report_status !== "sent") {
           return json(409, { ok: false, error: "report_not_ready", report_status: visitRow.report_status });
         }
-        if (visitRow.report_status === "submitted") {
+        if (visitRow.report_status === "submitted" || visitRow.report_status === "sent") {
+          // Also for an already-sent report: the photo set must be
+          // rebuilt from storage so the double-send guard hashes the
+          // same stable paths and can recognize a duplicate publish.
           const dbPhotos = await dbSelect<{ room: string; storage_path: string; note: string | null }>(
             "gh_photos",
             `visit_id=eq.${visitRow.id}&order=created_at.asc&limit=60`,
