@@ -294,6 +294,35 @@ const fmtMoney = (dollars: string): string => {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 };
 
+// Confirmation deadline promised to the customer: 6:00 PM Atlanta time on
+// the next business day (Mon-Fri). Mirrors confirmDeadlineLabel in
+// send-contact-email.ts so every surface quotes the same moment.
+function confirmDeadlineLabel(from = new Date()): string {
+  const tz = "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, year: "numeric", month: "numeric", day: "numeric",
+  }).formatToParts(from);
+  const get = (t: string) => Number(parts.find((x) => x.type === t)?.value ?? 0);
+  const y = get("year"), m = get("month"), d = get("day");
+  for (let i = 1; i <= 7; i++) {
+    const probe = new Date(Date.UTC(y, m - 1, d + i, 12));
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(probe);
+    if (wd === "Sat" || wd === "Sun") continue;
+    const label = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, weekday: "long", month: "long", day: "numeric",
+    }).format(probe);
+    return `${label} at 6:00 PM ET`;
+  }
+  return "the end of the next business day";
+}
+
+function emailButton(href: string, label: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0;"><tr><td style="background:#8B5E3C;border-radius:8px;"><a href="${href}" style="display:inline-block;padding:13px 26px;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;text-decoration:none;">${label}</a></td></tr></table>`;
+}
+
+const escHtml = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 // One-time "card saved" email. Guarded by gh_card_email_sent on the Stripe
 // customer: a claim is written before sending and cleared on failure, so
 // refreshes, repeat status checks and the webhook cannot duplicate it.
@@ -342,15 +371,29 @@ async function maybeSendCardSavedEmail(
     const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
     visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
   }
+  const deadline = confirmDeadlineLabel();
+  const explainer = price
+    ? `$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment of ${price}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.`
+    : "$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.";
   const text =
     `Hi ${firstName},\n\n` +
-    "Your card is saved and your request is received.\n\n" +
-    "Card saved \u00b7 $0 charged today.\n\n" +
-    "Your visit date isn't confirmed yet. We'll confirm your date and arrival window by email within one business day.\n\n" +
+    `Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${deadline}.\n\n` +
     `Your request: ${service}${price ? ` \u2014 first visit ${price}` : ""}${date ? ` \u00b7 requested date ${date}` : ""}.\n\n` +
+    `${explainer}\n\n` +
+    "To report a problem after the cleaning, open the report link and tap \"Report a problem\" — the charge stays paused while we review it with you.\n\n" +
     "Your visit page \u2014 status, your cleaner, reschedule or cancel:\n" +
     `${visitUrl}\n\n` +
     "Nick\n\nGatehouse Home Cleaning\n\nhello@gatehousehomecleaning.com";
+  const html =
+    `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
+    `<p>Hi ${escHtml(firstName)},</p>` +
+    `<p><strong>Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${escHtml(deadline)}.</strong></p>` +
+    `<p>Your request: ${escHtml(service)}${price ? ` \u2014 first visit ${escHtml(price)}` : ""}${date ? ` \u00b7 requested date ${escHtml(date)}` : ""}.</p>` +
+    `<p>${escHtml(explainer)}</p>` +
+    `<p>To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.</p>` +
+    emailButton(visitUrl, "View my visit") +
+    `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${visitUrl}</p>` +
+    `<p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p></div>`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -361,6 +404,7 @@ async function maybeSendCardSavedEmail(
         reply_to: "hello@gatehousehomecleaning.com",
         subject: "Card saved \u2014 your request is received",
         text,
+        html,
       }),
       signal: AbortSignal.timeout(15000),
     });
@@ -511,6 +555,11 @@ export default async function handler(req: Req, res: Res) {
           /* state unknown — the save form stays available */
         }
       }
+    }
+
+    if (booking && !booking.booking_confirmed) {
+      // The same deadline label the emails quote (next business day, 6 PM ET).
+      booking.confirm_by = confirmDeadlineLabel();
     }
 
     if (!sessionId || !/^cs_(test|live)_/.test(sessionId)) {

@@ -165,6 +165,7 @@ const Quote = () => {
     date: "",
     time: "",
     notes: "",
+    entryInstructions: "",
     website: "",
     termsConsent: false,
     photoConsent: false,
@@ -340,6 +341,9 @@ const Quote = () => {
         extra_zones: extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", "),
         scope_review: scopeReview,
         scope_reasons: scopeReasons.join("; "),
+        entry_instructions: booking.entryInstructions.trim(),
+        notes: booking.notes.trim(),
+        consent_record: consentRecord,
         bedrooms: String(bedrooms),
         bathrooms: String(fullBaths + halfBaths * 0.5),
         zip: zip || "",
@@ -881,6 +885,16 @@ const Quote = () => {
                     placeholder="Anything we should know? Pets, access, focus areas…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
+                </div>
+                <div className="md:col-span-2">
+                  <label htmlFor="b-entry" className="block text-sm font-medium mb-1.5">Entry instructions (optional)</label>
+                  <textarea
+                    id="b-entry" name="entryInstructions" rows={2}
+                    value={booking.entryInstructions} onChange={handleBookingChange}
+                    placeholder="How should the cleaner get in? Gate code, where the key is, alarm, parking…"
+                    className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Only your cleaner sees this — it goes straight to their job page.</p>
                 </div>
               </div>
 

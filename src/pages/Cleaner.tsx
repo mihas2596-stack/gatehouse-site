@@ -26,6 +26,7 @@ type CleanerView = {
     window: string | null;
     address: string | null;
     access_notes: string | null;
+    client_notes?: string | null;
     no_photo_zones: string | null;
     client_first_name: string;
   };
@@ -262,6 +263,9 @@ const Cleaner = () => {
           {v.access_notes && (
             <p className="text-sm"><span className="font-semibold">Access:</span> {v.access_notes}</p>
           )}
+          {v.client_notes && (
+            <p className="text-sm"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>
+          )}
           {v.no_photo_zones && (
             <p className="text-sm text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
           )}
@@ -417,7 +421,7 @@ const Cleaner = () => {
                 <div className="flex gap-2">
                   <label className="flex-1">
                     <span className="flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-sm font-medium cursor-pointer">
-                      <Camera className="w-4 h-4" /> Take photo
+                      <Camera className="w-4 h-4" /> Take AFTER photo
                     </span>
                     <input
                       type="file"
@@ -433,7 +437,7 @@ const Cleaner = () => {
                   </label>
                   <label className="flex-1">
                     <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
-                      <ImagePlus className="w-4 h-4" /> Gallery
+                      <ImagePlus className="w-4 h-4" /> Gallery (after)
                     </span>
                     <input
                       type="file"
@@ -447,9 +451,9 @@ const Cleaner = () => {
                       }}
                     />
                   </label>
-                  <label>
-                    <span className="flex items-center justify-center rounded-lg border border-border px-3 py-2.5 text-sm cursor-pointer">
-                      Before
+                  <label className="flex-1">
+                    <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                      <Camera className="w-4 h-4" /> Take BEFORE photo
                     </span>
                     <input
                       type="file"

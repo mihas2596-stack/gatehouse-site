@@ -38,6 +38,8 @@ type VisitData = {
   no_photo_zones?: string;
   has_card?: boolean;
   report_preparing?: boolean;
+  scope_review_needed?: boolean;
+  confirm_by?: string;
   error?: string;
 };
 
@@ -194,6 +196,21 @@ const Visit = () => {
                   : "This visit is cancelled. Your recurring schedule, if you have one, stays in place."}{" "}
                 Your saved card stays on file for future bookings — email us any time to have it removed.
               </p>
+            )}
+            {data.state === "awaiting_confirmation" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <p className="text-foreground font-semibold mb-1">Next step is ours.</p>
+                <p className="text-sm text-muted-foreground">
+                  Your card is saved — $0 charged today.
+                  {data.confirm_by ? <> We&apos;ll confirm your cleaner and arrival window by <strong>{data.confirm_by}</strong>.</> : " We'll confirm your cleaner and arrival window by email within one business day."}
+                </p>
+                {data.scope_review_needed && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    We may check a couple of scope details with you before confirming. Your agreed
+                    price won&apos;t change unless you agree to a change.
+                  </p>
+                )}
+              </div>
             )}
             {data.report_preparing && data.state !== "report_sent" && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">

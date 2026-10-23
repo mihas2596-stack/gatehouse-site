@@ -155,6 +155,12 @@ async function view(visit: VisitRow) {
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.report_returned&order=created_at.desc&limit=1`,
   );
+  // The customer's general comments (booking form "Notes") — kept separate
+  // from access instructions so the two never merge into one dump again.
+  const noteEvents = await dbSelect<{ detail: { text?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visit.id}&event=eq.client_note&order=created_at.desc&limit=1`,
+  );
   const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
   return {
     ok: true,
@@ -164,6 +170,7 @@ async function view(visit: VisitRow) {
       window: visit.window,
       address: visit.address,
       access_notes: visit.access_notes,
+      client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,
       client_first_name: firstName,
     },

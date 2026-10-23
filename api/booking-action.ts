@@ -108,7 +108,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "charge_fee", "delete_card", "cleaner_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -125,6 +125,8 @@ const ActionSchema = z.object({
   // set_cleaner: name as the client should see it; photo only with the
   // cleaner's permission — the operator supplies it, we store the URL.
   cleaner_name: z.string().max(80).optional(),
+  // set_access_notes: owner's correction of the visit's entry instructions.
+  access_notes: z.string().max(1000).optional(),
   cleaner_photo: z.string().max(1000).optional(),
   // send_report only: photo URLs, optionally with room + note per photo.
   photos: z.array(z.union([
@@ -204,6 +206,13 @@ async function findCustomerByBooking(
 // Receipt email — sent ONCE per paid visit (guarded by gh_receipt_email_id).
 // A failed receipt send never touches the payment: it only leaves the
 // marker unset, and the auto-charge cron retries the EMAIL later.
+function emailButton(href: string, label: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0;"><tr><td style="background:#8B5E3C;border-radius:8px;"><a href="${href}" style="display:inline-block;padding:13px 26px;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;text-decoration:none;">${label}</a></td></tr></table>`;
+}
+
+const escHtml = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 export async function sendReceiptEmailOnce(
   secretKey: string,
   customerId: string,
@@ -582,9 +591,19 @@ export default async function handler(req: Req, res: Res) {
                 subject: `Booking confirmed — ${date}`,
                 text:
                   `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${priceLine}\n\n` +
-                  "Your card is charged only after the visit — when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue.\n\n" +
+                  `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
                   `Your visit page — status, your cleaner, reschedule or cancel:\n${visitLink}\n\n` +
                   "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
+                html:
+                  `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
+                  `<p>Hi ${escHtml(firstName)},</p>` +
+                  `<p><strong>Your cleaning is confirmed.</strong></p>` +
+                  `<p>Date: ${escHtml(date)}<br>Arrival window: ${escHtml(win || "we'll confirm the window by email the day before")}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
+                  `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
+                  emailButton(visitLink, "View my visit") +
+                  `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${visitLink}</p>` +
+                  `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
+                  `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -958,8 +977,17 @@ export default async function handler(req: Req, res: Res) {
                 subject: "Your cleaning report is ready",
                 text:
                   `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
-                  `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
+                  `Open it to check every room.${priceLine} If something isn't right, tap "Report a problem" on that page — the charge stays paused while we make it right.\n\n` +
                   `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
+                html:
+                  `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
+                  `<p>Hi ${escHtml(firstName)},</p>` +
+                  `<p><strong>Your cleaning is done — your photo report is ready.</strong></p>` +
+                  `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report a problem" on that page — the charge stays paused while we make it right.</p>` +
+                  `<p>If we don't hear from you by <strong>${escHtml(deadline)}</strong>, your card is charged automatically, as agreed in the Terms.</p>` +
+                  emailButton(link, "View photos & approve payment") +
+                  `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${link}</p>` +
+                  `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -1116,6 +1144,24 @@ export default async function handler(req: Req, res: Res) {
       }
       log("set_cleaner", { booking: bookingId });
       return json(200, { ok: true, cleaner_name: name, ...(rotatedUrl ? { url: rotatedUrl } : {}) });
+    }
+
+    if (action === "set_access_notes") {
+      // Correct the entry instructions the assigned cleaner will see. The
+      // Stripe customer metadata mirror is updated too, so a later
+      // hydration cannot resurrect stale text from the shared customer.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const value = (parsed.data.access_notes ?? "").trim().slice(0, 1000);
+      const okUpd = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        access_notes: value || null,
+      });
+      if (!okUpd) return json(500, { ok: false, error: "update_failed" });
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_access_notes]": value,
+      }).catch(() => undefined);
+      await logEvent(row.id, bookingId, "owner", "access_notes_updated", { length: value.length });
+      log("set_access_notes", { booking: bookingId });
+      return json(200, { ok: true, access_notes: value });
     }
 
     if (action === "charge_fee") {

@@ -51,6 +51,28 @@ const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null 
   events.find((e) => e.event === name) ?? null;
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+// Confirmation deadline promised to the customer: 6:00 PM Atlanta time on
+// the next business day (Mon-Fri). Mirrors confirmDeadlineLabel in
+// send-contact-email.ts so every surface quotes the same moment.
+function confirmDeadlineLabel(from = new Date()): string {
+  const tz = "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, year: "numeric", month: "numeric", day: "numeric",
+  }).formatToParts(from);
+  const get = (t: string) => Number(parts.find((x) => x.type === t)?.value ?? 0);
+  const y = get("year"), m = get("month"), d = get("day");
+  for (let i = 1; i <= 7; i++) {
+    const probe = new Date(Date.UTC(y, m - 1, d + i, 12));
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(probe);
+    if (wd === "Sat" || wd === "Sun") continue;
+    const label = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, weekday: "long", month: "long", day: "numeric",
+    }).format(probe);
+    return `${label} at 6:00 PM ET`;
+  }
+  return "the end of the next business day";
+}
+
 function issueOpenFrom(events: BookingEvent[]): boolean {
   const opened = latestEvent(events, "issue_opened");
   if (!opened) return false;
@@ -509,6 +531,12 @@ export default async function handler(req: Req, res: Res) {
         // The cleaner has submitted the report and the owner has not
         // published it yet: the customer's review period has NOT started.
         report_preparing: Boolean(row && row.report_status === "submitted" && !row.report_sent_at),
+        // Internal scope-review flag, surfaced to the customer only as a
+        // plain explanation (the agreed price never changes silently).
+        scope_review_needed: Boolean(latestEvent(events, "scope_review")),
+        // When the visit is not confirmed yet, this is the moment we
+        // promised to confirm by — the same label the emails quote.
+        confirm_by: meta["gh_confirmed_date"] ? "" : confirmDeadlineLabel(),
       };
     };
 

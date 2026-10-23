@@ -31,6 +31,7 @@ type CardStatusBooking = {
   booking_confirmed?: string;
   confirmed_date?: string;
   confirmed_window?: string;
+  confirm_by?: string;
 };
 
 // Card states, always driven by the server (card-status reconciles with
@@ -308,7 +309,7 @@ const ThankYou = () => {
                 {confirmedWindow ? <> · {confirmedWindow}</> : null}.
               </>
             ) : (
-              <>No further action is needed right now. We&apos;ll confirm your visit date and arrival window by email within one business day.</>
+              <>No further action is needed right now. We&apos;ll confirm your cleaner and arrival window by {card.booking?.confirm_by ? <strong>{card.booking.confirm_by}</strong> : "email within one business day"}.</>
             )}
           </p>
           {recap.email && (

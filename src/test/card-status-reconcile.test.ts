@@ -89,6 +89,12 @@ describe("card-status reconciliation", () => {
     expect(email.text).toContain("$0 charged today");
     expect(email.text).toContain("$21.90");
     expect(email.text).toContain("/visit?bt=");
+    // Spec copy: awaiting confirmation + a concrete deadline + the
+    // canonical automatic-payment explanation, with an HTML button twin.
+    expect(email.text).toContain("Your requested visit is awaiting confirmation");
+    expect(email.text).toContain("at 6:00 PM ET");
+    expect(email.text).toContain("charged automatically after the stated 24-hour review period");
+    expect(email.html).toContain("View my visit");
   });
 
   it("does not re-email when the guard flag is already set", async () => {
