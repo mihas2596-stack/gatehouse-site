@@ -297,6 +297,44 @@ const Cleaner = () => {
             <p className="text-sm text-muted-foreground">Gatehouse will review it before sharing it with the customer. You&apos;re done here — thank you!</p>
           </div>
         )}
+        {data.report_status === "sent" && (
+          <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
+            <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
+            <p className="font-semibold">Report published.</p>
+            <p className="text-sm text-muted-foreground">Gatehouse reviewed this report and shared it with the customer. You&apos;re done here — thank you!</p>
+          </div>
+        )}
+
+        {locked && (
+          <div className="mt-4 space-y-4">
+            {checklist.rooms.map((room) => {
+              const roomPhotos = photos.filter((ph) => ph.room === room.name);
+              if (roomPhotos.length === 0 && !room.skip_reason) return null;
+              return (
+                <div key={room.name} className="rounded-xl border border-border bg-card p-4">
+                  <h2 className="font-heading text-xl font-bold mb-2">{room.name}</h2>
+                  {room.skip_reason && (
+                    <p className="text-sm text-muted-foreground mb-2">No photos — {room.skip_reason}</p>
+                  )}
+                  <div className="grid grid-cols-3 gap-2">
+                    {roomPhotos.map((ph) => (
+                      <div key={ph.id} className="relative">
+                        {ph.url ? (
+                          <img src={ph.url} alt={`${room.name} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
+                        ) : (
+                          <div className="rounded-lg bg-muted w-full h-24" />
+                        )}
+                        <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
+                          {ph.kind === "before" ? "Before" : "After"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {!locked &&
           checklist.rooms.map((room) => {
