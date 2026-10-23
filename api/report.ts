@@ -468,7 +468,7 @@ export default async function handler(req: Req, res: Res) {
       }
     }
 
-    const meta = row && !bound
+    const meta = row
       ? { ...customer.metadata, ...buildEffectiveMeta(row, events) }
       : customer.metadata;
     // DB-sourced report photos: send_report no longer stores signed URLs

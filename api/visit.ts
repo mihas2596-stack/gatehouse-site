@@ -71,7 +71,7 @@ async function findCustomerByEmail(
     : null;
 }
 // Rebuild the metadata view of THIS booking from its DB row + journal.
-function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: boolean): Record<string, string> {
+function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: boolean, tokenRecurring?: string): Record<string, string> {
   const confirmEv = latestEvent(events, "visit_confirmed");
   const proposedEv = latestEvent(events, "date_proposed");
   const cancelledEv = latestEvent(events, "visit_cancelled");
@@ -86,7 +86,8 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: bo
       : hasCard ? "card_ready" : "",
     gh_report_sent_at: row.report_sent_at ?? "",
     gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
-    gh_recurring_price_cents: "",
+    gh_recurring_price_cents: tokenRecurring && Number.isFinite(parseFloat(tokenRecurring))
+      ? String(Math.round(parseFloat(tokenRecurring) * 100)) : "",
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_confirmed_window: evStr(confirmEv, "window"),
     gh_cleaner_name: row.cleaner_name ?? "",
@@ -472,8 +473,11 @@ export default async function handler(req: Req, res: Res) {
         /* actions below re-check state before writing */
       }
     }
-    const meta = row && !bound && req.method === "GET"
-      ? buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]))
+    // With a DB row, the booking-scoped view ALWAYS comes from the row +
+    // journal — even when this customer is currently bound to the booking,
+    // because a legacy binding can carry another booking's stale fields.
+    const meta = row && req.method === "GET"
+      ? { ...customer.metadata, ...buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]), payload.recurring) }
       : customer.metadata;
     const requestedDate = payload.date ?? "";
 

@@ -494,7 +494,7 @@ export default async function handler(req: Req, res: Res) {
             const d = confirmEv.detail ?? {};
             if (typeof d["date"] === "string" && d["date"]) booking.confirmed_date = d["date"];
             if (typeof d["window"] === "string" && d["window"]) booking.confirmed_window = d["window"];
-          } else if (boundCust?.metadata["gh_booking_confirmed"] === "1") {
+          } else if (!row && boundCust?.metadata["gh_booking_confirmed"] === "1") {
             booking.booking_confirmed = "1";
             if (boundCust.metadata["gh_confirmed_date"]) booking.confirmed_date = boundCust.metadata["gh_confirmed_date"];
             if (boundCust.metadata["gh_confirmed_window"]) booking.confirmed_window = boundCust.metadata["gh_confirmed_window"];
