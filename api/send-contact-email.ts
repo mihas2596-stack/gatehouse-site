@@ -78,7 +78,7 @@ function serverAddonsTotal(a: ServerAddonSel, serviceKey: string): number {
 // can run a real-card payment check at 1/10 of the regular price. The
 // token is bound to the owner's email and expires; regular bookings are
 // never affected.
-export const TEST_PRICE_SCALE = 0.1;
+export const TEST_PRICE_SCALE = 0.01;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;
 
 export function verifyTestPriceToken(
@@ -687,7 +687,7 @@ export default async function handler(req: Req, res: Res) {
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background:${testScale || cutScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale || cutScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale || cutScale ? "#8B4513" : "#444"};">
-          ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at 1/10 prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
+          ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at reduced test prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
@@ -705,7 +705,7 @@ export default async function handler(req: Req, res: Res) {
           ${date ? row("Preferred Date", escapeHtml(date)) : ""}
           ${time ? row("Preferred Time", escapeHtml(time)) : ""}
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
-${isQuote ? row("Test price mode (1/10)", testScale || cutScale ? "YES" : "NO") : ""}
+${isQuote ? row("Test price mode (reduced)", testScale || cutScale ? "YES" : "NO") : ""}
 ${isQuote && extra_zones ? row("Extra areas to clean", extra_zones) : ""}
 ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "check scope"}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
@@ -757,7 +757,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
           return Number.isFinite(n) ? `$${n.toFixed(2)}` : `$${v}`;
         };
         const priceDisplay = serverFirst ? fmtUsd(serverFirst) : price ? fmtUsd(price) : "—";
-        const testNote = testScale ? "\nThis is a test booking at reduced test prices (1/10) for an owner payment check.\n" : "";
+        const testNote = testScale ? "\nThis is a test booking at reduced test prices for an owner payment check.\n" : "";
         // Equal first and recurring prices collapse into one line — "$189 for
         // the first visit, then $189 per visit" reads like a typo.
         const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;

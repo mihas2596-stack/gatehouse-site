@@ -61,7 +61,7 @@ describe("server/client price parity", () => {
   }
 });
 
-describe("owner price-test mode parity (testScale = 1/10)", () => {
+describe("owner price-test mode parity (testScale = 1/100)", () => {
   it("client and server agree on scaled totals", () => {
     const client = priceBreakdown({
       bedrooms: 3,

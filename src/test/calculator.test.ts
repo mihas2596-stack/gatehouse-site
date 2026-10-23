@@ -85,7 +85,7 @@ describe("priceBreakdown — one-time", () => {
 });
 
 describe("priceBreakdown — owner price-test mode (testScale)", () => {
-  it("scales a one-time standard total to 1/10", () => {
+  it("scales a one-time standard total to 1/100", () => {
     const b = priceBreakdown({
       bedrooms: 3,
       fullBaths: 2,
@@ -94,7 +94,7 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       addons: {},
       testScale: true,
     });
-    expect(b!.first_total).toBe(21.9); // $219 / 10
+    expect(b!.first_total).toBe(2.19); // $219 / 100
   });
   it("scales first and recurring totals including add-ons", () => {
     const b = priceBreakdown({
@@ -105,8 +105,8 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       addons: { insideOven: true },
       testScale: true,
     });
-    expect(b!.first_total).toBe(22.4); // $224 / 10
-    expect(b!.recurring_total).toBe(22.4);
+    expect(b!.first_total).toBe(2.24); // $224 / 100
+    expect(b!.recurring_total).toBe(2.24);
   });
 });
 

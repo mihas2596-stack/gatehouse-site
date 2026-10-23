@@ -145,7 +145,7 @@ export type CalcInput = {
 };
 
 /** Owner price-test scale — must match TEST_PRICE_SCALE in api/send-contact-email.ts. */
-export const TEST_PRICE_SCALE = 0.1;
+export const TEST_PRICE_SCALE = 0.01;
 export const scaleTestPrice = (n: number): number => Math.round(n * TEST_PRICE_SCALE * 100) / 100;
 
 /**

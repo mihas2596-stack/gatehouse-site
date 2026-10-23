@@ -70,7 +70,7 @@ const Quote = () => {
   const [service, setService] = useState<CalcServiceKey>(resolveService(params.get("service")));
   const [zip, setZip] = useState("");
   // Owner price-test mode: a signed `tp` token in the URL switches this
-  // quote to 1/10 prices. The server verifies the token (bound to the
+  // quote to reduced test prices. The server verifies the token (bound to the
   // owner's email, expiring) before honoring the scaled totals; an
   // invalid token rejects the submission instead of repricing silently.
   const testToken = params.get("tp") ?? "";
@@ -487,7 +487,7 @@ const Quote = () => {
 
             {testMode && (
               <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-                Test mode: prices on this page are 1/10 of regular for the owner's payment test. The server
+                Test mode: prices on this page are reduced to 1/100 of regular for the owner's payment test. The server
                 verifies the test link when the request is sent.
               </p>
             )}

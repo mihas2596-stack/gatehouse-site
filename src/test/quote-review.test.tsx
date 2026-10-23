@@ -51,7 +51,7 @@ describe("booking price confirmation", () => {
     expect(screen.queryByText(/founding/i)).not.toBeInTheDocument();
   });
 
-  it("shows 1/10 prices in owner test mode (tp token in the URL)", () => {
+  it("shows reduced prices in owner test mode (tp token in the URL)", () => {
     render(
       <MemoryRouter initialEntries={["/quote?tp=tp1.9999999999.token"]}>
         <Quote />
@@ -59,9 +59,9 @@ describe("booking price confirmation", () => {
     );
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
-    expect(screen.getByText(/Test mode: prices on this page are 1\/10/)).toBeInTheDocument();
-    // Regular $189 recurring M at 1/10, no add-ons.
-    expect(screen.getByText("First visit: $18.9", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/Test mode: prices on this page are reduced to 1\/100/)).toBeInTheDocument();
+    // Regular $189 recurring M at 1/100, no add-ons.
+    expect(screen.getByText("First visit: $1.89", { exact: false })).toBeInTheDocument();
   });
 
   it("requires another review when the calculator changes after confirmation", () => {
