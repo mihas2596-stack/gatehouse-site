@@ -622,6 +622,7 @@ export default async function handler(req: Req, res: Res) {
       });
       if (row) {
         await logEvent(row.id, bookingId, "owner", "issue_opened", { reason: (parsed.data.reason ?? "").slice(0, 200) });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
       }
       log("dispute", { booking: bookingId });
       return json(200, { ok: true, state: "issue_open" });
@@ -645,6 +646,7 @@ export default async function handler(req: Req, res: Res) {
       });
       if (row) {
         await logEvent(row.id, bookingId, "owner", "issue_resolved", { reclean_date: parsed.data.reclean_date ?? "" });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
       }
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
@@ -995,6 +997,9 @@ export default async function handler(req: Req, res: Res) {
           report_email_id: reportEmailId || null,
           report_bounced: !emailSent,
           status: "report_sent",
+          // Publishing a fresh report supersedes any earlier issue
+          // (matches the metadata, which send_report clears).
+          issue_open: false,
         });
         await logEvent(visitRow.id, bookingId, "owner", "report_sent", {
           version, email_sent: emailSent, photos: finalPhotos.length,

@@ -20,7 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbInsert, logEvent, storageSignDownload, storagePut } from "./_db.js";
+import { dbConfigured, dbSelect, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -642,7 +642,10 @@ export default async function handler(req: Req, res: Res) {
       Object.assign(meta, {
         gh_state: "approved", gh_issue_open: "", gh_issue_reason: "",
       });
-      if (row) await logEvent(row.id, payload.bid, "client", "report_approved", {});
+      if (row) {
+        await logEvent(row.id, payload.bid, "client", "report_approved", {});
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
+      }
       res.status(200).json(view());
       return;
     }
@@ -674,6 +677,9 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(row.id, payload.bid, "client", "issue_opened", {
         reason: reason.slice(0, 200), room: room.slice(0, 60),
       });
+      // The visit row's issue flag is what the automatic-charge cron
+      // reads for database visits — keep it in sync with the metadata.
+      await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
       // Persist the customer's own photo on the visit (it is also emailed
       // to the owner below) so it stays visible in the owner review
       // instead of living only in an email attachment.
@@ -683,13 +689,17 @@ export default async function handler(req: Req, res: Res) {
           if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
             const path = `visits/${row.id}/client-issue/${Date.now()}.jpg`;
             if (await storagePut(path, bytes, "image/jpeg")) {
-              await dbInsert("gh_photos", {
+              const inserted = await dbInsert("gh_photos", {
                 visit_id: row.id,
                 room: room || "Client photo",
                 storage_path: path,
                 kind: "client",
                 note: reason.slice(0, 300) || null,
               });
+              await logEvent(row.id, payload.bid, "system",
+                inserted ? "client_photo_stored" : "client_photo_store_failed", {});
+            } else {
+              await logEvent(row.id, payload.bid, "system", "client_photo_store_failed", {});
             }
           }
         } catch {
