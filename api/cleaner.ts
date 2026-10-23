@@ -207,6 +207,21 @@ export default async function handler(req: Req, res: Res) {
       const ct = typeof req.query?.["ct"] === "string" ? (req.query["ct"] as string) : "";
       const resolved = await resolveVisit(ct);
       if ("error" in resolved) return json(resolved.status, { ok: false, error: resolved.error });
+      // Link-open tracking for the owner panel ("did the cleaner open
+      // it?"). Throttled to one event per 6 hours per visit; the owner's
+      // own preview carries pv=1 and never counts.
+      if (req.query?.["pv"] !== "1") {
+        try {
+          const prior = await dbSelect<{ created_at: string }>(
+            "gh_events",
+            `visit_id=eq.${resolved.visit.id}&event=eq.cleaner_link_opened&order=created_at.desc&limit=1`,
+          );
+          const last = prior[0] ? Date.parse(prior[0].created_at) : 0;
+          if (!last || Date.now() - last > 6 * 3600 * 1000) {
+            await logEvent(resolved.visit.id, resolved.visit.booking_id, "cleaner", "cleaner_link_opened", {});
+          }
+        } catch { /* tracking is best-effort */ }
+      }
       return json(200, await view(resolved.visit));
     }
     if (req.method !== "POST") return json(405, { ok: false, error: "method_not_allowed" });

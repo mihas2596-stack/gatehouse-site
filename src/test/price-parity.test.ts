@@ -114,3 +114,36 @@ describe("verifyTestPriceToken", () => {
     expect(verifyTestPriceToken(good, email, undefined, now)).toBe(false);
   });
 });
+
+describe("half-bath parity (M1)", () => {
+  // The form sends bathrooms as full + half*0.5, so 2 full + 2 half arrives
+  // as "3". The server must tier on the exact full-bath count the client
+  // used, never on the mixed decimal.
+  const cases: Array<[number, number, number]> = [
+    [2, 2, 2], // "3" mixed — was pinned a tier too high
+    [3, 3, 2], // "4" mixed — was L instead of M
+    [5, 5, 2], // "6" mixed — was custom-quote (no pin at all)
+    [1, 1, 1],
+    [4, 2, 2],
+  ];
+  for (const [b, f, h] of cases) {
+    it(`${b}bd/${f}full/${h}half`, () => {
+      const client = priceBreakdown({
+        bedrooms: b, fullBaths: f, frequency: "onetime", recentlyCleaned: true,
+        addons: addonSets[0],
+      });
+      const server = serverBreakdown({
+        bedroomsRaw: String(b),
+        bathroomsRaw: String(f + h * 0.5),
+        fullBathsRaw: String(f),
+        serviceKey: "standard",
+        frequency: "onetime",
+        cleanedRecently: true,
+        addons: addonSets[0],
+      });
+      expect(client).not.toBeNull();
+      expect(server).not.toBeNull();
+      expect(server!.first_total).toBe(client!.first_total);
+    });
+  }
+});

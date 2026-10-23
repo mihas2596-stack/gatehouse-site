@@ -18,6 +18,10 @@ type Visit = {
   status: string;
   report_status: string;
   cleaner_name: string | null;
+  cleaner_link_issued?: boolean;
+  cleaner_link_active?: boolean;
+  cleaner_link_expires?: string | null;
+  cleaner_link_opened_at?: string | null;
   issue_open: boolean;
   issue_ever: boolean;
   report_bounced: boolean;
@@ -264,6 +268,16 @@ const Owner = () => {
                   <span className="bg-muted px-2 py-0.5 rounded">visit: {v.status}</span>
                   <span className="bg-muted px-2 py-0.5 rounded">report: {v.report_status}</span>
                   <span className="bg-muted px-2 py-0.5 rounded">photos: {v.photo_count ?? 0}</span>
+                  {v.cleaner_name
+                    ? <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded">cleaner: {v.cleaner_name}</span>
+                    : <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">no cleaner</span>}
+                  {v.cleaner_link_active
+                    ? <span className="bg-green-100 text-green-900 px-2 py-0.5 rounded">link active{v.cleaner_link_opened_at ? " · opened" : " · not opened"}</span>
+                    : v.cleaner_link_issued
+                      ? <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">link expired</span>
+                      : v.cleaner_name
+                        ? <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">no link yet</span>
+                        : null}
                   {v.paid_at && <span className="bg-green-100 text-green-900 px-2 py-0.5 rounded">paid</span>}
                   {v.issue_open && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">issue open</span>}
                   {v.report_bounced && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">report email issue</span>}
@@ -357,6 +371,32 @@ const Owner = () => {
 
             <div className="rounded-xl border border-border bg-card p-4 mb-4 space-y-4">
               <div>
+                <div className="rounded-lg border border-border bg-muted/40 p-3 mb-3 text-sm space-y-1">
+                  <p className="font-semibold">Cleaner & link</p>
+                  <p>Cleaner: <strong>{selected.cleaner_name ?? "not assigned"}</strong></p>
+                  <p>
+                    Link:{" "}
+                    {selected.cleaner_link_active ? (
+                      <strong>active{selected.cleaner_link_expires ? ` until ${selected.cleaner_link_expires.slice(0, 10)}` : ""}</strong>
+                    ) : selected.cleaner_link_issued ? (
+                      <strong className="text-destructive">expired — revoke & replace it below</strong>
+                    ) : (
+                      <strong>not issued yet — assign a cleaner or use “Revoke & replace link”</strong>
+                    )}
+                  </p>
+                  <p>
+                    Opened by cleaner:{" "}
+                    {selected.cleaner_link_opened_at ? (
+                      <strong>yes — {selected.cleaner_link_opened_at.slice(0, 10)}</strong>
+                    ) : (
+                      <strong>not yet</strong>
+                    )}
+                  </p>
+                  <p className="text-muted-foreground">
+                    A link can&apos;t be shown again after this panel closes (only its fingerprint is stored).
+                    If it&apos;s lost, “Revoke & replace link” issues a new one and kills the old.
+                  </p>
+                </div>
                 <p className="font-semibold mb-2">Confirm date & cleaner</p>
                 <div className="flex flex-wrap gap-2">
                   <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
@@ -405,7 +445,7 @@ const Owner = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => window.open(cleanerUrl, "_blank")}
+                        onClick={() => window.open(`${cleanerUrl}&pv=1`, "_blank")}
                       >
                         Preview cleaner workspace
                       </Button>
@@ -447,15 +487,16 @@ const Owner = () => {
                   <Button
                     variant="hero"
                     disabled={acting !== "" || (selected.report_status !== "submitted" && selected.report_status !== "sent")}
-                    onClick={() =>
-                      void runAction("Publish & notify customer", { action: "send_report", booking_id: selected.booking_id }, (j) => {
+                    onClick={() => {
+                      if (selected.issue_open && !window.confirm("This booking has an OPEN customer issue. Re-sending the report will mark the issue RESOLVED and restart the 24-hour review clock. Continue?")) return;
+                      void runAction("Publish & notify customer", { action: "send_report", booking_id: selected.booking_id, ...(selected.issue_open ? { resolve_issue: true } : {}) }, (j) => {
                         setPublishMsg(
                           j["email_sent"] === true
                             ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
                             : "Published and saved, but the customer email was NOT delivered — the review period is paused. Check the report email status and publish again to retry.",
                         );
-                      })
-                    }
+                      });
+                    }}
                   >
                     Publish & notify customer
                   </Button>

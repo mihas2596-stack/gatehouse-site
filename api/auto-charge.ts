@@ -24,7 +24,7 @@
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
 import { sendReceiptEmailOnce } from "./booking-action.js";
-import { dbConfigured, dbSelect, dbDelete, logEvent, storageRemove } from "./_db.js";
+import { dbConfigured, dbSelect, dbDelete, dbUpdate, logEvent, storageRemove } from "./_db.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
 // shared customer is currently bound to. A report sent for another
@@ -327,6 +327,78 @@ export default async function handler(req: Req, res: Res) {
         }
       }
     }
+    // --- Reminder pass (runs BEFORE the charge loop): a report waiting
+    // 20+ hours gets ONE reminder before its auto-charge, so the charge
+    // never surprises the client. No upper age bound: with only two cron
+    // runs a day, a report first seen after its 24h mark must still be
+    // reminded in the same run that charges it. Same guards as the
+    // charge itself (no issue, no bounce).
+    let reminded = 0;
+    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+    if (RESEND_API_KEY) {
+      for (const c of candidates) {
+        const m = c.metadata;
+        if (m["gh_reminded_at"]) continue;
+        if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
+        if (m["gh_report_bounced"] === "1") continue;
+        const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
+        if (!Number.isFinite(sentMs)) continue;
+        if (m["gh_state"] === "paid") continue;
+        if (sentMs + 20 * 3600 * 1000 > now) continue;
+        if (!c.email) continue;
+        try {
+          // The report link needs a fresh booking token.
+          const key = createHash("sha256")
+            .update(`gatehouse-booking-link:${process.env["BOOKING_LINK_SECRET"] || STRIPE_SECRET_KEY}`)
+            .digest();
+          const iv = randomBytes(12);
+          const cipher = createCipheriv("aes-256-gcm", key, iv);
+          const payload = JSON.stringify({
+            bid: m["gh_booking_id"] ?? "", email: c.email, name: c.name ?? "",
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const ct = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+          const token = "v2." + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64url");
+          const deadline = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            weekday: "short", month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(sentMs + 24 * 3600 * 1000));
+          const resp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: [c.email],
+              reply_to: "hello@gatehousehomecleaning.com",
+              subject: "Reminder: your cleaning report is waiting",
+              text:
+                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
+                `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
+                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended, so the visit is charged automatically today, as agreed in the Terms. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nNick\n\nGatehouse Home Cleaning\n`,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (resp.ok) {
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
+              "metadata[gh_reminded_at]": new Date().toISOString(),
+              ...(m["gh_booking_id"] ? { "metadata[gh_reminder_for]": m["gh_booking_id"] } : {}),
+            });
+            if (m["gh_booking_id"]) {
+              const vrows = await dbSelect<{ id: string }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
+              );
+              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", {});
+            }
+            reminded++;
+          }
+        } catch (err) {
+          logErr("reminder", err);
+        }
+      }
+    }
+
     const due = selectDue(candidates, now).slice(0, MAX_PER_RUN);
     let charged = 0;
     let failed = 0;
@@ -369,6 +441,39 @@ export default async function handler(req: Req, res: Res) {
             "metadata[gh_state]": "paid",
             "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
           });
+          // Mirror into the booking's DB row + journal: /report and /visit
+          // derive their state from the row, so a timer charge that lives
+          // only in Stripe metadata leaves the customer staring at a live
+          // "Approve & pay" button for a visit that is already paid — and
+          // a click after Stripe's idempotency window would charge twice.
+          try {
+            const vrows = await dbSelect<{ id: string }>(
+              "gh_visits",
+              `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
+            );
+            const vrow = vrows[0];
+            if (vrow) {
+              await dbUpdate("gh_visits", `id=eq.${vrow.id}`, {
+                status: "paid",
+                paid_at: new Date().toISOString(),
+                payment_intent_id: String(pi.data["id"] ?? ""),
+              });
+              await logEvent(vrow.id, item.bookingId, "system", "payment_succeeded", {
+                source: "timer_24h",
+                amount_cents: item.amountCents,
+                payment_intent_id: String(pi.data["id"] ?? ""),
+              });
+            }
+          } catch (err) {
+            logErr("db_paid_mirror", err);
+          }
+          try {
+            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, item.customerId, {
+              ...freshMeta,
+              gh_state: "paid",
+              gh_last_payment: String(pi.data["id"] ?? ""),
+            }, item.bookingId);
+          } catch { /* the receipt-retry pass resends the letter, never the charge */ }
           charged++;
           log("charged", { booking: item.bookingId, amount: item.amountCents });
         } else {
@@ -378,6 +483,16 @@ export default async function handler(req: Req, res: Res) {
           await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
             "metadata[gh_state]": "payment_failed",
           });
+          try {
+            const vrows = await dbSelect<{ id: string }>(
+              "gh_visits",
+              `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
+            );
+            await logEvent(vrows[0]?.id ?? null, item.bookingId, "system", "payment_failed", {
+              source: "timer_24h",
+              error: String(errMsg).slice(0, 200),
+            });
+          } catch { /* journal is best-effort here */ }
           failed++;
           logErr("charge_failed", `${item.bookingId}: ${errMsg}`);
         }
@@ -393,74 +508,6 @@ export default async function handler(req: Req, res: Res) {
           });
         } catch {
           /* ignore */
-        }
-      }
-    }
-
-    // --- Reminder pass: a report waiting 20+ hours gets ONE reminder
-    // before the 24h auto-charge, so the charge never surprises the
-    // client. Same guards as the charge itself (no issue, no bounce).
-    let reminded = 0;
-    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
-    if (RESEND_API_KEY) {
-      for (const c of candidates) {
-        const m = c.metadata;
-        if (m["gh_reminded_at"]) continue;
-        if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
-        if (m["gh_report_bounced"] === "1") continue;
-        const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
-        if (!Number.isFinite(sentMs)) continue;
-        if (sentMs + 20 * 3600 * 1000 > now || sentMs + 24 * 3600 * 1000 <= now) continue;
-        if (!c.email) continue;
-        try {
-          // The report link needs a fresh booking token.
-          const key = createHash("sha256")
-            .update(`gatehouse-booking-link:${process.env["BOOKING_LINK_SECRET"] || STRIPE_SECRET_KEY}`)
-            .digest();
-          const iv = randomBytes(12);
-          const cipher = createCipheriv("aes-256-gcm", key, iv);
-          const payload = JSON.stringify({
-            bid: m["gh_booking_id"] ?? "", email: c.email, name: c.name ?? "",
-            ts: Math.floor(Date.now() / 1000),
-          });
-          const ct = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
-          const token = "v2." + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64url");
-          const deadline = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/New_York",
-            weekday: "short", month: "short", day: "numeric",
-            hour: "numeric", minute: "2-digit", timeZoneName: "short",
-          }).format(new Date(sentMs + 24 * 3600 * 1000));
-          const resp = await fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-              to: [c.email],
-              reply_to: "hello@gatehousehomecleaning.com",
-              subject: "Reminder: your cleaning report is waiting",
-              text:
-                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
-                `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
-                `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nNick\n\nGatehouse Home Cleaning\n`,
-            }),
-            signal: AbortSignal.timeout(15000),
-          });
-          if (resp.ok) {
-            await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
-              "metadata[gh_reminded_at]": new Date().toISOString(),
-              ...(m["gh_booking_id"] ? { "metadata[gh_reminder_for]": m["gh_booking_id"] } : {}),
-            });
-            if (m["gh_booking_id"]) {
-              const vrows = await dbSelect<{ id: string }>(
-                "gh_visits",
-                `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
-              );
-              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", {});
-            }
-            reminded++;
-          }
-        } catch (err) {
-          logErr("reminder", err);
         }
       }
     }

@@ -99,10 +99,17 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: bo
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
   const issueOpen = issueOpenFrom(events);
+  // M5: surface a failed charge after reload, like api/report.ts.
+  const failedEv = latestEvent(events, "payment_failed");
+  const succeededEv = latestEvent(events, "payment_succeeded");
+  const paymentFailed = Boolean(
+    failedEv && (!succeededEv || succeededEv.created_at < failedEv.created_at),
+  );
   return {
     gh_state: row.status === "paid" ? "paid"
       : cancelledEv ? "cancelled"
       : issueOpen ? "issue_open"
+      : paymentFailed ? "payment_failed"
       : approvedEv ? "approved"
       : row.report_sent_at ? ""
       : hasCard ? "card_ready" : "",

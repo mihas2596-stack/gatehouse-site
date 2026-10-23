@@ -127,6 +127,9 @@ const ActionSchema = z.object({
   cleaner_name: z.string().max(80).optional(),
   // set_access_notes: owner's correction of the visit's entry instructions.
   access_notes: z.string().max(1000).optional(),
+  // send_report: explicit owner decision to resolve an open customer
+  // issue together with the re-send (C3 — never silently).
+  resolve_issue: z.boolean().optional(),
   cleaner_photo: z.string().max(1000).optional(),
   // send_report only: photo URLs, optionally with room + note per photo.
   photos: z.array(z.union([
@@ -921,6 +924,18 @@ export default async function handler(req: Req, res: Res) {
       ) {
         return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
       }
+      // C3: an open customer issue freezes the clock. Re-sending must
+      // never silently clear it — the owner either resolves the issue
+      // first, or explicitly resolves it together with this re-send, so
+      // metadata, the gh_visits column and the event journal move as one.
+      const issueIsOpen = meta["gh_issue_open"] === "1";
+      if (issueIsOpen && parsed.data.resolve_issue !== true) {
+        return json(409, {
+          ok: false,
+          error: "issue_open",
+          hint: "Resolve the customer issue first, or re-send with resolve_issue to resolve it together with the new report.",
+        });
+      }
       const version = (parseInt(meta["gh_report_version"] ?? "0", 10) || 0) + 1;
       const sentAt = new Date().toISOString();
       const params: Record<string, string> = {
@@ -1036,6 +1051,11 @@ export default async function handler(req: Req, res: Res) {
         await logEvent(visitRow.id, bookingId, "owner", "report_sent", {
           version, email_sent: emailSent, photos: finalPhotos.length,
         });
+        if (issueIsOpen) {
+          await logEvent(visitRow.id, bookingId, "owner", "issue_resolved", {
+            via: "report_resend", note: "Resolved by owner decision together with the re-sent report.",
+          });
+        }
       }
       log("send_report", { booking: bookingId, version, photos: finalPhotos.length, emailSent });
       return json(200, {

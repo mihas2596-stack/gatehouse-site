@@ -342,6 +342,33 @@ const Cleaner = () => {
           </div>
         )}
 
+        {!locked && checklist.rooms.length > 0 && (
+          <div className="rounded-xl border border-border bg-card p-4 mt-4">
+            {(() => {
+              const ready = checklist.rooms.filter((r) => {
+                const a = photos.filter((p) => p.room === r.name && p.kind === "after").length;
+                return a > 0 || Boolean(r.skip_reason);
+              }).length;
+              return (
+                <>
+                  <p className="text-sm font-semibold mb-2">
+                    Rooms ready: {ready} of {checklist.rooms.length}
+                  </p>
+                  <div className="h-2 rounded bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{ width: `${checklist.rooms.length ? (ready / checklist.rooms.length) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Each room needs an “after” photo — or a written reason why there is none.
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         {!locked &&
           checklist.rooms.map((room) => {
             const roomPhotos = photos.filter((p) => p.room === room.name);
@@ -350,7 +377,16 @@ const Cleaner = () => {
               <div key={room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="font-heading text-xl font-bold">{room.name}</h2>
-                  <span className="text-xs text-muted-foreground">{afterCount} photo{afterCount === 1 ? "" : "s"}</span>
+                  <span className="flex items-center gap-2">
+                    {afterCount > 0 ? (
+                      <span className="text-[11px] bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">After photo ✓</span>
+                    ) : room.skip_reason ? (
+                      <span className="text-[11px] bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Skipped — reason given</span>
+                    ) : (
+                      <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Needs an after photo</span>
+                    )}
+                    <span className="text-xs text-muted-foreground">{afterCount} photo{afterCount === 1 ? "" : "s"}</span>
+                  </span>
                 </div>
                 <div className="space-y-2 mb-3">
                   {room.items.map((item, idx) => (

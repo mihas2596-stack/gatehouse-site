@@ -14,6 +14,7 @@
 // "<svix-id>.<svix-timestamp>.<raw body>" with the base64-decoded secret.
 
 import { createHmac, timingSafeEqual } from "crypto";
+import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
 
 export const config = {
   api: {
@@ -208,7 +209,26 @@ export default async function handler(req: Req, res: Res) {
       res.status(502).json({ requestId, ok: false, error: "stripe_error" });
       return;
     }
-    console.log(JSON.stringify({ requestId, step: "report_bounced", booking: customer.metadata["gh_booking_id"] ?? "" }));
+    // Mirror into the booking's DB row + journal: the auto-charge DB pass
+    // re-hydrates metadata FROM the row, so a bounce recorded only in
+    // Stripe metadata is silently undone there and the charge still fires
+    // for a report the provider confirmed undelivered.
+    const bookingId = customer.metadata["gh_booking_id"] ?? "";
+    if (bookingId && dbConfigured()) {
+      try {
+        const rows = await dbSelect<{ id: string }>(
+          "gh_visits",
+          `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+        );
+        if (rows[0]) {
+          await dbUpdate("gh_visits", `id=eq.${rows[0].id}`, { report_bounced: true });
+          await logEvent(rows[0].id, bookingId, "system", "report_bounced", { email_id: emailId });
+        }
+      } catch (err) {
+        logErr("bounce_db_mirror", err);
+      }
+    }
+    console.log(JSON.stringify({ requestId, step: "report_bounced", booking: bookingId }));
     res.status(200).json({ requestId, ok: true, bounced: true });
   } catch (err) {
     logErr("unexpected", err);

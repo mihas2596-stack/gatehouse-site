@@ -346,6 +346,8 @@ const Quote = () => {
         consent_record: consentRecord,
         bedrooms: String(bedrooms),
         bathrooms: String(fullBaths + halfBaths * 0.5),
+        full_baths: String(fullBaths),
+        half_baths: String(halfBaths),
         zip: zip || "",
         address: booking.address.trim(),
         price: String(mainPrice ?? ""),

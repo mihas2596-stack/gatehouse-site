@@ -78,10 +78,19 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
   const approvedEv = latestEvent(events, "report_approved");
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const issueOpen = issueOpenFrom(events);
+  // M5: a failed approve-charge must survive a page reload. Without this,
+  // the journal's payment_failed was invisible here and the customer saw
+  // "approved — payment is being completed" with no retry path.
+  const failedEv = latestEvent(events, "payment_failed");
+  const succeededEv = latestEvent(events, "payment_succeeded");
+  const paymentFailed = Boolean(
+    failedEv && (!succeededEv || succeededEv.created_at < failedEv.created_at),
+  );
   return {
     gh_state: row.status === "paid" ? "paid"
       : cancelledEv ? "cancelled"
       : issueOpen ? "issue_open"
+      : paymentFailed ? "payment_failed"
       : approvedEv ? "approved" : "",
     gh_report_sent_at: row.report_sent_at ?? "",
     gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",

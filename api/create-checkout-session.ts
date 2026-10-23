@@ -339,6 +339,7 @@ export default async function handler(req: Req, res: Res) {
     let name: string;
     const bookingSummary: Record<string, string> = {};
     let bt: string;
+    const arrivedWithToken = Boolean((parsed.data.bt ?? "").trim());
 
     if (parsed.data.bt) {
       const verified = verifyBookingLink(STRIPE_SECRET_KEY, parsed.data.bt);
@@ -384,7 +385,10 @@ export default async function handler(req: Req, res: Res) {
     // reusing would let anyone attach to — and overwrite metadata of —
     // someone else's Stripe Customer. Standalone always creates a fresh
     // customer.
-    const hasVerifiedBooking = bt !== "";
+    // M2: bt is ALWAYS non-empty here (the standalone branch just minted
+    // one), so the guard must look at whether the request ARRIVED with a
+    // verified token — not at the current value of bt.
+    const hasVerifiedBooking = arrivedWithToken;
     let customerId: string | null = null;
     if (hasVerifiedBooking) {
     try {

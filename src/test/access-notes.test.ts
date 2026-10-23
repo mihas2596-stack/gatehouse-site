@@ -22,9 +22,10 @@ beforeEach(() => {
     json: async () => data,
     text: async () => JSON.stringify(data),
   });
-  vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { method?: string }) => {
     const u = String(url);
-    if (u.includes("gh_visits")) return resp([{ id: "visit-1" }]);
+    // GET select finds no existing row (fresh booking); POST upsert returns it.
+    if (u.includes("gh_visits")) return resp(init?.method === "POST" ? [{ id: "visit-1" }] : []);
     if (u.includes("gh_events")) return resp([{ id: "ev-1" }]);
     if (u.includes("api.stripe.com")) return resp({});
     return resp({ id: "email-1" });
@@ -71,7 +72,7 @@ describe("entry instructions separation", () => {
     const res = response();
     await handler({ method: "POST", headers: { origin }, body: quoteBody }, res);
     expect(res.code).toBe(200);
-    const upserts = callsTo("gh_visits");
+    const upserts = callsTo("gh_visits").filter((c) => c[1]?.body);
     expect(upserts.length).toBeGreaterThan(0);
     const row = JSON.parse(String(upserts[0][1]?.body)) as Record<string, unknown>;
     expect(row.access_notes).toBe("Gate code 1234, key under the mat");

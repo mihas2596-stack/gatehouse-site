@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import { dbConfigured, dbSelect, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
 // one email, so its metadata can describe a DIFFERENT booking than the one
@@ -345,6 +345,34 @@ async function maybeSendCardSavedEmail(
       `booking_id=eq.${encodeURIComponent(payload.bid)}&event=eq.card_saved_email&limit=1`,
     );
     if (prior.length > 0) return;
+    // M4: the journal used to be written only AFTER the send, so two
+    // near-simultaneous status checks could both pass the guard and both
+    // send. Claim first: insert a claim event, then verify this call owns
+    // the earliest live claim before sending. A claim expires after 10
+    // minutes, so a crashed sender never blocks the email forever.
+    const claims = await dbSelect<{ id: string; created_at: string }>(
+      "gh_events",
+      `booking_id=eq.${encodeURIComponent(payload.bid)}&event=eq.card_saved_email_claimed&order=created_at.desc&limit=1`,
+    );
+    const lastClaim = claims[0];
+    if (lastClaim && Date.now() - Date.parse(lastClaim.created_at) < 10 * 60 * 1000) return;
+    const mine = await dbInsert<{ id: string; created_at: string }>("gh_events", {
+      visit_id: bookingCtx?.visitId ?? null,
+      booking_id: payload.bid,
+      actor: "system",
+      event: "card_saved_email_claimed",
+      detail: { at: new Date().toISOString() },
+    });
+    if (mine) {
+      const all = await dbSelect<{ id: string; created_at: string }>(
+        "gh_events",
+        `booking_id=eq.${encodeURIComponent(payload.bid)}&event=eq.card_saved_email_claimed&order=created_at.asc&limit=5`,
+      );
+      const earliestLive = all.find(
+        (c) => Date.now() - Date.parse(c.created_at) < 10 * 60 * 1000,
+      );
+      if (earliestLive && earliestLive.id !== mine.id) return;
+    }
   }
   // When the booking has a DB row, the journal above is the ONLY guard —
   // the metadata claim may have been inherited from another booking of

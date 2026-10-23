@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { dbConfigured, dbUpsert, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbUpsert, logEvent } from "./_db.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -109,6 +109,11 @@ export function verifyTestPriceToken(
 export function serverBreakdown(opts: {
   bedroomsRaw: string | undefined;
   bathroomsRaw: string | undefined;
+  // Exact full-bath count from the form. bathroomsRaw mixes full + half
+  // baths into one decimal ("2 full + 2 half" = "3"), which the legacy
+  // parse below misreads as 3 full baths — tiering a larger home than
+  // the customer saw (M1). When fullBathsRaw is present it wins.
+  fullBathsRaw?: string | undefined;
   serviceKey: string | undefined;
   frequency: string | undefined;
   cleanedRecently: boolean | undefined;
@@ -116,7 +121,10 @@ export function serverBreakdown(opts: {
   testScale?: boolean;
 }): { first_total: number; recurring_total: number; first_service: "deep" | "standard" } | null {
   const bedrooms = parseInt(opts.bedroomsRaw ?? "", 10);
-  const fullBaths = parseInt((opts.bathroomsRaw ?? "").split(".")[0], 10);
+  const exactFull = parseInt(opts.fullBathsRaw ?? "", 10);
+  const fullBaths = Number.isFinite(exactFull) && (opts.fullBathsRaw ?? "").trim() !== ""
+    ? exactFull
+    : parseInt((opts.bathroomsRaw ?? "").split(".")[0], 10);
   const tier = serverTierFor(bedrooms, fullBaths);
   if (!tier) return null;
   const serviceKey = opts.serviceKey ?? "standard";
@@ -372,6 +380,8 @@ const ContactSchema = z.object({
   scope_reasons: z.string().max(300).optional(),
   bedrooms: z.string().max(20).optional().or(z.literal("")),
   bathrooms: z.string().max(20).optional().or(z.literal("")),
+  full_baths: z.string().max(20).optional().or(z.literal("")),
+  half_baths: z.string().max(20).optional().or(z.literal("")),
   zip: z.string().max(20).optional().or(z.literal("")),
   address: z.string().max(200).optional().or(z.literal("")),
   price: z.string().max(20).optional().or(z.literal("")),
@@ -513,6 +523,19 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
+  // M3: this endpoint sends email to arbitrary addresses — it was the
+  // only public POST without a rate limit, and requests with NO Origin
+  // header (any script) sailed through the gate above. Browser form
+  // posts always carry an Origin; require it, and cap the send rate.
+  if (!origin) {
+    res.status(403).json({ ok: false, error: "origin_required" });
+    return;
+  }
+  if (!rateLimit(clientIp(req.headers), 30)) {
+    res.status(429).json({ ok: false, error: "rate_limited" });
+    return;
+  }
+
   const requestId = Math.random().toString(36).slice(2);
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
@@ -637,6 +660,7 @@ export default async function handler(req: Req, res: Res) {
       const server = serverBreakdown({
         bedroomsRaw: bedrooms,
         bathroomsRaw: bathrooms,
+        fullBathsRaw: parsed.data.full_baths,
         serviceKey: parsed.data.service_key,
         frequency: parsed.data.frequency,
         cleanedRecently: parsed.data.cleaned_recently,
@@ -691,7 +715,15 @@ export default async function handler(req: Req, res: Res) {
           for (const z of (extra_zones ?? []).slice(0, 8)) {
             if (typeof z === "string" && z.trim()) rooms.push({ name: z.trim().slice(0, 60), items: [...genericItems] });
           }
-          const visitRow = await dbUpsert<{ id: string }>(
+          // M6: insert-only. A retried submission reproduces the same
+          // booking id by design — it must never regress a visit that
+          // has already advanced (merge-duplicates would overwrite the
+          // status and wipe the checklist).
+          const existingRows = await dbSelect<{ id: string }>(
+            "gh_visits",
+            `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
+          );
+          const visitRow = existingRows[0] ?? (await dbUpsert<{ id: string }>(
             "gh_visits",
             {
               booking_id: bookingId,
@@ -709,10 +741,12 @@ export default async function handler(req: Req, res: Res) {
               is_test: /\b(qa|test)\b/i.test(name ?? ""),
             },
             "booking_id,visit_no",
-          );
+          ));
           if (visitRow) {
             visitRowId = visitRow.id;
-            await logEvent(visitRow.id, bookingId, "system", "visit_created", { service: service ?? null });
+            if (!existingRows[0]) {
+              await logEvent(visitRow.id, bookingId, "system", "visit_created", { service: service ?? null });
+            }
             // Customer comments live in the journal, separate from access
             // instructions — the old build stuffed the whole composed
             // request message (summary + consent record) into access_notes.

@@ -28,6 +28,28 @@ const ALLOWED_ORIGINS = [
 
 type VisitRow = Record<string, unknown> & { id: string };
 
+
+// Annotate a visit row for the owner UI: never leak the token hash, and
+// compute the cleaner-link state the panel displays (issued/active,
+// expiry, whether the cleaner has opened it).
+function annotateVisit(
+  v: VisitRow,
+  openedAt: string | null,
+): Record<string, unknown> {
+  const { cleaner_token_hash, ...rest } = v as Record<string, unknown> & {
+    cleaner_token_hash?: unknown;
+  };
+  const expires = typeof v["cleaner_token_expires"] === "string" ? (v["cleaner_token_expires"] as string) : null;
+  const active = Boolean(cleaner_token_hash) && (!expires || Date.parse(expires) > Date.now());
+  return {
+    ...rest,
+    cleaner_link_issued: Boolean(cleaner_token_hash),
+    cleaner_link_active: active,
+    cleaner_link_expires: expires,
+    cleaner_link_opened_at: openedAt,
+  };
+}
+
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
   const json = (status: number, body: Record<string, unknown>) =>
@@ -70,7 +92,15 @@ export default async function handler(req: Req, res: Res) {
         "gh_events",
         `visit_id=eq.${visitId}&order=created_at.desc&limit=100`,
       );
-      return json(200, { ok: true, visit, photos: photosWithUrls, events });
+      const openedEv = (events as { event: string; created_at: string }[])
+        .filter((e) => e.event === "cleaner_link_opened")
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+      return json(200, {
+        ok: true,
+        visit: annotateVisit(visit, openedEv?.created_at ?? null),
+        photos: photosWithUrls,
+        events,
+      });
     }
 
     // list
@@ -87,9 +117,22 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const ph of photos) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
     }
+    const opened = new Map<string, string>();
+    if (ids.length > 0) {
+      const opens = await dbSelect<{ visit_id: string; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.cleaner_link_opened&order=created_at.desc&limit=500`,
+      );
+      for (const o of opens) {
+        if (!opened.has(o.visit_id)) opened.set(o.visit_id, o.created_at);
+      }
+    }
     return json(200, {
       ok: true,
-      visits: visits.map((v) => ({ ...v, photo_count: counts.get(v.id) ?? 0 })),
+      visits: visits.map((v) => ({
+        ...annotateVisit(v, opened.get(v.id) ?? null),
+        photo_count: counts.get(v.id) ?? 0,
+      })),
     });
   } catch (err) {
     console.error(JSON.stringify({ requestId, step: "owner", error: err instanceof Error ? err.message : String(err) }));
