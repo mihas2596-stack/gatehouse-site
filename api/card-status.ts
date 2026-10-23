@@ -317,7 +317,12 @@ async function maybeSendCardSavedEmail(
     );
     if (prior.length > 0) return;
   }
-  if (customer.metadata["gh_card_email_sent"] && customer.metadata["gh_booking_id"] === payload?.bid) return;
+  // When the booking has a DB row, the journal above is the ONLY guard —
+  // the metadata claim may have been inherited from another booking of
+  // the same client through hydration. The claim below is the legacy
+  // path for bookings without a DB record.
+  const hasRow = Boolean(bookingCtx && (bookingCtx.visitId || bookingCtx.amountCents != null));
+  if (!hasRow && customer.metadata["gh_card_email_sent"]) return;
   const to = (customer.email ?? payload?.email ?? "").trim();
   if (!to) return;
   const claim = String(Date.now());

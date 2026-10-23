@@ -384,6 +384,7 @@ async function hydrateCustomerMeta(
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
   const remindedEv = latestEvent(events, "reminder_sent");
+  const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
     : cancelledEv ? "cancelled"
     : issueOpen ? "issue_open"
@@ -406,6 +407,7 @@ async function hydrateCustomerMeta(
     gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
     gh_issue_room: issueOpen ? evStr(opened, "room") : "",
     gh_reminded_at: remindedEv ? remindedEv.created_at : "",
+    gh_card_email_sent: cardEmailEv ? "1" : "",
   };
   const params: Record<string, string> = {};
   for (const [k, v] of Object.entries(values)) params[`metadata[${k}]`] = v;
