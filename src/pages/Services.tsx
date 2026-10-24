@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
-import { PRICES, ADDONS , fmtPrice, scaleTestPrice} from "@/config/calculator";
+import { PRICES, ADDONS , fmtPrice, globalTestCutActive, scaleTestPrice} from "@/config/calculator";
 import { useEffect, useState } from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
@@ -62,7 +62,7 @@ const Services = () => {
   // regime never shows two different prices for the same add-on.
   const [testPricing, setTestPricing] = useState(false);
   useEffect(() => {
-    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1"); } catch { /* private mode */ }
+    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive()); } catch { /* private mode */ }
   }, []);
   const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
   return (
@@ -81,6 +81,14 @@ const Services = () => {
           </h1>
         </div>
       </section>
+
+      {testPricing && (
+        <div className="container">
+          <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
+            Test booking: prices on this page are reduced for a payment test.
+          </p>
+        </div>
+      )}
 
       {/* Main service */}
       <section className="py-10 md:py-12">

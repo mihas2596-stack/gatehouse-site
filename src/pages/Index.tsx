@@ -7,7 +7,7 @@ import IncludedRooms from "@/components/IncludedRooms";
 import ReportShowcase from "@/components/ReportShowcase";
 import heroImage from "@/assets/expect-living-fireplace.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
-import { PRICES, TIERS , fmtPrice} from "@/config/calculator";
+import { PRICES, TIERS , fmtPrice, globalTestCutActive, scaleTestPrice} from "@/config/calculator";
 
 const heroTrust = [
   { Icon: Tag, label: "See your price" },
@@ -15,9 +15,12 @@ const heroTrust = [
 ];
 
 // Every-other-week prices come from the same tier table the /quote page uses.
+// During the owner-ordered 48h global test window (2026-10-24) these scale
+// like every other price on the site; evaluated at page load in the browser.
+const disp = (n: number): number => (globalTestCutActive() ? scaleTestPrice(n) : n);
 const biweeklyRows = TIERS.map(({ key, rooms }) => ({
   label: rooms,
-  price: PRICES.recurring[key],
+  price: disp(PRICES.recurring[key]),
 }));
 
 const howItWorks = [
@@ -25,7 +28,7 @@ const howItWorks = [
     n: "1",
     Icon: Calculator,
     title: "See your price",
-    text: `Answer a few questions about your home. Your price appears instantly — ${fmtPrice(PRICES.recurring.S)}, ${fmtPrice(PRICES.recurring.M)} or ${fmtPrice(PRICES.recurring.L)}. No phone call needed.`,
+    text: `Answer a few questions about your home. Your price appears instantly — ${fmtPrice(disp(PRICES.recurring.S))}, ${fmtPrice(disp(PRICES.recurring.M))} or ${fmtPrice(disp(PRICES.recurring.L))}. No phone call needed.`,
     highlight: false,
   },
   {

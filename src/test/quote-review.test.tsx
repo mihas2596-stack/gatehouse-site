@@ -3,9 +3,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-// Test prices are token-only now (no global window), so these price
-// assertions stay deterministic without mocking the calculator. Token
-// test mode has its own cases below.
+// Owner order 2026-10-24 runs a 48h GLOBAL test-price window (until
+// 2026-10-26T10:33Z). Pin the clock past the window so these regular-price
+// assertions stay deterministic; token test mode has its own cases below.
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-27T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);

@@ -79,6 +79,12 @@ function serverAddonsTotal(a: ServerAddonSel, serviceKey: string): number {
 // token is bound to the owner's email and expires; regular bookings are
 // never affected.
 export const TEST_PRICE_SCALE = 0.01;
+// Owner order 2026-10-24: GLOBAL 48-hour test-price window (mirrors
+// GLOBAL_TEST_CUT_UNTIL_MS in src/config/calculator.ts). While active,
+// every booking prices at TEST_PRICE_SCALE — no token needed. Auto-expires.
+const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-26T10:33:00Z");
+const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
+  nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;
 
 export function verifyTestPriceToken(
@@ -623,10 +629,11 @@ export default async function handler(req: Req, res: Res) {
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
     let testScale = false;
-    // Test prices are token-only now (2026-10-24 spec §6): the retired
-    // global cut window no longer scales anything. Ordinary visitors
-    // always see real prices; only a verified tp1 token scales a booking.
-    const cutScale = false;
+    // Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While
+    // active, every booking prices at TEST_PRICE_SCALE with no token
+    // needed; the window auto-expires 2026-10-26 10:33 UTC. Token sessions
+    // (testScale) work the same way on top of it.
+    const cutScale = globalTestCutActive();
     let serverRecurring: string | undefined;
     if (isQuote) {
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
@@ -862,7 +869,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
           return Number.isFinite(n) ? `$${n.toFixed(2)}` : `$${v}`;
         };
         const priceDisplay = serverFirst ? fmtUsd(serverFirst) : price ? fmtUsd(price) : "—";
-        const testNote = testScale ? "\nThis is a test booking at reduced test prices for an owner payment check.\n" : "";
+        const testNote = testScale || cutScale ? "\nThis is a test booking at reduced test prices for an owner payment check.\n" : "";
         // Equal first and recurring prices collapse into one line — "$189 for
         // the first visit, then $189 per visit" reads like a typo.
         const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;

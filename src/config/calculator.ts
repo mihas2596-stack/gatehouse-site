@@ -153,12 +153,20 @@ export const scaleTestPrice = (n: number): number =>
   Math.min(TEST_PRICE_CAP, Math.round(n * TEST_PRICE_SCALE * 100) / 100);
 
 /**
- * Test prices are NEVER global. They apply only inside an explicit
- * owner test session (a verified tp1 token, see api/send-contact-email.ts
- * verifyTestPriceToken): the quote page applies TEST_PRICE_SCALE only
- * when its testScale flag is set, and the server only when the token
- * verifies. The 2026-10-23 global cut window is retired — ordinary
- * visitors always see real prices.
+ * Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While active,
+ * every visitor sees test prices (x0.01, cap $1.50) with no token needed.
+ * The window auto-expires at GLOBAL_TEST_CUT_UNTIL_MS — ordinary prices
+ * return with no code change. Mirrored server-side in api/send-contact-email.ts.
+ */
+export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-26T10:33:00Z");
+export const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
+  nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
+
+/**
+ * Test prices apply in two cases: an explicit owner test session (a
+ * verified tp1 token, see api/send-contact-email.ts verifyTestPriceToken)
+ * or the time-boxed global window (globalTestCutActive, owner order
+ * 2026-10-24, 48h). Outside both, ordinary visitors always see real prices.
  */
 export const fmtPrice = (n: number): string => {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;

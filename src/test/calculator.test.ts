@@ -6,7 +6,7 @@
 // every scenario below prices from the regular tables. The owner's signed
 // price-test mode (testScale) prices at 1/10 and is covered separately.
 import { describe, it, expect } from "vitest";
-import { priceBreakdown, tierFor, addonsTotal, fmtPrice, scaleTestPrice } from "../config/calculator";
+import { priceBreakdown, tierFor, addonsTotal, fmtPrice, scaleTestPrice, globalTestCutActive, GLOBAL_TEST_CUT_UNTIL_MS } from "../config/calculator";
 
 describe("tierFor", () => {
   it("maps 3bd/2ba to M", () => {
@@ -110,10 +110,20 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
   });
 });
 
-describe("test prices are never global", () => {
-  it("fmtPrice always shows real prices; scaling is explicit and opt-in", () => {
+describe("fmtPrice never scales; scaling is explicit", () => {
+  it("fmtPrice always shows the number it is given; scaling is opt-in", () => {
     expect(fmtPrice(35)).toBe("$35");
     expect(fmtPrice(149)).toBe("$149");
     expect(scaleTestPrice(35)).toBe(0.35);
+  });
+});
+
+describe("global test-price window (owner order 2026-10-24, 48h)", () => {
+  it("is active before the cutoff and inactive at and after it", () => {
+    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-10-26T10:33:00Z"));
+    expect(globalTestCutActive(Date.parse("2026-10-24T13:33:00Z"))).toBe(true);
+    expect(globalTestCutActive(Date.parse("2026-10-26T10:32:59Z"))).toBe(true);
+    expect(globalTestCutActive(Date.parse("2026-10-26T10:33:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-10-27T00:00:00Z"))).toBe(false);
   });
 });

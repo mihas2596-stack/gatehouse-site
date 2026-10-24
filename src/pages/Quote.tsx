@@ -7,6 +7,7 @@ import { Calculator, Sparkles, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
+  globalTestCutActive,
   priceBreakdown,
   scaleTestPrice,
   tierFor,
@@ -90,7 +91,10 @@ const Quote = () => {
       else sessionStorage.removeItem("gh_test_pricing");
     } catch { /* private mode */ }
   }, [testTokenOk]);
-  const testMode = testToken !== "" && testTokenOk;
+  // Owner order 2026-10-24: during the 48h global test window every
+  // visitor sees test prices, token or not.
+  const globalCut = globalTestCutActive();
+  const testMode = (testToken !== "" && testTokenOk) || globalCut;
   const dispPrice = (n: number): number => (testMode ? scaleTestPrice(n) : n);
   // Money display: whole dollars stay "$224", cents always show two
   // decimals ("$1.50", never "$1.5").
@@ -515,7 +519,7 @@ const Quote = () => {
                 Test booking: prices on this page are reduced for a payment test.
               </p>
             )}
-            {testToken && testTokenChecked && !testTokenOk && (
+            {testToken && testTokenChecked && !testTokenOk && !globalCut && (
               <p className="mb-6 rounded-lg border border-border bg-muted px-4 py-3 text-sm text-foreground">
                 This test link is invalid or expired — regular prices apply.
               </p>
