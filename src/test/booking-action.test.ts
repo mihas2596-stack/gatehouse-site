@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import handler from "../../api/booking-action";
+import { verifyBooking } from "../../api/create-checkout-session";
 
 // The confirm action: the owner confirms the visit date with the client.
 // It must set the orthogonal gh_booking_confirmed flag (never touching the
@@ -121,5 +122,23 @@ describe("booking-action confirm", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handler({ method: "POST", headers: {}, body: { action: "confirm", booking_id: BID, confirmed_date: "2026-11-07" } } as any, resNoAuth as any);
     expect(resNoAuth.code).toBe(401);
+  });
+});
+
+describe("booking-action client_link", () => {
+  it("mints a visit link for the booking's client", async () => {
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handler({ method: "POST", headers: { authorization: "Bearer adm-secret" }, body: { action: "client_link", booking_id: BID } } as any, res as any);
+    expect(res.body["ok"]).toBe(true);
+    const url = res.body["url"] as string;
+    expect(url.startsWith("https://www.gatehousehomecleaning.com/visit?bt=")).toBe(true);
+    const bt = decodeURIComponent(url.split("bt=")[1]);
+    const v = verifyBooking("sk_test_x", bt);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.payload.bid).toBe(BID);
+      expect(v.payload.email).toBe(CUSTOMER.email);
+    }
   });
 });

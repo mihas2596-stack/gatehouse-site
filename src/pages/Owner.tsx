@@ -50,6 +50,7 @@ const Owner = () => {
   const [stripeState, setStripeState] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [cleanerUrl, setCleanerUrl] = useState("");
+  const [clientUrl, setClientUrl] = useState("");
   const [returnNote, setReturnNote] = useState("");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
@@ -72,10 +73,10 @@ const Owner = () => {
     const ol = new URLSearchParams(window.location.search).get("ol");
     if (!ol) return;
     window.history.replaceState(null, "", window.location.pathname);
-    fetch("/api/owner-login-verify", {
+    fetch("/api/owner-auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ol }),
+      body: JSON.stringify({ action: "verify", ol }),
     })
       .then((r) => r.json())
       .then((j) => {
@@ -120,6 +121,7 @@ const Owner = () => {
     setStripeState("");
     setActionMsg("");
     setCleanerUrl("");
+    setClientUrl("");
     setConfirmDate(v.visit_date ?? "");
     setConfirmWindow(v.window ?? "");
     setCleanerName(v.cleaner_name ?? "");
@@ -235,7 +237,7 @@ const Owner = () => {
             onClick={async () => {
               setLinkMsg("");
               try {
-                const r = await fetch("/api/owner-login", { method: "POST" });
+                const r = await fetch("/api/owner-auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send" }) });
                 const j = await r.json();
                 setLinkMsg(j?.ok ? "Login link sent — check nikolajmihasenok@gmail.com (valid 30 minutes)." : "Couldn't send the link — try again in a minute.");
               } catch {
@@ -590,6 +592,68 @@ const Owner = () => {
                     >
                       Send via SMS
                     </Button>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <p className="font-semibold mb-2">Client link</p>
+                <p className="text-xs mb-2">Send the client their cabinet link personally — it opens their visit page and, after cleaning, the photo report to approve and pay. The auto-emails carry the same link as a backup.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      void runAction("Get client link", { action: "client_link", booking_id: selected.booking_id }, (j) => {
+                        if (typeof j["url"] === "string") setClientUrl(j["url"] as string);
+                      })
+                    }
+                  >
+                    Get client link
+                  </Button>
+                  {clientUrl && (
+                    <Button
+                      variant="hero"
+                      size="sm"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(clientUrl);
+                        setActionMsg("Client link copied.");
+                      }}
+                    >
+                      Copy client link
+                    </Button>
+                  )}
+                </div>
+                {clientUrl && (
+                  <div className="mt-2">
+                    <input
+                      readOnly
+                      className="w-full text-xs bg-muted rounded p-2 mb-2"
+                      value={clientUrl}
+                      onFocus={(e) => e.target.select()}
+                      aria-label="Client link (select and copy if the button does not work)"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const text = `Hi! Here is your Gatehouse cabinet link${selected.visit_date ? ` for ${selected.visit_date}` : ""}${selected.address ? ` at ${selected.address}` : ""}:\n${clientUrl}\n\nOpen it to see your visit details — and after cleaning, your photo report to approve and pay. Thank you!`;
+                          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+                        }}
+                      >
+                        Send via WhatsApp
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const text = `Hi! Here is your Gatehouse cabinet link${selected.visit_date ? ` for ${selected.visit_date}` : ""}${selected.address ? ` at ${selected.address}` : ""}:\n${clientUrl}\n\nOpen it to see your visit details — and after cleaning, your photo report to approve and pay. Thank you!`;
+                          window.open(`sms:?body=${encodeURIComponent(text)}`, "_blank");
+                        }}
+                      >
+                        Send via SMS
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>

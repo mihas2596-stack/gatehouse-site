@@ -1,9 +1,11 @@
 // Owner email-link login + session tokens (owner order 2026-10-24).
 // The /owner page historically takes ADMIN_TOKEN typed by hand. Email login
 // adds a second credential so the owner never has to copy the key:
-//   1. POST /api/owner-login -> server emails a short-lived link token (ol1)
-//      to the fixed OWNER_EMAIL (nikolajmihasenok@gmail.com).
-//   2. /owner?ol=<token> -> POST /api/owner-login-verify exchanges it for a
+//   1. POST /api/owner-auth { action: "send" } -> server emails a
+//      short-lived link token (ol1) to the fixed OWNER_EMAIL
+//      (nikolajmihasenok@gmail.com).
+//   2. /owner?ol=<token> -> POST /api/owner-auth { action: "verify" }
+//      exchanges it for a
 //      24h session token (os1), stored in sessionStorage like the key.
 //   3. Owner APIs accept `Bearer <ADMIN_TOKEN>` OR a valid os1 session.
 // Both token types are HMAC-signed with keys derived from ADMIN_TOKEN, so

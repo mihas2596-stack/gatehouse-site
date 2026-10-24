@@ -109,7 +109,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -1437,6 +1437,30 @@ export default async function handler(req: Req, res: Res) {
         ok: true,
         url: `https://www.gatehousehomecleaning.com/cleaner?ct=${token}`,
         expires,
+      });
+    }
+
+    if (action === "client_link") {
+      // Owner copy of the client's cabinet link: mint a fresh bt token for
+      // this booking (same v2 construction the quote flow uses) so the
+      // owner can send the cabinet link personally instead of relying on
+      // the auto-emails. The visit row carries no email (VisitRowLite has
+      // no email field), so the address comes from the Stripe customer
+      // record, exactly like cleaner_link's create path does.
+      const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+      const email = custRes.ok && typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : null;
+      const name = custRes.ok && typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : null;
+      if (!email) return json(502, { ok: false, error: "no_client_email" });
+      const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+        bid: bookingId,
+        email,
+        name: name ?? "",
+        ts: Math.floor(Date.now() / 1000),
+      });
+      await logEvent(null, bookingId, "owner", "client_link_issued");
+      return json(200, {
+        ok: true,
+        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
       });
     }
 

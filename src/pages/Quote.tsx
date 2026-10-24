@@ -79,7 +79,7 @@ const Quote = () => {
   useEffect(() => {
     if (!testToken) return;
     let cancelled = false;
-    fetch(`/api/test-price-check?token=${encodeURIComponent(testToken)}`)
+    fetch(`/api/owner-auth?token=${encodeURIComponent(testToken)}`)
       .then((r) => r.json())
       .then((d) => { if (!cancelled) { setTestTokenOk(d?.ok === true); setTestTokenChecked(true); } })
       .catch(() => { if (!cancelled) setTestTokenChecked(true); });
