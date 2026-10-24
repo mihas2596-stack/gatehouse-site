@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { dbConfigured, dbSelect, dbUpsert, logEvent } from "./_db.js";
+import { mintOwnerLoginToken } from "./_owner_auth.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -793,11 +794,23 @@ export default async function handler(req: Req, res: Res) {
     const row = (label: string, value: string) =>
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
+    // Owner order 2026-10-24: every request email carries a one-click owner
+    // panel login (ol token, 30 min) so the cabinet reaches the owner inbox
+    // the moment a client books — no key copy needed. If the link expired,
+    // the /owner "Send login link" button issues a fresh one.
+    const ownerLoginLink = isQuote && process.env["ADMIN_TOKEN"]
+      ? `https://www.gatehousehomecleaning.com/owner?ol=${mintOwnerLoginToken(process.env["ADMIN_TOKEN"], Math.floor(Date.now() / 1000))}`
+      : "";
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background:${testScale || cutScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale || cutScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale || cutScale ? "#8B4513" : "#444"};">
           ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at reduced test prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
+        ${isQuote && ownerLoginLink ? `
+        <div style="background:#EEF6EE;border:1px solid #7FB069;border-radius:6px;padding:14px 18px;margin-bottom:18px;">
+          <p style="margin:0 0 10px;font-weight:bold;color:#2E5E2E;">Owner panel — one-click login (valid 30 minutes, no key needed)</p>
+          <a href="${ownerLoginLink}" style="display:inline-block;background:#7FB069;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;">Open owner panel</a>
+        </div>` : ""}
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
         </h2>
