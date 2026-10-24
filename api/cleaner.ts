@@ -3,8 +3,9 @@
 //   POST /api/cleaner {ct, action}     → checklist | photo_sign | photo_register
 //                                         | photo_delete | submit
 //
-// The token is random (32 bytes); only its SHA-256 hash is stored on the
-// visit row, with an expiry. A link opens exactly one visit: the cleaner
+// Legacy tokens are random (32 bytes); v2 tokens are deterministic HMAC
+// derivations (see api/_cleaner_link.ts). Either way only the SHA-256 hash
+// is stored on the visit row, with an expiry. A link opens exactly one visit: the cleaner
 // cannot see other bookings, prices beyond the visit scope, or any payment
 // data. Photos live in a private Supabase bucket; the page receives
 // short-lived signed URLs, and uploads go straight to Storage with a
@@ -24,7 +25,9 @@ import {
   ALLOWED_PHOTO_TYPES,
   MAX_PHOTO_BYTES,
   hashToken,
+  tokenHashEquals,
 } from "./_db.js";
+import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
 
 type Req = {
   method?: string;
@@ -57,6 +60,8 @@ type VisitRow = {
   report_status: string;
   cleaner_token_hash: string | null;
   cleaner_token_expires: string | null;
+  cleaner_link_version?: string | null;
+  cleaner_link_issuance?: string | null;
   status: string;
 };
 
@@ -106,6 +111,39 @@ async function resolveVisit(
   if (!dbConfigured()) return { error: "db_not_configured", status: 501 };
   if (!token || token.length < 20 || token.length > 200) {
     return { error: "invalid_link", status: 404 };
+  }
+  // v2 deterministic tokens: strict verification — structure, HMAC under
+  // the server secret, issuance recorded on the row, and the stored hash
+  // of the finished token. A v2 token never falls through to the legacy
+  // hash lookup, and a missing secret fails closed (legacy links still
+  // work below).
+  if (token.startsWith("ct2.")) {
+    // Try every candidate secret (env first, derived fallback) so links
+    // minted before the env secret was added keep opening afterwards.
+    let verified: ReturnType<typeof verifyCleanerLinkV2> = null;
+    for (const secret of cleanerLinkSecretCandidates()) {
+      verified = verifyCleanerLinkV2(secret, token);
+      if (verified) break;
+    }
+    if (!verified) return { error: "invalid_link", status: 404 };
+    const rows = await dbSelect<VisitRow>(
+      "gh_visits",
+      `id=eq.${verified.visitId}&limit=1`,
+    );
+    const visit = rows[0];
+    if (!visit) return { error: "invalid_link", status: 404 };
+    if (
+      visit.cleaner_link_version !== "v2" ||
+      visit.cleaner_link_issuance !== verified.issuanceId ||
+      !visit.cleaner_token_hash ||
+      !tokenHashEquals(hashToken(token), visit.cleaner_token_hash)
+    ) {
+      return { error: "invalid_link", status: 404 };
+    }
+    if (visit.cleaner_token_expires && Date.parse(visit.cleaner_token_expires) < Date.now()) {
+      return { error: "link_expired", status: 410 };
+    }
+    return { visit };
   }
   const rows = await dbSelect<VisitRow>(
     "gh_visits",

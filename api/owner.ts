@@ -37,8 +37,12 @@ function annotateVisit(
   v: VisitRow,
   openedAt: string | null,
 ): Record<string, unknown> {
-  const { cleaner_token_hash, ...rest } = v as Record<string, unknown> & {
+  // Strip the token hash AND the v2 issuance metadata: the panel only
+  // needs to know whether the link is reusable, never the internals.
+  const { cleaner_token_hash, cleaner_link_version, cleaner_link_issuance, ...rest } = v as Record<string, unknown> & {
     cleaner_token_hash?: unknown;
+    cleaner_link_version?: unknown;
+    cleaner_link_issuance?: unknown;
   };
   const expires = typeof v["cleaner_token_expires"] === "string" ? (v["cleaner_token_expires"] as string) : null;
   const active = Boolean(cleaner_token_hash) && (!expires || Date.parse(expires) > Date.now());
@@ -48,7 +52,23 @@ function annotateVisit(
     cleaner_link_active: active,
     cleaner_link_expires: expires,
     cleaner_link_opened_at: openedAt,
+    // Reusable = v2 deterministic link: the owner can re-fetch the exact
+    // same URL after a refresh. Legacy random links are not reusable —
+    // the panel offers an explicit upgrade instead of silently replacing.
+    cleaner_link_reusable: Boolean(cleaner_token_hash) && cleaner_link_version === "v2" && typeof cleaner_link_issuance === "string" && cleaner_link_issuance.length > 0,
   };
+}
+
+// Payment failures are journaled by api/report.ts as payment_failed
+// events (the visit row itself carries no payment-failed flag), so the
+// list derives the Needs-attention signal from the journal, the same
+// way it derives the cleaner-link opened state.
+async function hasPaymentFailed(visitId: string): Promise<boolean> {
+  const rows = await dbSelect<{ id: number }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.payment_failed&limit=1`,
+  );
+  return rows.length > 0;
 }
 
 export default async function handler(req: Req, res: Res) {
@@ -75,6 +95,7 @@ export default async function handler(req: Req, res: Res) {
       const visits = await dbSelect<VisitRow>("gh_visits", `id=eq.${visitId}&limit=1`);
       const visit = visits[0];
       if (!visit) return json(404, { ok: false, error: "visit_not_found" });
+      const paymentFailed = await hasPaymentFailed(visitId);
       const photos = await dbSelect<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
         "gh_photos",
         `visit_id=eq.${visitId}&order=created_at.asc&limit=200`,
@@ -98,7 +119,7 @@ export default async function handler(req: Req, res: Res) {
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
       return json(200, {
         ok: true,
-        visit: annotateVisit(visit, openedEv?.created_at ?? null),
+        visit: { ...annotateVisit(visit, openedEv?.created_at ?? null), payment_failed: paymentFailed },
         photos: photosWithUrls,
         events,
       });
@@ -128,11 +149,20 @@ export default async function handler(req: Req, res: Res) {
         if (!opened.has(o.visit_id)) opened.set(o.visit_id, o.created_at);
       }
     }
+    const failed = new Set<string>();
+    if (ids.length > 0) {
+      const fails = await dbSelect<{ visit_id: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.payment_failed&limit=500`,
+      );
+      for (const f of fails) failed.add(f.visit_id);
+    }
     return json(200, {
       ok: true,
       visits: visits.map((v) => ({
         ...annotateVisit(v, opened.get(v.id) ?? null),
         photo_count: counts.get(v.id) ?? 0,
+        payment_failed: failed.has(v.id),
       })),
     });
   } catch (err) {

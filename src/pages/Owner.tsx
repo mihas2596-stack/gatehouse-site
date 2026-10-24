@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
+
+type CleanerProfile = { phone?: string | null; photo?: string | null };
 
 type Visit = {
   id: string;
@@ -18,13 +20,16 @@ type Visit = {
   status: string;
   report_status: string;
   cleaner_name: string | null;
+  cleaner_profile?: CleanerProfile | null;
   cleaner_link_issued?: boolean;
   cleaner_link_active?: boolean;
   cleaner_link_expires?: string | null;
   cleaner_link_opened_at?: string | null;
+  cleaner_link_reusable?: boolean;
   issue_open: boolean;
   issue_ever: boolean;
   report_bounced: boolean;
+  payment_failed?: boolean;
   paid_at: string | null;
   is_test: boolean;
   checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
@@ -36,6 +41,72 @@ type GhEvent = { id: number; actor: string; event: string; detail: Record<string
 
 const money = (cents: number | null): string =>
   cents ? `$${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : "—";
+
+// Date-only strings (YYYY-MM-DD) formatted without a timezone shift.
+const fmtVisitDate = (d: string | null | undefined): string => {
+  if (!d) return "no date";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!m) return d;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+};
+
+const fmtDateET = (iso: string | null | undefined): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric" }).format(d);
+};
+
+const fmtDateTimeET = (iso: string | null | undefined): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(d)} ET`;
+};
+
+const initials = (name: string): string => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+};
+
+const digitsOnly = (phone: string): string => phone.replace(/\D/g, "");
+
+const reportLabel = (s: string): string => {
+  switch (s) {
+    case "none": return "Waiting for cleaner’s report";
+    case "draft": return "Cleaner is working on the report";
+    case "returned": return "Report returned to cleaner";
+    case "submitted": return "Report ready for review";
+    case "sent": return "Report sent to the client";
+    default: return s || "—";
+  }
+};
+
+const EVENT_LABELS: Record<string, string> = {
+  cleaner_link_opened: "Cleaner opened the job link",
+  cleaner_link_issued: "Cleaner link issued",
+  cleaner_link_rotated: "Cleaner link replaced",
+  cleaner_changed: "Cleaner changed",
+  report_submitted: "Cleaner submitted the report",
+  report_returned: "Report returned to cleaner",
+  issue_opened: "Customer issue opened",
+  issue_resolved: "Issue resolved",
+  payment_failed: "Payment failed",
+  payment_succeeded: "Payment succeeded",
+  client_link_issued: "Client link created",
+  date_proposed: "Another date proposed",
+  client_note: "Customer note",
+  scope_review: "Scope review",
+};
+
+// Detail keys that must never render in Activity (defense in depth —
+// events should not carry them, but the panel never displays them).
+const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
+
+type FocusBlock = "cleaner" | "schedule" | "report" | "payment";
 
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
@@ -49,17 +120,39 @@ const Owner = () => {
   const [events, setEvents] = useState<GhEvent[]>([]);
   const [stripeState, setStripeState] = useState("");
   const [actionMsg, setActionMsg] = useState("");
-  const [cleanerUrl, setCleanerUrl] = useState("");
-  const [clientUrl, setClientUrl] = useState("");
   const [returnNote, setReturnNote] = useState("");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
-  const [cleanerName, setCleanerName] = useState("");
   const [acting, setActing] = useState("");
   const [publishMsg, setPublishMsg] = useState("");
-  const [cleanerMsg, setCleanerMsg] = useState("");
   const [ownerRoom, setOwnerRoom] = useState("Kitchen");
   const [ownerKind, setOwnerKind] = useState<"before" | "after">("after");
+
+  // Cleaner block state.
+  const [cleanerEditing, setCleanerEditing] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formPhone, setFormPhone] = useState("");
+  const [formPhoto, setFormPhoto] = useState("");
+  const [formError, setFormError] = useState("");
+  const [viewLinkOpen, setViewLinkOpen] = useState(false);
+  const [viewLinkUrl, setViewLinkUrl] = useState("");
+  const [viewLinkError, setViewLinkError] = useState("");
+  const [cleanerCopyStatus, setCleanerCopyStatus] = useState("");
+  const [clientCopyStatus, setClientCopyStatus] = useState("");
+  const [manualCopy, setManualCopy] = useState<{ text: string; label: string; owner: "cleaner" | "client" } | null>(null);
+
+  // Schedule block state.
+  const [scheduleEditing, setScheduleEditing] = useState(false);
+  const [altDate, setAltDate] = useState("");
+
+  // Concurrency guard: mutation responses carry a sequence number, and
+  // only the newest one may set the link shown for a visit — a late
+  // answer must never display the previous assignment's link. The ref
+  // is keyed by visit id, so switching visits can never leak a link.
+  const linkSeqRef = useRef(0);
+  const linkSessionRef = useRef<{ visitId: string; url: string; seq: number } | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const pendingFocusRef = useRef<FocusBlock | null>(null);
 
   const headers = useCallback(
     () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }),
@@ -114,17 +207,46 @@ const Owner = () => {
     void loadList();
   }, [loadList]);
 
-  const openVisit = async (v: Visit) => {
+  // Needs-attention deep links: after the detail loads, scroll to the
+  // block that needs the action.
+  useEffect(() => {
+    const focus = pendingFocusRef.current;
+    if (!focus || !selected) return;
+    pendingFocusRef.current = null;
+    const t = window.setTimeout(() => {
+      document.getElementById(`block-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+    return () => window.clearTimeout(t);
+  }, [selected]);
+
+  const openVisit = async (v: Visit, focus?: FocusBlock) => {
+    const sameVisit = selectedIdRef.current === v.id;
+    selectedIdRef.current = v.id;
+    if (focus) pendingFocusRef.current = focus;
     setSelected(v);
-    setPhotos([]);
-    setEvents([]);
-    setStripeState("");
-    setActionMsg("");
-    setCleanerUrl("");
-    setClientUrl("");
+    if (!sameVisit) {
+      setPhotos([]);
+      setEvents([]);
+      setStripeState("");
+      setActionMsg("");
+      setViewLinkOpen(false);
+      setViewLinkUrl("");
+      setViewLinkError("");
+      setCleanerCopyStatus("");
+      setClientCopyStatus("");
+      setManualCopy(null);
+      setPublishMsg("");
+      setReturnNote("");
+      setScheduleEditing(false);
+      setAltDate("");
+      setCleanerEditing(!v.cleaner_name);
+      setFormName(v.cleaner_name ?? "");
+      setFormPhone(v.cleaner_profile?.phone ?? "");
+      setFormPhoto(v.cleaner_profile?.photo ?? "");
+      setFormError("");
+    }
     setConfirmDate(v.visit_date ?? "");
     setConfirmWindow(v.window ?? "");
-    setCleanerName(v.cleaner_name ?? "");
     try {
       const r = await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
@@ -132,6 +254,12 @@ const Owner = () => {
         setSelected(j.visit);
         setPhotos(j.photos ?? []);
         setEvents(j.events ?? []);
+        if (!sameVisit) {
+          setCleanerEditing(!j.visit.cleaner_name);
+          setFormName(j.visit.cleaner_name ?? "");
+          setFormPhone(j.visit.cleaner_profile?.phone ?? "");
+          setFormPhoto(j.visit.cleaner_profile?.photo ?? "");
+        }
       }
       const sr = await fetch("/api/booking-action", {
         method: "POST",
@@ -206,6 +334,166 @@ const Owner = () => {
     setActing("");
   };
 
+  // Record a freshly issued link, guarded by sequence: the sequence is
+  // captured when the mutation STARTS, so a late answer (started
+  // earlier, arrived later) can never overwrite a newer link.
+  const noteLinkResult = (visitId: string, url: string, seq: number) => {
+    const prev = linkSessionRef.current;
+    if (!prev || prev.visitId !== visitId || seq > prev.seq) {
+      linkSessionRef.current = { visitId, url, seq };
+    }
+  };
+
+  const copyText = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      /* manual fallback below */
+    }
+    return false;
+  };
+
+  const cleanerMessage = (url: string): string => {
+    if (!selected) return url;
+    const when = `${fmtVisitDate(selected.visit_date)}${selected.window ? `, ${selected.window}` : ""}`;
+    const where = selected.address ? ` at ${selected.address}` : "";
+    return `Hi! Here is your Gatehouse job link for ${when}${where}:\n${url}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
+  };
+
+  const openShare = (kind: "wa" | "sms", text: string, phone: string | null) => {
+    const digits = phone ? digitsOnly(phone) : "";
+    if (kind === "wa") {
+      window.open(digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+    } else {
+      window.open(digits ? `sms:${digits}?body=${encodeURIComponent(text)}` : `sms:?body=${encodeURIComponent(text)}`, "_blank");
+    }
+  };
+
+  // Fetch the current reusable link (fresh from the server). Falls back
+  // to the link issued in this panel session when the stored link is a
+  // legacy one that cannot be re-fetched.
+  const loadCleanerLink = async (): Promise<{ url: string } | { error: string }> => {
+    if (!selected) return { error: "no_visit" };
+    const j = await act({ action: "get_cleaner_link", booking_id: selected.booking_id });
+    if (j.ok && typeof j["url"] === "string") return { url: j["url"] as string };
+    const session = linkSessionRef.current;
+    if (session && session.visitId === selected.id) return { url: session.url };
+    return { error: typeof j.error === "string" ? j.error : "failed" };
+  };
+
+  const copyCleanerLink = async () => {
+    setCleanerCopyStatus("");
+    setManualCopy(null);
+    const res = await loadCleanerLink();
+    if ("url" in res) {
+      if (await copyText(res.url)) {
+        setCleanerCopyStatus("Cleaner link copied.");
+      } else {
+        setManualCopy({ text: res.url, label: "Cleaner link — copy it manually:", owner: "cleaner" });
+        setCleanerCopyStatus("Copy failed — copy the link manually below.");
+      }
+      return;
+    }
+    if (res.error === "link_not_reusable") {
+      setCleanerCopyStatus("This link can’t be re-fetched. Create a reusable access link below.");
+    } else if (res.error === "link_expired") {
+      setCleanerCopyStatus("This link has expired. Replace it below.");
+    } else if (res.error === "reusable_unavailable") {
+      setCleanerCopyStatus("Reusable links aren’t set up on the server yet. Create a new link below.");
+    } else {
+      setCleanerCopyStatus("Couldn’t load the link — try again.");
+    }
+  };
+
+  const toggleViewLink = async () => {
+    if (viewLinkOpen) {
+      setViewLinkOpen(false);
+      return;
+    }
+    setViewLinkError("");
+    const res = await loadCleanerLink();
+    if ("url" in res) {
+      setViewLinkUrl(res.url);
+      setViewLinkOpen(true);
+    } else if (res.error === "link_not_reusable") {
+      setViewLinkError("This link can’t be re-fetched. Create a reusable access link below.");
+    } else if (res.error === "link_expired") {
+      setViewLinkError("This link has expired. Replace it below.");
+    } else {
+      setViewLinkError("Couldn’t load the link — try again.");
+    }
+  };
+
+  const copyClientLink = async () => {
+    if (!selected) return;
+    setClientCopyStatus("");
+    setManualCopy(null);
+    const j = await act({ action: "client_link", booking_id: selected.booking_id });
+    if (j.ok && typeof j["url"] === "string") {
+      const url = j["url"] as string;
+      if (await copyText(url)) {
+        setClientCopyStatus("Client link copied.");
+      } else {
+        setManualCopy({ text: url, label: "Client link — copy it manually:", owner: "client" });
+        setClientCopyStatus("Copy failed — copy the link manually below.");
+      }
+    } else {
+      setClientCopyStatus("Couldn’t load the client link — try again.");
+    }
+  };
+
+  const replaceCleanerLink = () => {
+    if (!selected) return;
+    if (selected.cleaner_link_issued && !window.confirm("This will disable the previous link. Send the new link to your cleaner.")) return;
+    const visitId = selected.id;
+    const seq = linkSeqRef.current + 1;
+    linkSeqRef.current = seq;
+    void runAction("Replace access link", { action: "cleaner_link", booking_id: selected.booking_id }, (j) => {
+      if (typeof j["url"] === "string") {
+        noteLinkResult(visitId, j["url"] as string, seq);
+        // Show the result at once, keyed by visit id, not by panel state.
+        setViewLinkUrl(j["url"] as string);
+        setViewLinkOpen(true);
+      }
+    });
+  };
+
+  const assignCleaner = () => {
+    if (!selected) return;
+    if (!formName.trim()) {
+      setFormError("Enter the cleaner’s name.");
+      return;
+    }
+    if (formPhoto.trim() && !formPhoto.trim().startsWith("https://")) {
+      setFormError("Photo URL must start with https://.");
+      return;
+    }
+    setFormError("");
+    const visitId = selected.id;
+    const seq = linkSeqRef.current + 1;
+    linkSeqRef.current = seq;
+    void runAction("Assign cleaner", {
+      action: "set_cleaner",
+      booking_id: selected.booking_id,
+      cleaner_name: formName.trim(),
+      cleaner_phone: formPhone.trim(),
+      cleaner_photo: formPhoto.trim(),
+    }, (j) => {
+      if (typeof j["url"] === "string") {
+        noteLinkResult(visitId, j["url"] as string, seq);
+        setViewLinkUrl(j["url"] as string);
+        setViewLinkOpen(true);
+      }
+      if (j["cleaner_profile_saved"] === false) {
+        setActionMsg("Assign cleaner: done, but the phone/photo were NOT saved (the profile fields aren’t in the database yet).");
+      }
+      setCleanerEditing(false);
+    });
+  };
+
   if (!token) {
     return (
       <div className="min-h-screen bg-background px-4 py-16">
@@ -253,6 +541,17 @@ const Owner = () => {
     );
   }
 
+  // Needs attention: one action per item, each opening the visit at the
+  // block that needs it. (Issue/bounce flags stay as badges on the row.)
+  const attentionItems = (v: Visit): { label: string; focus: FocusBlock }[] => {
+    const items: { label: string; focus: FocusBlock }[] = [];
+    if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "cleaner" });
+    else if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") items.push({ label: "Confirm the date", focus: "schedule" });
+    if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
+    if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
+    return items;
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
@@ -280,11 +579,11 @@ const Owner = () => {
                       key={v.id}
                       type="button"
                       className="w-full text-left rounded-xl border border-amber-500/60 bg-amber-50 p-4 hover:border-primary"
-                      onClick={() => void openVisit(v)}
+                      onClick={() => void openVisit(v, "report")}
                     >
                       <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
                       <span className="text-sm text-muted-foreground">
-                        {v.visit_date ?? ""} · {v.photo_count ?? 0} photos
+                        {fmtVisitDate(v.visit_date)} · {v.photo_count ?? 0} photos
                         {hours !== null ? <> · waiting {hours < 1 ? "<1" : hours}h</> : null}
                         {v.checklist?.problem_note ? <> · cleaner note attached</> : null}
                       </span>
@@ -296,36 +595,27 @@ const Owner = () => {
         )}
 
         {!selected && (() => {
-          const attention = visits.filter((v) =>
-            (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled")
-            || !v.cleaner_name || v.issue_open || v.report_bounced,
-          );
-          const reason = (v: typeof visits[number]): string => {
-            const parts: string[] = [];
-            if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") parts.push("needs date confirmation");
-            if (!v.cleaner_name) parts.push("no cleaner assigned");
-            if (v.issue_open) parts.push("customer issue open");
-            if (v.report_bounced) parts.push("report email failed");
-            return parts.join(" · ");
-          };
-          return attention.length > 0 ? (
+          const withAttention = visits
+            .map((v) => ({ v, items: attentionItems(v) }))
+            .filter((x) => x.items.length > 0);
+          return withAttention.length > 0 ? (
             <div className="mb-6">
               <h2 className="font-heading text-lg font-bold mb-2">Needs attention</h2>
-              <p className="text-sm text-muted-foreground mb-3">
-                Bookings waiting on you: confirm the date, assign a cleaner, resolve an issue, or fix a failed email.
-              </p>
               <div className="space-y-2">
-                {attention.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    className="w-full text-left rounded-xl border border-amber-500/60 bg-amber-50 p-4 hover:border-primary"
-                    onClick={() => void openVisit(v)}
-                  >
-                    <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
-                    <span className="text-sm text-muted-foreground">{v.visit_date ?? "no date"} · {money(v.amount_cents)}</span>
-                    <span className="block text-sm text-amber-900 mt-1">{reason(v)}</span>
-                  </button>
+                {withAttention.map(({ v, items }) => (
+                  <div key={v.id} className="rounded-xl border border-amber-500/60 bg-amber-50 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">{v.client_name ?? "—"}</span>
+                      <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} · {money(v.amount_cents)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {items.map((it) => (
+                        <Button key={it.label} variant="outline" size="sm" onClick={() => void openVisit(v, it.focus)}>
+                          {it.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -344,7 +634,7 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
                   {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{v.visit_date ?? "no date"} {v.window ?? ""}</span>
+                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ?? ""}</span>
                   <span className="text-sm">{money(v.amount_cents)}</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
@@ -362,6 +652,7 @@ const Owner = () => {
                         ? <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">no link yet</span>
                         : null}
                   {v.paid_at && <span className="bg-green-100 text-green-900 px-2 py-0.5 rounded">paid</span>}
+                  {v.payment_failed && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">payment failed</span>}
                   {v.issue_open && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">issue open</span>}
                   {v.report_bounced && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">report email issue</span>}
                 </div>
@@ -373,391 +664,467 @@ const Owner = () => {
           </div>
         )}
 
-        {selected && (
-          <div>
-            <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => setSelected(null)}>
-              ← All visits
-            </button>
-            <h2 className="font-heading text-2xl font-bold">{selected.client_name ?? "—"}</h2>
-            <p className="text-sm text-muted-foreground mb-1">
-              {selected.service ?? ""} · {selected.visit_date ?? "no date"} {selected.window ?? ""} · {money(selected.amount_cents)}
-            </p>
-            <p className="text-sm mb-1">{selected.address ?? ""}</p>
-            {selected.access_notes && <p className="text-sm mb-1">Access: {selected.access_notes}</p>}
-            <p className="text-sm mb-3">
-              Visit: <strong>{selected.status}</strong> · Report: <strong>{selected.report_status}</strong>
-              {stripeState && <> · Stripe: <strong>{stripeState}</strong></>}
-              {selected.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
-            </p>
-            {selected.checklist?.problem_note && (
-              <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-3 mb-3">
-                <p className="text-sm font-semibold">Cleaner&apos;s note</p>
-                <p className="text-sm">{selected.checklist.problem_note}</p>
-              </div>
-            )}
+        {selected && (() => {
+          if (!selected) return null;
+          const v = selected;
+          const paymentFailed = Boolean(v.payment_failed) || events.some((e) => e.event === "payment_failed") || stripeState === "payment_failed";
+          const nextAction = !v.cleaner_name
+            ? "Assign a cleaner"
+            : v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled"
+              ? "Confirm the date"
+              : v.report_status === "submitted"
+                ? "Review the report"
+                : paymentFailed
+                  ? "Retry the payment"
+                  : v.issue_open
+                    ? "Resolve the customer issue"
+                    : v.report_status === "sent"
+                      ? "Waiting for the customer’s review"
+                      : v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned"
+                        ? "Waiting for the cleaner’s report"
+                        : "No action needed";
+          const assigned = Boolean(v.cleaner_name);
+          const phone = v.cleaner_profile?.phone ?? null;
+          const photo = v.cleaner_profile?.photo ?? null;
+          const linkIssued = Boolean(v.cleaner_link_issued);
+          const linkActive = Boolean(v.cleaner_link_active);
+          const linkReusable = Boolean(v.cleaner_link_reusable);
+          const rooms = v.checklist?.rooms ?? [];
 
-            {(selected.checklist?.rooms ?? []).length > 0 && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-4">
-                <p className="font-semibold mb-2">Checklist & exceptions</p>
-                <ul className="space-y-1 text-sm">
-                  {(selected.checklist?.rooms ?? []).map((r) => {
-                    const done = r.items.filter((i) => i.done).length;
-                    return (
-                      <li key={r.name}>
-                        <span className="font-medium">{r.name}:</span> {done}/{r.items.length} done
-                        {r.skip_reason ? (
-                          <> · <span className="text-amber-700">Exception: {r.skip_reason}</span></>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
+          // Load the current link, then run fn with it; failures surface
+          // in the cleaner status line (never a false "Copied").
+          const withLink = async (fn: (url: string) => void) => {
+            const res = await loadCleanerLink();
+            if ("url" in res) fn(res.url);
+            else if (res.error === "link_not_reusable") setCleanerCopyStatus("This link can’t be re-fetched. Create a reusable access link below.");
+            else if (res.error === "link_expired") setCleanerCopyStatus("This link has expired. Replace it below.");
+            else setCleanerCopyStatus("Couldn’t load the link — try again.");
+          };
 
-            {Object.entries(
-              photos.reduce<Record<string, Photo[]>>((acc, ph) => {
-                (acc[ph.room] ??= []).push(ph);
-                return acc;
-              }, {}),
-            ).map(([room, items]) => (
-              <div key={room} className="mb-4">
-                <p className="font-semibold mb-2">{room}</p>
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                  {[...items]
-                    .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
-                    .map((ph) => (
-                      <div key={ph.id} className="relative">
-                        {ph.url ? (
-                          <img src={ph.url} alt={`${ph.room} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
-                        ) : (
-                          <div className="rounded-lg bg-muted w-full h-24" />
-                        )}
-                        <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
-                          {ph.kind === "client" ? "From customer" : ph.kind === "before" ? "Before" : "After"}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label="Delete photo"
-                          className="absolute right-1 top-1 bg-black/60 text-white rounded px-1.5 py-0.5 text-[10px]"
-                          onClick={() =>
-                            void runAction("Delete photo", { action: "owner_photo_delete", booking_id: selected.booking_id, photo_id: ph.id })
-                          }
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              </div>
-            ))}
+          const openEditDetails = () => {
+            setFormName(v.cleaner_name ?? "");
+            setFormPhone(phone ?? "");
+            setFormPhoto(photo ?? "");
+            setFormError("");
+            setCleanerEditing(true);
+          };
 
-            <div className="rounded-xl border border-border bg-card p-4 mb-4 space-y-4">
-              <div>
-                <div className="rounded-lg border border-border bg-muted/40 p-3 mb-3 text-sm space-y-1">
-                  <p className="font-semibold">Cleaner & link</p>
-                  <p>Cleaner: <strong>{selected.cleaner_name ?? "not assigned"}</strong></p>
-                  <p>
-                    Link:{" "}
-                    {selected.cleaner_link_active ? (
-                      <strong>active{selected.cleaner_link_expires ? ` until ${selected.cleaner_link_expires.slice(0, 10)}` : ""}</strong>
-                    ) : selected.cleaner_link_issued ? (
-                      <strong className="text-destructive">expired — revoke & replace it below</strong>
-                    ) : (
-                      <strong>not issued yet — assign a cleaner or use “Revoke & replace link”</strong>
-                    )}
-                  </p>
-                  <p>
-                    Opened by cleaner:{" "}
-                    {selected.cleaner_link_opened_at ? (
-                      <strong>yes — {selected.cleaner_link_opened_at.slice(0, 10)}</strong>
-                    ) : (
-                      <strong>not yet</strong>
-                    )}
-                  </p>
-                  <p className="text-muted-foreground">
-                    A link can&apos;t be shown again after this panel closes (only its fingerprint is stored).
-                    If it&apos;s lost, “Revoke & replace link” issues a new one and kills the old.
-                  </p>
-                </div>
-                <p className="font-semibold mb-2">Confirm visit</p>
-                <p className="text-sm text-muted-foreground mb-2">
-                  Pick the cleaner, set the agreed date and window, then Confirm visit. The client sees the
-                  confirmed date and cleaner, the job appears in the cleaner&apos;s workspace, and the client
-                  gets a confirmation email. If you agree a different date, use “Propose another time” below
-                  instead — a proposal is not a confirmation.
+          return (
+            <div>
+              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => setSelected(null)}>
+                ← All visits
+              </button>
+
+              {/* A. Summary */}
+              <section id="block-summary" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h2 className="font-heading text-2xl font-bold">{v.client_name ?? "—"}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {v.service ?? ""} · {fmtVisitDate(v.visit_date)} {v.window ?? ""} · {money(v.amount_cents)}
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
-                  <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Window, e.g. 8–10 AM" value={confirmWindow} onChange={(e) => setConfirmWindow(e.target.value)} />
-                  <Button variant="outline" onClick={() => void runAction("Confirm visit", { action: "confirm", booking_id: selected.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow }, (j) => {
+                <p className="text-sm">{v.address ?? ""}</p>
+                {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
+                <p className="text-sm">
+                  Visit: <strong>{v.status}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
+                  {stripeState && <> · Stripe: <strong>{stripeState}</strong></>}
+                  {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
+                </p>
+                <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <span className="text-sm text-muted-foreground">{v.client_email ?? ""}</span>
+                  <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
+                    Copy client link
+                  </Button>
+                </div>
+                {clientCopyStatus && <p className="text-sm mt-1" role="status">{clientCopyStatus}</p>}
+                {manualCopy?.owner === "client" && (
+                  <div className="mt-1">
+                    <p className="text-xs text-muted-foreground">{manualCopy.label}</p>
+                    <input readOnly className="w-full text-xs bg-muted rounded p-2 mt-1" value={manualCopy.text} onFocus={(e) => e.target.select()} aria-label="Client link (select and copy if the button does not work)" />
+                  </div>
+                )}
+              </section>
+
+              {/* B. Cleaner — assignment and link in one block */}
+              <section id="block-cleaner" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h3 className="font-semibold mb-3">Cleaner</h3>
+                {(!assigned || cleanerEditing) ? (
+                  <div className="space-y-2">
+                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={formName} onChange={(e) => setFormName(e.target.value)} />
+                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Phone — optional" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} />
+                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Photo URL — optional (https://)" value={formPhoto} onChange={(e) => setFormPhoto(e.target.value)} />
+                    {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="hero" onClick={assignCleaner}>
+                        {assigned ? "Save details" : "Assign cleaner"}
+                      </Button>
+                      {assigned && (
+                        <Button variant="outline" onClick={() => { setCleanerEditing(false); setFormError(""); }}>
+                          Cancel
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-start gap-3 mb-2">
+                      <div className="relative w-12 h-12 shrink-0">
+                        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center font-semibold">
+                          {initials(v.cleaner_name ?? "")}
+                        </div>
+                        {photo && (
+                          <img src={photo} alt="" className="absolute inset-0 w-12 h-12 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-semibold">{v.cleaner_name}</p>
+                        {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>{phone}</a></p>}
+                      </div>
+                      <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={openEditDetails}>
+                        Change
+                      </Button>
+                    </div>
+
+                    {!linkIssued ? (
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-2">No access link yet.</p>
+                        <Button variant="outline" onClick={replaceCleanerLink}>Create access link</Button>
+                      </div>
+                    ) : !linkActive ? (
+                      <div>
+                        <p className="text-sm mb-2">Access expired.</p>
+                        <Button variant="outline" onClick={replaceCleanerLink}>
+                          {linkReusable ? "Replace access link" : "Create a reusable access link"}
+                        </Button>
+                      </div>
+                    ) : linkReusable ? (
+                      <div>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          <Button variant="hero" onClick={() => void copyCleanerLink()}>
+                            Copy cleaner link
+                          </Button>
+                          <Button variant="outline" onClick={() => void withLink((url) => openShare("wa", cleanerMessage(url), phone))}>
+                            WhatsApp
+                          </Button>
+                          <Button variant="outline" onClick={() => void withLink((url) => openShare("sms", cleanerMessage(url), phone))}>
+                            SMS
+                          </Button>
+                        </div>
+                        <p className="text-sm">
+                          {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
+                          {" · "}Access expires {fmtDateET(v.cleaner_link_expires)}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Opens WhatsApp or SMS with a ready message — you send it. Opening the link doesn’t mean the cleaner accepted the job.
+                        </p>
+                        <button type="button" className="text-sm underline text-muted-foreground mt-2" onClick={() => void toggleViewLink()}>
+                          {viewLinkOpen ? "Hide link & message" : "View link & message"}
+                        </button>
+                        {viewLinkOpen && viewLinkUrl && (
+                          <div className="mt-2">
+                            <input readOnly className="w-full text-xs bg-muted rounded p-2 mb-2" value={viewLinkUrl} onFocus={(e) => e.target.select()} aria-label="Cleaner link (select and copy if the button does not work)" />
+                            <textarea readOnly rows={7} className="w-full text-xs bg-muted rounded p-2" value={cleanerMessage(viewLinkUrl)} />
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  if (await copyText(cleanerMessage(viewLinkUrl))) setCleanerCopyStatus("Cleaner message copied.");
+                                  else { setManualCopy({ text: cleanerMessage(viewLinkUrl), label: "Message — copy it manually:", owner: "cleaner" }); setCleanerCopyStatus("Copy failed — copy the message manually below."); }
+                                }}
+                              >
+                                Copy message
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => openShare("wa", cleanerMessage(viewLinkUrl), phone)}>
+                                WhatsApp
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => openShare("sms", cleanerMessage(viewLinkUrl), phone)}>
+                                SMS
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {viewLinkError && <p className="text-sm text-destructive mt-1" role="alert">{viewLinkError}</p>}
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-sm mb-2">
+                          This link was created before reusable links existed, so it can’t be re-fetched here. It still works until it expires.
+                        </p>
+                        <p className="text-sm">
+                          {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
+                          {" · "}Access expires {fmtDateET(v.cleaner_link_expires)}
+                        </p>
+                        <Button variant="outline" className="mt-2" onClick={replaceCleanerLink}>
+                          Create a reusable access link
+                        </Button>
+                      </div>
+                    )}
+
+                    {assigned && linkIssued && (
+                      <details className="mt-3">
+                        <summary className="text-sm underline text-muted-foreground cursor-pointer">More</summary>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <Button variant="outline" size="sm" onClick={replaceCleanerLink}>
+                            {linkReusable ? "Replace access link" : "Create a reusable access link"}
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={openEditDetails}>
+                            Edit details
+                          </Button>
+                        </div>
+                      </details>
+                    )}
+                    {cleanerCopyStatus && <p className="text-sm mt-2" role="status">{cleanerCopyStatus}</p>}
+                    {manualCopy?.owner === "cleaner" && (
+                      <div className="mt-1">
+                        <p className="text-xs text-muted-foreground">{manualCopy.label}</p>
+                        <input readOnly className="w-full text-xs bg-muted rounded p-2 mt-1" value={manualCopy.text} onFocus={(e) => e.target.select()} aria-label="Link or message (select and copy if the button does not work)" />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* C. Schedule — confirming the date stays separate from assigning the cleaner */}
+              <section id="block-schedule" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h3 className="font-semibold mb-3">Schedule</h3>
+                {v.status === "confirmed" && !scheduleEditing ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
+                    <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.visit_date ?? ""); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
+                      Change
+                    </Button>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex flex-wrap gap-2">
+                      <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
+                      <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Window, e.g. 8–10 AM" value={confirmWindow} onChange={(e) => setConfirmWindow(e.target.value)} />
+                      <Button variant="outline" onClick={() => void runAction("Confirm visit", { action: "confirm", booking_id: v.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow }, (j) => {
+                        setScheduleEditing(false);
                         setActionMsg(j["email_sent"] === true
                           ? "Confirm visit: done. The client confirmation email was sent."
                           : "Confirm visit: saved, but the confirmation email was NOT delivered — email the client manually or retry.");
                       })}>
-                    Confirm visit
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={cleanerName} onChange={(e) => setCleanerName(e.target.value)} />
-                  <Button variant="outline" onClick={() => void runAction("Assign cleaner", { action: "set_cleaner", booking_id: selected.booking_id, cleaner_name: cleanerName }, (j) => {
-                        if (typeof j["url"] === "string") {
-                          setCleanerUrl(j["url"] as string);
-                          setCleanerMsg("");
-                        }
-                      })}>
-                    Assign / change cleaner
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void runAction("Revoke & replace link", { action: "cleaner_link", booking_id: selected.booking_id }, (j) => {
-                        if (typeof j["url"] === "string") {
-                          setCleanerUrl(j["url"] as string);
-                          setCleanerMsg("");
-                        }
-                      })
-                    }
-                  >
-                    Revoke & replace link
-                  </Button>
-                </div>
-                {cleanerUrl && (
-                  <div className="mt-2">
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      <Button
-                        variant="hero"
-                        size="sm"
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(cleanerUrl);
-                          setActionMsg("Cleaner link copied.");
-                        }}
-                      >
-                        Copy cleaner link
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => window.open(`${cleanerUrl}&pv=1`, "_blank")}
-                      >
-                        Preview cleaner workspace
+                        Confirm visit
                       </Button>
                     </div>
-                    <input
-                      readOnly
-                      className="w-full text-xs bg-muted rounded p-2 mb-2"
-                      value={cleanerUrl}
-                      onFocus={(e) => e.target.select()}
-                      aria-label="Cleaner link (select and copy if the button does not work)"
-                    />
-                    <p className="text-xs mb-1">Ready-to-send message for the cleaner — the link stays valid through the visit date + 2 days (at least 14 days). Replacing the link or changing the cleaner revokes the previous one, and a cleaner change emails the client in advance:</p>
-                    <textarea
-                      readOnly
-                      rows={7}
-                      className="w-full text-xs bg-muted rounded p-2"
-                      value={cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-1"
-                      onClick={() => {
-                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
-                        void navigator.clipboard?.writeText(text);
-                        setCleanerMsg(text);
-                        setActionMsg("Cleaner message copied.");
-                      }}
-                    >
-                      Copy message
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-1 ml-2"
-                      onClick={() => {
-                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
-                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
-                      }}
-                    >
-                      Send via WhatsApp
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-1 ml-2"
-                      onClick={() => {
-                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
-                        window.open(`sms:?body=${encodeURIComponent(text)}`, "_blank");
-                      }}
-                    >
-                      Send via SMS
-                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1">Confirming emails the client the agreed date and window.</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={altDate} onChange={(e) => setAltDate(e.target.value)} />
+                      <Button variant="outline" onClick={() => void runAction("Propose another time", { action: "decline_date", booking_id: v.booking_id, alt_dates: altDate ? [altDate] : [] }, (j) => {
+                        setActionMsg(j["email_sent"] === true
+                          ? "Propose another time: done. The client was emailed the alternative date."
+                          : "Propose another time: saved, but the email was NOT delivered — contact the client manually.");
+                      })}>
+                        Propose another time
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">Proposing emails the client an alternative date — a proposal is not a confirmation.</p>
                   </div>
                 )}
-              </div>
+              </section>
 
-              <div>
-                <p className="font-semibold mb-2">Client link</p>
-                <p className="text-xs mb-2">Send the client their cabinet link personally — it opens their visit page and, after cleaning, the photo report to approve and pay. The auto-emails carry the same link as a backup.</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void runAction("Get client link", { action: "client_link", booking_id: selected.booking_id }, (j) => {
-                        if (typeof j["url"] === "string") setClientUrl(j["url"] as string);
-                      })
-                    }
-                  >
-                    Get client link
-                  </Button>
-                  {clientUrl && (
-                    <Button
-                      variant="hero"
-                      size="sm"
-                      onClick={() => {
-                        void navigator.clipboard?.writeText(clientUrl);
-                        setActionMsg("Client link copied.");
-                      }}
-                    >
-                      Copy client link
-                    </Button>
-                  )}
-                </div>
-                {clientUrl && (
-                  <div className="mt-2">
-                    <input
-                      readOnly
-                      className="w-full text-xs bg-muted rounded p-2 mb-2"
-                      value={clientUrl}
-                      onFocus={(e) => e.target.select()}
-                      aria-label="Client link (select and copy if the button does not work)"
-                    />
+              {/* D. Report */}
+              <section id="block-report" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h3 className="font-semibold mb-3">Report</h3>
+                <p className="text-sm mb-2">{reportLabel(v.report_status)}</p>
+                {v.checklist?.problem_note && (
+                  <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-3 mb-3">
+                    <p className="text-sm font-semibold">Cleaner&apos;s note</p>
+                    <p className="text-sm">{v.checklist.problem_note}</p>
+                  </div>
+                )}
+                {rooms.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm">
+                      {rooms.map((r) => `${r.name} ${r.items.filter((i) => i.done).length}/${r.items.length}`).join(" · ")}
+                    </p>
+                    <details>
+                      <summary className="text-sm underline text-muted-foreground cursor-pointer">View checklist</summary>
+                      <ul className="space-y-1 text-sm mt-1">
+                        {rooms.map((r) => (
+                          <li key={r.name}>
+                            <span className="font-medium">{r.name}:</span>{" "}
+                            {r.items.map((i) => i.label).join(", ")}
+                            {r.skip_reason ? <> · <span className="text-amber-700">Exception: {r.skip_reason}</span></> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                )}
+
+                {Object.entries(
+                  photos.reduce<Record<string, Photo[]>>((acc, ph) => {
+                    (acc[ph.room] ??= []).push(ph);
+                    return acc;
+                  }, {}),
+                ).map(([room, items]) => (
+                  <div key={room} className="mb-4">
+                    <p className="font-semibold mb-2">{room}</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                      {[...items]
+                        .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
+                        .map((ph) => (
+                          <div key={ph.id} className="relative">
+                            {ph.url ? (
+                              <img src={ph.url} alt={`${ph.room} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
+                            ) : (
+                              <div className="rounded-lg bg-muted w-full h-24" />
+                            )}
+                            <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
+                              {ph.kind === "client" ? "From customer" : ph.kind === "before" ? "Before" : "After"}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label="Delete photo"
+                              className="absolute right-1 top-1 bg-black/60 text-white rounded px-1.5 py-0.5 text-[10px]"
+                              onClick={() =>
+                                void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id })
+                              }
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+
+                {v.report_status === "submitted" && (
+                  <div className="mb-3">
                     <div className="flex flex-wrap gap-2">
                       <Button
-                        variant="outline"
-                        size="sm"
+                        variant="hero"
+                        disabled={acting !== ""}
                         onClick={() => {
-                          const text = `Hi! Here is your Gatehouse cabinet link${selected.visit_date ? ` for ${selected.visit_date}` : ""}${selected.address ? ` at ${selected.address}` : ""}:\n${clientUrl}\n\nOpen it to see your visit details — and after cleaning, your photo report to approve and pay. Thank you!`;
-                          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+                          if (v.issue_open && !window.confirm("This booking has an OPEN customer issue. Re-sending the report will mark the issue RESOLVED and restart the 24-hour review clock. Continue?")) return;
+                          void runAction("Publish & notify customer", { action: "send_report", booking_id: v.booking_id, ...(v.issue_open ? { resolve_issue: true } : {}) }, (j) => {
+                            setPublishMsg(
+                              j["email_sent"] === true
+                                ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
+                                : "Published and saved, but the customer email was NOT delivered — the review period is paused. Check the report email status and publish again to retry.",
+                            );
+                          });
                         }}
                       >
-                        Send via WhatsApp
+                        Publish & notify customer
                       </Button>
                       <Button
                         variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const text = `Hi! Here is your Gatehouse cabinet link${selected.visit_date ? ` for ${selected.visit_date}` : ""}${selected.address ? ` at ${selected.address}` : ""}:\n${clientUrl}\n\nOpen it to see your visit details — and after cleaning, your photo report to approve and pay. Thank you!`;
-                          window.open(`sms:?body=${encodeURIComponent(text)}`, "_blank");
-                        }}
+                        disabled={acting !== ""}
+                        onClick={() =>
+                          void runAction("Preview", { action: "preview_link", booking_id: v.booking_id }, (j) => {
+                            if (typeof j["report_url"] === "string") window.open(j["report_url"] as string, "_blank");
+                          })
+                        }
                       >
-                        Send via SMS
+                        Preview customer report
+                      </Button>
+                    </div>
+                    {publishMsg && <p className="text-sm mt-2" role="status">{publishMsg}</p>}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What needs to change? (the cleaner sees this note)" value={returnNote} onChange={(e) => setReturnNote(e.target.value)} />
+                      <Button
+                        variant="outline"
+                        disabled={acting !== "" || v.report_status !== "submitted"}
+                        onClick={() => void runAction("Request changes", { action: "return_report", booking_id: v.booking_id, note: returnNote })}
+                      >
+                        Request changes
                       </Button>
                     </div>
                   </div>
                 )}
-              </div>
 
-              <div>
-                <p className="font-semibold mb-2">Report review</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="hero"
-                    disabled={acting !== "" || (selected.report_status !== "submitted" && selected.report_status !== "sent")}
-                    onClick={() => {
-                      if (selected.issue_open && !window.confirm("This booking has an OPEN customer issue. Re-sending the report will mark the issue RESOLVED and restart the 24-hour review clock. Continue?")) return;
-                      void runAction("Publish & notify customer", { action: "send_report", booking_id: selected.booking_id, ...(selected.issue_open ? { resolve_issue: true } : {}) }, (j) => {
-                        setPublishMsg(
-                          j["email_sent"] === true
-                            ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
-                            : "Published and saved, but the customer email was NOT delivered — the review period is paused. Check the report email status and publish again to retry.",
-                        );
-                      });
-                    }}
-                  >
-                    Publish & notify customer
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={acting !== ""}
-                    onClick={() =>
-                      void runAction("Preview", { action: "preview_link", booking_id: selected.booking_id }, (j) => {
-                        if (typeof j["report_url"] === "string") window.open(j["report_url"] as string, "_blank");
-                      })
-                    }
-                  >
-                    Preview customer report
-                  </Button>
-                </div>
-                {publishMsg && <p className="text-sm mt-2" role="status">{publishMsg}</p>}
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What needs to change? (the cleaner sees this note)" value={returnNote} onChange={(e) => setReturnNote(e.target.value)} />
-                  <Button
-                    variant="outline"
-                    disabled={acting !== "" || selected.report_status !== "submitted"}
-                    onClick={() => void runAction("Request changes", { action: "return_report", booking_id: selected.booking_id, note: returnNote })}
-                  >
-                    Request changes
-                  </Button>
-                </div>
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="text-sm font-medium mb-2">Add photos yourself (fallback — e.g. the cleaner texted them to you)</p>
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerRoom} onChange={(e) => setOwnerRoom(e.target.value)}>
-                      {[...(selected.checklist?.rooms ?? []).map((r) => r.name), "Other areas"].map((r) => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </select>
-                    <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerKind} onChange={(e) => setOwnerKind(e.target.value as "before" | "after")}>
-                      <option value="after">After</option>
-                      <option value="before">Before</option>
-                    </select>
-                    <label className="rounded-lg border border-border px-3 py-2 text-sm cursor-pointer">
-                      Choose photos
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        className="hidden"
-                        onChange={(e) => {
-                          void ownerUpload(e.target.files);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
+                <details>
+                  <summary className="text-sm underline text-muted-foreground cursor-pointer">More</summary>
+                  <div className="mt-3 border-t border-border pt-3">
+                    <p className="text-sm font-medium mb-2">Upload photos on behalf of cleaner</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerRoom} onChange={(e) => setOwnerRoom(e.target.value)}>
+                        {[...rooms.map((r) => r.name), "Other areas"].map((r) => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                      <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerKind} onChange={(e) => setOwnerKind(e.target.value as "before" | "after")}>
+                        <option value="after">After</option>
+                        <option value="before">Before</option>
+                      </select>
+                      <label className="rounded-lg border border-border px-3 py-2 text-sm cursor-pointer">
+                        Choose photos
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            void ownerUpload(e.target.files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </details>
+              </section>
 
-              <div>
-                <p className="font-semibold mb-2">Payment</p>
-                <Button
-                  variant="outline"
-                  onClick={() => void runAction("Charge", { action: "charge", booking_id: selected.booking_id, amount_cents: selected.amount_cents ?? undefined })}
-                >
-                  Charge {money(selected.amount_cents)}
-                </Button>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Works only after the client approved (or the agreed automatic rule fired). Server errors are shown as-is.
+              {/* E. Payment — manual Charge lives in More; server rules unchanged */}
+              <section id="block-payment" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h3 className="font-semibold mb-3">Payment</h3>
+                <p className="text-sm">
+                  {money(v.amount_cents)}
+                  {v.paid_at ? ` · Paid ${fmtDateET(v.paid_at)}` : stripeState ? ` · Stripe: ${stripeState}` : " · Not paid yet"}
                 </p>
-              </div>
+                {paymentFailed && (
+                  <p className="text-sm text-destructive mt-1">
+                    Payment failed — check the saved card, then retry from the customer’s report page or charge again below.
+                  </p>
+                )}
+                <details className="mt-2">
+                  <summary className="text-sm underline text-muted-foreground cursor-pointer">More actions</summary>
+                  <div className="mt-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined })}
+                    >
+                      Charge {money(v.amount_cents)}
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Works only after the client approved (or the agreed automatic rule fired). Server errors are shown as-is.
+                    </p>
+                  </div>
+                </details>
+              </section>
+
+              {/* F. Activity — collapsed by default */}
+              <details className="rounded-xl border border-border bg-card p-4 mb-4">
+                <summary className="font-semibold cursor-pointer">Activity</summary>
+                <ul className="space-y-1 text-sm mt-2">
+                  {events.map((e) => {
+                    const visibleDetail = e.detail
+                      ? Object.fromEntries(Object.entries(e.detail).filter(([k]) => !HIDDEN_DETAIL_KEYS.test(k) && k !== "note"))
+                      : {};
+                    return (
+                      <li key={e.id} className="text-muted-foreground">
+                        <span className="text-foreground">{fmtDateTimeET(e.created_at)}</span> — {EVENT_LABELS[e.event] ?? e.event}
+                        {typeof e.detail?.note === "string" && e.detail.note ? <> — “{e.detail.note}”</> : null}
+                        {Object.keys(visibleDetail).length > 0 && (
+                          <details className="ml-4">
+                            <summary className="cursor-pointer text-xs underline">Details</summary>
+                            <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(visibleDetail, null, 2)}</pre>
+                          </details>
+                        )}
+                      </li>
+                    );
+                  })}
+                  {events.length === 0 && <li className="text-muted-foreground">No events yet.</li>}
+                </ul>
+              </details>
+
               {actionMsg && <p className="text-sm" role="status">{actionMsg}</p>}
             </div>
-
-            <div className="rounded-xl border border-border bg-card p-4">
-              <p className="font-semibold mb-2">History</p>
-              <ul className="space-y-1 text-sm">
-                {events.map((e) => (
-                  <li key={e.id} className="text-muted-foreground">
-                    <span className="text-foreground">{new Date(e.created_at).toLocaleString("en-US")}</span> — {e.actor} · {e.event}
-                    {e.detail?.note ? <> — “{String(e.detail.note)}”</> : null}
-                  </li>
-                ))}
-                {events.length === 0 && <li className="text-muted-foreground">No events yet.</li>}
-              </ul>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

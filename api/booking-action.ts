@@ -28,10 +28,14 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
   dbConfigured, dbSelect, dbInsert, dbDelete, dbUpdate, dbUpsert, logEvent,
-  newCleanerToken, hashToken, storageSignDownload,
+  newCleanerToken, hashToken, tokenHashEquals, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
+import {
+  cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
+  cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
+} from "./_cleaner_link.js";
 
 type BookingPayload = {
   bid: string;
@@ -109,7 +113,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -126,6 +130,9 @@ const ActionSchema = z.object({
   // set_cleaner: name as the client should see it; photo only with the
   // cleaner's permission — the operator supplies it, we store the URL.
   cleaner_name: z.string().max(80).optional(),
+  // set_cleaner: optional per-visit contact for the assigned cleaner.
+  // Stored on the visit row only (never mirrored to Stripe metadata).
+  cleaner_phone: z.string().max(40).optional(),
   // set_access_notes: owner's correction of the visit's entry instructions.
   access_notes: z.string().max(1000).optional(),
   // send_report: explicit owner decision to resolve an open customer
@@ -374,6 +381,109 @@ async function latestVisit(bookingId: string): Promise<VisitRowLite | null> {
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
   );
   return rows[0] ?? null;
+}
+
+// ---------- Cleaner access links (v2 reusable + legacy fallback) ----------
+// The row type above is deliberately lite; at runtime PostgREST returns
+// every column, so v2/profile fields are read through this wider view.
+type CleanerRow = VisitRowLite & {
+  cleaner_name?: string | null;
+  cleaner_token_hash?: string | null;
+  cleaner_token_expires?: string | null;
+  cleaner_link_version?: string | null;
+  cleaner_link_issuance?: string | null;
+  cleaner_profile?: unknown;
+};
+
+type IssuedLink = { token: string; url: string; expires: string; issuance?: string };
+
+const cleanerSecret = (): string => cleanerLinkPrimarySecret();
+
+/** Mint a fresh v2 link (no DB write). Null when the server secret is missing. */
+function mintV2Link(visitId: string, visitDate: string | null): IssuedLink | null {
+  const secret = cleanerSecret();
+  if (!secret) return null;
+  const issuance = newIssuanceId();
+  const token = mintCleanerLinkV2(secret, visitId, issuance);
+  return { token, url: cleanerLinkUrl(token), expires: cleanerLinkExpiry(visitDate), issuance };
+}
+
+/** Mint a legacy random link (no DB write). */
+function mintLegacyLink(visitDate: string | null): IssuedLink {
+  const token = newCleanerToken();
+  return { token, url: cleanerLinkUrl(token), expires: cleanerLinkExpiry(visitDate) };
+}
+
+/** Single atomic write of a v2 issuance. False when the v2 columns are
+ *  absent (migration not applied yet) or the DB errors — the caller then
+ *  falls back to the legacy path instead of failing the action. */
+async function writeV2Link(visitId: string, issued: IssuedLink): Promise<boolean> {
+  return dbUpdate("gh_visits", `id=eq.${visitId}`, {
+    cleaner_token_hash: hashToken(issued.token),
+    cleaner_token_expires: issued.expires,
+    cleaner_link_version: "v2",
+    cleaner_link_issuance: issued.issuance ?? null,
+  });
+}
+
+/** Best-effort clear of v2 metadata when falling back to a legacy link,
+ *  so a stale issuance can never shadow the legacy hash. Failures (e.g.
+ *  columns absent) are safe: get_cleaner_link treats a hash mismatch as
+ *  "not reusable" and the panel shows the legacy state. */
+async function clearV2Fields(visitId: string): Promise<void> {
+  await dbUpdate("gh_visits", `id=eq.${visitId}`, {
+    cleaner_link_version: null,
+    cleaner_link_issuance: null,
+  });
+}
+
+/**
+ * Recompute the current v2 link for a row WITHOUT changing anything:
+ * no new issuance, no expiry/hash/opened_at change, no event. Returns
+ * null when the row is not a live v2 link (legacy, missing secret,
+ * hash mismatch, or expired — the caller maps null to the right error).
+ */
+function recomputeV2Link(row: CleanerRow): { url: string; expires: string } | null {
+  if (row.cleaner_link_version !== "v2") return null;
+  if (typeof row.cleaner_link_issuance !== "string" || !row.cleaner_link_issuance) return null;
+  if (typeof row.cleaner_token_hash !== "string" || !row.cleaner_token_hash) return null;
+  const expires = typeof row.cleaner_token_expires === "string" ? row.cleaner_token_expires : null;
+  if (expires && Date.parse(expires) < Date.now()) return null;
+  // Try every candidate secret (env first, derived fallback): links minted
+  // under the fallback keep working after the env secret is added later.
+  for (const secret of cleanerLinkSecretCandidates()) {
+    const token = mintCleanerLinkV2(secret, row.id, row.cleaner_link_issuance);
+    if (tokenHashEquals(hashToken(token), row.cleaner_token_hash)) {
+      return { url: cleanerLinkUrl(token), expires: expires ?? "" };
+    }
+  }
+  return null;
+}
+
+export type CleanerProfile = { phone: string | null; photo: string | null };
+
+/** Tolerant parse of the cleaner_profile jsonb column (object, string, or absent). */
+function parseCleanerProfile(raw: unknown): CleanerProfile {
+  let obj: Record<string, unknown> | null = null;
+  if (raw && typeof raw === "object") obj = raw as Record<string, unknown>;
+  else if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
+    } catch {
+      obj = null;
+    }
+  }
+  return {
+    phone: typeof obj?.["phone"] === "string" ? (obj["phone"] as string) : null,
+    photo: typeof obj?.["photo"] === "string" ? (obj["photo"] as string) : null,
+  };
+}
+
+/** Phone validation: empty = none; otherwise digits with + ( ) - . spaces, max 40. */
+function validCleanerPhone(raw: string): boolean {
+  const t = raw.trim();
+  return t.length === 0 || (t.length <= 40 && /^[+()\-.\s\d]+$/.test(t) && /\d/.test(t));
 }
 
 const DEFAULT_CHECKLIST = {
@@ -1245,41 +1355,78 @@ export default async function handler(req: Req, res: Res) {
     if (action === "set_cleaner") {
       // Assign (or replace) the cleaner the client will see. The photo
       // URL is stored only when the operator supplies one — by house
-      // rule that means the cleaner agreed to be shown.
+      // rule that means the cleaner agreed to be shown. Phone + photo
+      // live in cleaner_profile on THIS visit row only: changing the
+      // person resets them instead of carrying the previous person's
+      // contact over, and editing the same person's details keeps the
+      // current link (re-saving a name must not kill a link already
+      // handed out — only a real change or an explicit Replace does).
       const name = (parsed.data.cleaner_name ?? "").trim();
       if (!name) return json(400, { ok: false, error: "cleaner_name_required" });
       const photo = (parsed.data.cleaner_photo ?? "").trim();
       if (photo && !photo.startsWith("https://")) {
         return json(400, { ok: false, error: "invalid_photo_url" });
       }
+      const phoneRaw = parsed.data.cleaner_phone !== undefined ? parsed.data.cleaner_phone.trim() : null;
+      if (phoneRaw !== null && !validCleanerPhone(phoneRaw)) {
+        return json(400, { ok: false, error: "invalid_phone" });
+      }
       const prevCleaner = row?.cleaner_name ?? "";
       const wasConfirmed = row?.status === "confirmed";
+      const changed = Boolean(prevCleaner) && prevCleaner !== name;
+      const firstAssignment = !prevCleaner;
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
       });
-      let rotatedUrl: string | null = null;
+      // Per-visit profile: present key = set (empty = clear); on a
+      // same-person edit an absent key leaves the value untouched — but
+      // a CHANGE of person always resets the profile, so the new cleaner
+      // never silently inherits the previous person's phone or photo.
+      let nextProfile: CleanerProfile | null = null;
+      let profileSaved = true;
+      if (row && (changed || parsed.data.cleaner_phone !== undefined || parsed.data.cleaner_photo !== undefined)) {
+        const base = changed ? { phone: null, photo: null } : parseCleanerProfile((row as unknown as CleanerRow).cleaner_profile);
+        nextProfile = {
+          phone: parsed.data.cleaner_phone !== undefined ? (phoneRaw && phoneRaw.length > 0 ? phoneRaw : null) : base.phone,
+          photo: parsed.data.cleaner_photo !== undefined ? (photo ? photo : null) : base.photo,
+        };
+        // Separate PATCH on purpose: if the profile columns are absent
+        // (migration not applied), this fails alone and must not take
+        // the name assignment or the link down with it.
+        profileSaved = await dbUpdate("gh_visits", `id=eq.${row.id}`, { cleaner_profile: nextProfile });
+      }
+      let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
       if (row) {
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { cleaner_name: name.slice(0, 80) });
-        // Reassignment revokes the previous cleaner's access: rotate the
-        // visit token so any link already handed out stops working, and
-        // return the fresh link for the newly assigned cleaner.
-        if (dbConfigured()) {
-          const token = newCleanerToken();
-          let expiresMs = Date.now() + 14 * 24 * 3600 * 1000;
-          if (row.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(row.visit_date)) {
-            const jobMs = Date.parse(`${row.visit_date}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
-            if (Number.isFinite(jobMs)) expiresMs = Math.max(expiresMs, jobMs);
+        const visitRow = row as unknown as CleanerRow;
+        if (changed || firstAssignment) {
+          // A different person (or the first assignment) revokes the
+          // previous access: issue a fresh link and return it at once.
+          const v2 = mintV2Link(row.id, row.visit_date);
+          if (v2 && (await writeV2Link(row.id, v2))) {
+            linkOut = { url: v2.url, expires: v2.expires, reusable: true };
+          } else {
+            const leg = mintLegacyLink(row.visit_date);
+            const okLeg = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+              cleaner_token_hash: hashToken(leg.token),
+              cleaner_token_expires: leg.expires,
+            });
+            if (okLeg) {
+              await clearV2Fields(row.id);
+              linkOut = { url: leg.url, expires: leg.expires, reusable: false };
+            }
           }
-          const expires = new Date(expiresMs).toISOString();
-          const okRot = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-            cleaner_token_hash: hashToken(token),
-            cleaner_token_expires: expires,
-          });
-          if (okRot) {
-            rotatedUrl = `https://www.gatehousehomecleaning.com/cleaner?ct=${token}`;
-            await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires });
+          if (linkOut) {
+            await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
           }
+        } else {
+          // Same person, details edit only: keep the current link. A v2
+          // link is recomputed so the panel can show the result at once;
+          // a legacy link cannot be re-shown (hash only) — the panel then
+          // offers the explicit reusable upgrade instead.
+          const recomputed = recomputeV2Link(visitRow);
+          if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
         }
       }
       // §8: the client learns about a cleaner change in advance. A
@@ -1303,7 +1450,14 @@ export default async function handler(req: Req, res: Res) {
         });
       }
       log("set_cleaner", { booking: bookingId, cleanerEmailSent });
-      return json(200, { ok: true, cleaner_name: name, cleaner_email_sent: cleanerEmailSent, ...(rotatedUrl ? { url: rotatedUrl } : {}) });
+      return json(200, {
+        ok: true,
+        cleaner_name: name,
+        cleaner_email_sent: cleanerEmailSent,
+        cleaner_profile: nextProfile,
+        cleaner_profile_saved: profileSaved,
+        ...(linkOut ? { url: linkOut.url, expires: linkOut.expires, reusable: linkOut.reusable } : { reusable: false }),
+      });
     }
 
     if (action === "set_access_notes") {
@@ -1389,8 +1543,12 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "cleaner_link") {
       // Issue (or rotate) the cleaner's token link for this booking's
-      // current visit. Only the SHA-256 hash is stored; the owner passes
-      // the raw link to the cleaner out of band (e.g. WhatsApp).
+      // current visit. The owner passes the raw link to the cleaner out
+      // of band (e.g. WhatsApp). Prefer a v2 reusable link; when the
+      // server secret or the v2 columns are missing, fall back to the
+      // legacy random link so the action never breaks pre-migration.
+      // This is the ONLY path that replaces a link — reading a visit
+      // never rotates anything.
       if (!dbConfigured()) {
         return json(501, { ok: false, error: "db_not_configured" });
       }
@@ -1403,8 +1561,8 @@ export default async function handler(req: Req, res: Res) {
             booking_id: bookingId,
             visit_no: 1,
             stripe_customer_id: customer.id,
-            client_name: typeof custRes.data["name"] === "string" ? custRes.data["name"] : null,
-            client_email: typeof custRes.data["email"] === "string" ? custRes.data["email"] : null,
+            client_name: typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : null,
+            client_email: typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : null,
             service: meta["gh_service"] ?? null,
             amount_cents: parseInt(meta["gh_first_price_cents"] ?? "", 10) || null,
             cleaner_name: meta["gh_cleaner_name"] ?? null,
@@ -1416,28 +1574,62 @@ export default async function handler(req: Req, res: Res) {
         if (!created) return json(502, { ok: false, error: "db_error" });
         visit = created;
       }
-      const token = newCleanerToken();
-      // Expiry must support jobs scheduled ahead: at least 14 days, and
-      // never earlier than two days after the visit date itself, so a
-      // link generated early cannot die before the job happens.
-      let expiresMs = Date.now() + 14 * 24 * 3600 * 1000;
-      if (visit.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(visit.visit_date)) {
-        const jobMs = Date.parse(`${visit.visit_date}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
-        if (Number.isFinite(jobMs)) expiresMs = Math.max(expiresMs, jobMs);
+      const v2 = mintV2Link(visit.id, visit.visit_date);
+      if (v2 && (await writeV2Link(visit.id, v2))) {
+        await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires: v2.expires, version: "v2" });
+        log("cleaner_link", { booking: bookingId, expires: v2.expires, version: "v2" });
+        return json(200, { ok: true, url: v2.url, expires: v2.expires, reusable: true });
       }
-      const expires = new Date(expiresMs).toISOString();
+      const leg = mintLegacyLink(visit.visit_date);
       const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
-        cleaner_token_hash: hashToken(token),
-        cleaner_token_expires: expires,
+        cleaner_token_hash: hashToken(leg.token),
+        cleaner_token_expires: leg.expires,
       });
       if (!okUpd) return json(502, { ok: false, error: "db_error" });
-      await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires });
-      log("cleaner_link", { booking: bookingId, expires });
-      return json(200, {
-        ok: true,
-        url: `https://www.gatehousehomecleaning.com/cleaner?ct=${token}`,
-        expires,
-      });
+      await clearV2Fields(visit.id);
+      await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires: leg.expires, version: "legacy" });
+      log("cleaner_link", { booking: bookingId, expires: leg.expires, version: "legacy" });
+      return json(200, { ok: true, url: leg.url, expires: leg.expires, reusable: false });
+    }
+
+    if (action === "get_cleaner_link") {
+      // Re-fetch the CURRENT reusable (v2) link for the owner panel.
+      // Read-only by construction: no new issuance, no expiry/hash/
+      // opened_at change, no event, no-store response. Anything that is
+      // not a live v2 link (legacy token, missing secret, hash mismatch,
+      // expired) is reported as such — the panel then offers the
+      // explicit Replace/Create path instead of silently rotating.
+      if (!dbConfigured()) {
+        return json(501, { ok: false, error: "db_not_configured" });
+      }
+      const visit = (await latestVisit(bookingId)) as CleanerRow | null;
+      if (!visit) return json(404, { ok: false, error: "visit_not_found" });
+      if (
+        visit.cleaner_link_version !== "v2" ||
+        typeof visit.cleaner_link_issuance !== "string" ||
+        !visit.cleaner_link_issuance ||
+        typeof visit.cleaner_token_hash !== "string" ||
+        !visit.cleaner_token_hash
+      ) {
+        return json(409, { ok: false, error: "link_not_reusable" });
+      }
+      if (!cleanerSecret()) {
+        return json(503, { ok: false, error: "reusable_unavailable" });
+      }
+      const recomputed = recomputeV2Link(visit);
+      if (!recomputed) {
+        // Either the stored hash no longer matches the v2 derivation
+        // (e.g. a legacy link overwrote it) or the link expired. An
+        // expired link must NOT come back to life on a plain read.
+        const expires = typeof visit.cleaner_token_expires === "string" ? visit.cleaner_token_expires : null;
+        if (expires && Date.parse(expires) < Date.now()) {
+          return json(410, { ok: false, error: "link_expired" });
+        }
+        return json(409, { ok: false, error: "link_not_reusable" });
+      }
+      res.setHeader("Cache-Control", "no-store");
+      log("get_cleaner_link", { booking: bookingId });
+      return json(200, { ok: true, url: recomputed.url, expires: recomputed.expires, reusable: true });
     }
 
     if (action === "client_link") {
