@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CalendarClock, AlertTriangle, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
+import JourneySteps from "@/components/JourneySteps";
 
 type VisitStateName =
   | "invalid_link"
@@ -23,6 +24,7 @@ type VisitData = {
   state: VisitStateName;
   booking?: {
     service?: string;
+    first_service?: string;
     requested_date?: string;
     confirmed_date?: string;
     window?: string;
@@ -37,6 +39,9 @@ type VisitData = {
   access_notes?: string;
   no_photo_zones?: string;
   has_card?: boolean;
+  card_brand?: string;
+  card_last4?: string;
+  card_confirmed?: boolean;
   report_preparing?: boolean;
   scope_review_needed?: boolean;
   confirm_by?: string;
@@ -46,8 +51,8 @@ type VisitData = {
 const STATE_HEADLINE: Record<string, string> = {
   card_needed: "Request received — one step left",
   card_failed: "Your card couldn't be saved",
-  awaiting_confirmation: "Card saved — date not confirmed yet",
-  confirmed: "Your visit is confirmed",
+  awaiting_confirmation: "Request received — awaiting confirmation",
+  confirmed: "Your cleaning is confirmed",
   date_declined: "That date doesn't work — pick another",
   report_sent: "Your visit is done — report sent",
   issue_open: "We're sorting out your issue",
@@ -56,6 +61,200 @@ const STATE_HEADLINE: Record<string, string> = {
   payment_issue: "Your payment needs attention",
   cancelled: "Cancelled",
 };
+
+type ReportPhoto = { url: string; room?: string; note?: string; kind?: string };
+type ReportChecklist = { rooms: Array<{ name: string; items: Array<{ label: string; done: boolean }>; skip_reason?: string }>; problem_note?: string };
+type ReportData = {
+  ok: boolean;
+  state: string;
+  photo_items?: ReportPhoto[];
+  checklist?: ReportChecklist | null;
+  amount?: string | null;
+  deadline?: string | null;
+  issue_reason?: string;
+  issue_room?: string;
+  error?: string;
+};
+
+const fmtDeadline = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+};
+
+// §11: the report lives INSIDE the client cabinet — same booking, same
+// page, anchored at #report (the report email links straight here).
+function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: string; onChanged: () => void }) {
+  const [rep, setRep] = useState<ReportData | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [issueText, setIssueText] = useState("");
+  const [issueRoom, setIssueRoom] = useState("");
+  const [showIssue, setShowIssue] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/report?bt=${encodeURIComponent(bt)}`)
+      .then((r) => r.json())
+      .then((j) => setRep(j as ReportData))
+      .catch(() => setRep({ ok: false, state: "not_ready" }));
+  }, [bt]);
+
+  const act = async (payload: Record<string, unknown>) => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bt, ...payload }),
+      });
+      const j = (await r.json()) as ReportData & { ok: boolean };
+      if (j && j.state && j.state !== "invalid_link") {
+        setRep(j);
+        onChanged();
+      } else {
+        setErr("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
+      }
+    } catch {
+      setErr("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
+    }
+    setBusy(false);
+  };
+
+  if (!rep) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+        <p className="text-sm text-muted-foreground">Loading your report…</p>
+      </div>
+    );
+  }
+  if (rep.state === "not_ready" || !rep.ok) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+        <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+        <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+      </div>
+    );
+  }
+  const grouped = (rep.photo_items ?? []).reduce<Record<string, ReportPhoto[]>>((acc, p) => {
+    const key = p.room || "Your home";
+    (acc[key] = acc[key] ?? []).push(p);
+    return acc;
+  }, {});
+  const rooms = Object.entries(grouped);
+  const canAct = rep.state === "sent" || rep.state === "payment_failed";
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+      <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+      {rep.state === "issue_open" && (
+        <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
+          Issue received — payment paused while we review it with you.
+          {rep.issue_reason ? <> You told us: “{rep.issue_reason}”.</> : null}
+        </p>
+      )}
+      {rep.state === "paid" && (
+        <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
+          Paid — thank you. A receipt was emailed to you.
+        </p>
+      )}
+      {rooms.length === 0 && <p className="text-sm text-muted-foreground mb-3">No photos in this report yet.</p>}
+      {rooms.map(([room, items]) => (
+        <div key={room} className="mb-4">
+          <h3 className="font-semibold mb-2">{room}</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {items.map((p, i) => (
+              <figure key={i}>
+                <img src={p.url} alt={`${room} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
+                <figcaption className="mt-1 text-xs text-muted-foreground">
+                  {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      ))}
+      {rep.checklist && rep.checklist.rooms.length > 0 && (
+        <div className="mb-4">
+          <h3 className="font-semibold mb-2">What was done</h3>
+          {rep.checklist.rooms.map((r) => (
+            <div key={r.name} className="mb-2">
+              <p className="text-sm font-semibold">{r.name}{r.skip_reason ? <span className="font-normal text-muted-foreground"> — skipped: {r.skip_reason}</span> : null}</p>
+              <ul className="pl-5 text-sm">
+                {r.items.map((it, i) => (
+                  <li key={i} className="list-none">
+                    <span aria-hidden="true">{it.done ? "✓ " : "○ "}</span>{it.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {rep.checklist.problem_note && <p className="mt-2 text-sm text-muted-foreground">Cleaner&apos;s note: {rep.checklist.problem_note}</p>}
+        </div>
+      )}
+      {rep.deadline && rep.state !== "paid" && (
+        <p className="mb-3 text-sm">
+          Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time). After that, your saved card is
+          charged automatically unless you report an issue.
+        </p>
+      )}
+      {err && <p className="mb-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{err}</p>}
+      {canAct && (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+            {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
+          </Button>
+          <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
+            Report an issue
+          </Button>
+        </div>
+      )}
+      {canAct && showIssue && (
+        <div className="mt-4">
+          <label htmlFor="v-issue" className="block text-sm font-medium mb-1.5">What&apos;s wrong?</label>
+          <textarea
+            id="v-issue"
+            value={issueText}
+            onChange={(e) => setIssueText(e.target.value)}
+            rows={3}
+            maxLength={500}
+            className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-2"
+            placeholder="Tell us what needs a second look…"
+          />
+          <label htmlFor="v-issue-room" className="block text-sm font-medium mb-1.5">Room (optional)</label>
+          <input
+            id="v-issue-room"
+            value={issueRoom}
+            onChange={(e) => setIssueRoom(e.target.value)}
+            maxLength={60}
+            className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
+            placeholder="e.g. Kitchen"
+          />
+          <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}>
+            {busy ? "Working…" : "Send issue — pause payment"}
+          </Button>
+        </div>
+      )}
+      {visitState === "payment_issue" && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => void act({ action: "approve" })}>
+            {busy ? "Working…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
+          </Button>
+        </div>
+      )}
+      <p className="mt-4 text-xs text-muted-foreground">
+        Prefer the standalone page? <Link to={`/report?bt=${encodeURIComponent(bt)}`} className="underline">Open the full report page</Link>.
+      </p>
+    </div>
+  );
+}
 
 const Visit = () => {
   const [searchParams] = useSearchParams();
@@ -116,13 +315,36 @@ const Visit = () => {
     setBusy(false);
   };
 
+  const [confirmingCard, setConfirmingCard] = useState(false);
+  const confirmCard = async () => {
+    if (!bt || confirmingCard) return;
+    setConfirmingCard(true);
+    setError("");
+    try {
+      const r = await fetch("/api/card-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bt, action: "confirm_card" }),
+      });
+      const j = (await r.json()) as { ok?: boolean };
+      if (r.ok && j.ok) {
+        await load();
+      } else {
+        setError("We couldn't confirm that card. Please try again, or add a different card.");
+      }
+    } catch {
+      setError("We couldn't confirm that card. Please try again, or add a different card.");
+    }
+    setConfirmingCard(false);
+  };
+
   const b = data?.booking ?? {};
   const fee = data?.cancel_fee_cents ?? 0;
   const manageable =
     data && ["awaiting_confirmation", "confirmed", "date_declined"].includes(data.state);
 
   const rows: Array<[string, string]> = [];
-  if (b.service) rows.push(["Service", b.service]);
+  if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
   if (b.confirmed_date) rows.push(["Visit date (confirmed)", b.confirmed_date]);
   else if (b.requested_date) rows.push(["Requested date — not confirmed yet", b.requested_date]);
   if (b.window) rows.push(["Arrival window (Atlanta time)", b.window]);
@@ -162,6 +384,35 @@ const Visit = () => {
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4 text-center">
               {STATE_HEADLINE[data.state] ?? "Your visit"}
             </h1>
+            {data.has_card && !data.card_confirmed && (data.state === "awaiting_confirmation" || data.state === "confirmed") && (
+              <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mb-6 text-left">
+                <p className="font-semibold mb-1">Use your card on file for this booking?</p>
+                <p className="text-sm text-foreground mb-3">
+                  We found a card on file for your email
+                  {data.card_last4 ? <> — <strong>{data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ending in ••••{data.card_last4}</strong></> : null}.
+                  A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="hero" disabled={confirmingCard || busy} onClick={() => void confirmCard()}>
+                    {confirmingCard ? "Confirming…" : "Use this card for this booking"}
+                  </Button>
+                  <Button variant="outline" asChild>
+                    <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Add a different card</Link>
+                  </Button>
+                </div>
+                {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+              </div>
+            )}
+            {data.state !== "cancelled" && (
+              <JourneySteps
+                current={
+                  ["card_needed", "card_failed", "awaiting_confirmation"].includes(data.state) ? 0
+                  : ["confirmed", "date_declined"].includes(data.state) ? 1
+                  : data.report_preparing ? 3
+                  : 4
+                }
+              />
+            )}
 
             {data.state === "card_needed" && (
               <p className="text-lg text-foreground mb-6 text-center">
@@ -221,13 +472,15 @@ const Visit = () => {
                 </p>
               </div>
             )}
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") && (
-              <p className="text-lg text-foreground mb-6 text-center">
-                Your cleaning is done — everything about payment lives on your report page.{" "}
-                <Link to={`/report?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">
-                  Open your photo report
-                </Link>
-              </p>
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") ? (
+              <section id="report" className="scroll-mt-28">
+                <ReportSection bt={bt} visitState={data.state} onChanged={() => void load()} />
+              </section>
+            ) : (
+              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+                <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+              </section>
             )}
 
             {rows.length > 0 && (

@@ -9,7 +9,6 @@ import {
   calcPrice,
   priceBreakdown,
   scaleTestPrice,
-  priceCutActive,
   tierFor,
   ADDONS,
   ADDONS_INCLUDED_IN,
@@ -70,11 +69,28 @@ const Quote = () => {
   const [service, setService] = useState<CalcServiceKey>(resolveService(params.get("service")));
   const [zip, setZip] = useState("");
   // Owner price-test mode: a signed `tp` token in the URL switches this
-  // quote to reduced test prices. The server verifies the token (bound to the
-  // owner's email, expiring) before honoring the scaled totals; an
-  // invalid token rejects the submission instead of repricing silently.
+  // quote to reduced test prices — but ONLY after the server verifies the
+  // token (signature + expiry). An unverified token never scales prices,
+  // so ordinary visitors can never see test prices by guessing a parameter.
   const testToken = params.get("tp") ?? "";
-  const testMode = testToken !== "" || priceCutActive();
+  const [testTokenOk, setTestTokenOk] = useState(false);
+  const [testTokenChecked, setTestTokenChecked] = useState(testToken === "");
+  useEffect(() => {
+    if (!testToken) return;
+    let cancelled = false;
+    fetch(`/api/test-price-check?token=${encodeURIComponent(testToken)}`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) { setTestTokenOk(d?.ok === true); setTestTokenChecked(true); } })
+      .catch(() => { if (!cancelled) setTestTokenChecked(true); });
+    return () => { cancelled = true; };
+  }, [testToken]);
+  useEffect(() => {
+    try {
+      if (testTokenOk) sessionStorage.setItem("gh_test_pricing", "1");
+      else sessionStorage.removeItem("gh_test_pricing");
+    } catch { /* private mode */ }
+  }, [testTokenOk]);
+  const testMode = testToken !== "" && testTokenOk;
   const dispPrice = (n: number): number => (testMode ? scaleTestPrice(n) : n);
   // Money display: whole dollars stay "$224", cents always show two
   // decimals ("$1.50", never "$1.5").
@@ -480,7 +496,7 @@ const Quote = () => {
             <li aria-hidden="true" className="text-muted-foreground">→</li>
             <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
             <li aria-hidden="true" className="text-muted-foreground">→</li>
-            <li className="rounded-full border border-border bg-card px-3 py-1.5">3 · Secure your card</li>
+            <li className="rounded-full border border-border bg-card px-3 py-1.5">3 · Save your card — $0 today</li>
           </ol>
         </div>
       </section>
@@ -496,8 +512,12 @@ const Quote = () => {
 
             {testMode && (
               <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-                Test mode: prices on this page are reduced to 1/100 of regular for the owner's payment test. The server
-                verifies the test link when the request is sent.
+                Test booking: prices on this page are reduced for a payment test.
+              </p>
+            )}
+            {testToken && testTokenChecked && !testTokenOk && (
+              <p className="mb-6 rounded-lg border border-border bg-muted px-4 py-3 text-sm text-foreground">
+                This test link is invalid or expired — regular prices apply.
               </p>
             )}
 
@@ -890,6 +910,7 @@ const Quote = () => {
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="b-entry" className="block text-sm font-medium mb-1.5">Entry instructions (optional)</label>
+                  <p className="mb-1.5 text-sm text-muted-foreground">You can provide access details after your visit is confirmed — nothing secret is needed now.</p>
                   <textarea
                     id="b-entry" name="entryInstructions" rows={2}
                     value={booking.entryInstructions} onChange={handleBookingChange}
@@ -963,6 +984,18 @@ const Quote = () => {
               )}
 
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
+              {reviewReady && (
+                <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
+                  <h3 className="font-heading text-lg font-bold mb-2">Why save a card now?</h3>
+                  <p className="mb-2">Save your card now so you won&apos;t need to enter it again after your cleaning.</p>
+                  <p className="mb-2"><strong>$0 charged today.</strong></p>
+                  <p className="mb-2">After your cleaning, you&apos;ll get a photo report of the work. Your card is charged when you approve the report.</p>
+                  <p className="mb-2">If you don&apos;t report a problem, your card is charged automatically 24 hours after we send the report.</p>
+                  <p className="mb-2">If you report a problem in time, the charge stays paused while we review it with you.</p>
+                  <p className="text-muted-foreground">Your card details are stored securely by Stripe, our payment processor. We never see or store your full card number.</p>
+                  <p className="mt-2 text-muted-foreground">Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
+                </div>
+              )}
               <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="w-full mt-6 min-h-[48px]">
                 {isSubmitting
                   ? "Sending..."
@@ -970,12 +1003,14 @@ const Quote = () => {
                     ? "Enter a ZIP in our service area"
                     : needsCleaningHistory ? "Answer the cleaning-history question above"
                     : reviewReady
-                      ? <>Send request — $0 today <Send className="w-5 h-5" /></>
+                      ? <>Send request &amp; continue to card setup <Send className="w-5 h-5" /></>
                       : isLargeHome ? "Request a custom quote" : "Review my details"}
               </Button>
-              <p className="text-xs text-foreground text-center mt-4">
-                Your request comes straight to us — $0 today. Next step after sending: save your card (about a minute). We confirm your date by email within one business day.
-              </p>
+              {reviewReady && (
+                <p className="text-base text-foreground text-center mt-3">
+                  <strong>$0 charged today</strong> — next step: save your card (about a minute).
+                </p>
+              )}
             </form>
           </div>
         </div>

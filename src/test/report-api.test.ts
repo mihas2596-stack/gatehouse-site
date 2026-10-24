@@ -144,7 +144,8 @@ describe("report portal", () => {
     const email = JSON.parse(String(resendCalls[0])) as { subject: string; text: string; to: string[] };
     expect(email.to).toEqual(["client@example.com"]);
     expect(email.subject).toContain("report is ready");
-    expect(email.text).toContain("/report?bt=v2.");
+    expect(email.text).toContain("/visit?bt=v2.");
+    expect(email.text).toContain("#report");
     expect(email.text).toContain("$189");
 
     const view = response();

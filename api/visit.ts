@@ -510,6 +510,21 @@ export default async function handler(req: Req, res: Res) {
       : customer.metadata;
     const requestedDate = payload.date ?? "";
 
+    // §3: the saved card's brand/last4 + whether THIS booking confirmed it.
+    // A card on file without a card_confirmed event is a choice waiting
+    // for the client — never an assumed confirmation.
+    let cardBrand = "";
+    let cardLast4 = "";
+    const cardConfirmed = Boolean(latestEvent(events, "card_confirmed"));
+    if (customer.id && meta["gh_payment_method"]) {
+      try {
+        const pmRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`);
+        const pm = (pmRes.data["data"] as Array<{ card?: { brand?: string; last4?: string } }> | undefined)?.[0];
+        cardBrand = String(pm?.card?.brand ?? "");
+        cardLast4 = String(pm?.card?.last4 ?? "");
+      } catch { /* best-effort — the choice UI falls back to no details */ }
+    }
+
     const view = () => {
       const firstCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
       const recCents = parseInt(meta["gh_recurring_price_cents"] ?? "", 10);
@@ -519,6 +534,10 @@ export default async function handler(req: Req, res: Res) {
         state: deriveVisitState(meta),
         booking: {
           service: payload.service ?? "",
+          // §5: the server-recorded first-visit service ("deep" when the
+          // client answered No to recent professional cleaning) — the
+          // label every surface must show, not the form's "Standard".
+          first_service: (latestEvent(events, "visit_created")?.detail?.["first_service"] as string | undefined) ?? "",
           requested_date: requestedDate,
           confirmed_date: meta["gh_confirmed_date"] ?? "",
           window: meta["gh_confirmed_window"] ?? "",
@@ -535,6 +554,9 @@ export default async function handler(req: Req, res: Res) {
         access_notes: meta["gh_access_notes"] ?? "",
         no_photo_zones: meta["gh_no_photo_zones"] ?? "",
         has_card: Boolean(meta["gh_payment_method"]),
+        card_brand: cardBrand,
+        card_last4: cardLast4,
+        card_confirmed: cardConfirmed,
         // The cleaner has submitted the report and the owner has not
         // published it yet: the customer's review period has NOT started.
         report_preparing: Boolean(row && row.report_status === "submitted" && !row.report_sent_at),

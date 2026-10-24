@@ -4,6 +4,7 @@ import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
+import JourneySteps from "@/components/JourneySteps";
 
 type Plan = {
   service?: string;
@@ -25,9 +26,13 @@ type CardStatusBooking = {
   first?: string;
   recurring?: string;
   service?: string;
+  first_service?: string;
   date?: string;
   has_card?: string;
   card_state?: string;
+  card_confirmed?: string;
+  card_brand?: string;
+  card_last4?: string;
   booking_confirmed?: string;
   confirmed_date?: string;
   confirmed_window?: string;
@@ -41,6 +46,7 @@ type CardState =
   | { kind: "needed" }
   | { kind: "failed" }
   | { kind: "saved"; booking: CardStatusBooking | null }
+  | { kind: "choice"; booking: CardStatusBooking | null }
   | { kind: "confirmed"; booking: CardStatusBooking | null };
 
 const fmtMoney = (n: number): string => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
@@ -49,13 +55,6 @@ const parseMoney = (v?: string): number | null => {
   const n = parseFloat(v.replace(/[^0-9.]/g, ""));
   return Number.isFinite(n) ? n : null;
 };
-
-const STEPS = [
-  "We confirm your visit.",
-  "We clean your home.",
-  "You receive your photo report.",
-  "You review the report and pay.",
-];
 
 const ThankYou = () => {
   const { state } = useLocation();
@@ -117,8 +116,12 @@ const ThankYou = () => {
         setStatusBooking(b);
         if (b?.has_card === "1" && b?.booking_confirmed === "1") {
           setCard({ kind: "confirmed", booking: b });
-        } else if (b?.has_card === "1") {
+        } else if (b?.has_card === "1" && b?.card_confirmed === "1") {
           setCard({ kind: "saved", booking: b });
+        } else if (b?.has_card === "1") {
+          // §3: a card on file is NOT a confirmation for this booking —
+          // the client must explicitly choose it (or a different card).
+          setCard({ kind: "choice", booking: b });
         } else if (b?.card_state === "card_failed") {
           setCard({ kind: "failed" });
         } else {
@@ -137,6 +140,31 @@ const ThankYou = () => {
       if (slowTimer.current) window.clearTimeout(slowTimer.current);
     };
   }, [checkCard]);
+
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState(false);
+  const confirmCard = async () => {
+    if (!bt || confirming) return;
+    setConfirming(true);
+    setConfirmError(false);
+    try {
+      const res = await fetch("/api/card-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bt, action: "confirm_card" }),
+      });
+      const data = (await res.json()) as { ok?: boolean };
+      if (res.ok && data.ok) {
+        setCard((c) => (c.kind === "choice" ? { kind: "saved", booking: c.booking } : c));
+      } else {
+        setConfirmError(true);
+      }
+    } catch {
+      setConfirmError(true);
+    } finally {
+      setConfirming(false);
+    }
+  };
 
   const startCard = async () => {
     if (!bt || starting) return;
@@ -183,7 +211,7 @@ const ThankYou = () => {
 
   // Summary values: the fresh submission wins; a revisit falls back to the
   // server-verified booking summary from card-status.
-  const cardBooking = card.kind === "saved" || card.kind === "confirmed" ? card.booking : null;
+  const cardBooking = card.kind === "saved" || card.kind === "confirmed" || card.kind === "choice" ? card.booking : null;
   const summaryBooking = statusBooking ?? cardBooking;
   const first = typeof plan.first === "number" ? plan.first : parseMoney(summaryBooking?.first ?? recapPriceFirst(recap.price));
   const recurring = typeof plan.recurring === "number" ? plan.recurring : parseMoney(summaryBooking?.recurring);
@@ -199,7 +227,7 @@ const ThankYou = () => {
           <dt className="font-semibold">Service</dt>
           <dd>
             {serviceLabel}
-            {plan.firstIsDeep ? " · first visit is a deep clean" : ""}
+            {(plan.firstIsDeep || summaryBooking?.first_service === "deep") ? " · First visit: Deep clean" : ""}
           </dd>
         </div>
         {first !== null && (
@@ -323,11 +351,7 @@ const ThankYou = () => {
 
         <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
           <h2 className="font-heading text-lg font-bold mb-3">What happens next</h2>
-          <ol className="list-decimal list-inside space-y-1.5 text-base">
-            {STEPS.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
+          <JourneySteps current={card.kind === "confirmed" ? 1 : 0} />
           <p className="mt-4 text-base leading-relaxed">
             Your card is charged when you approve the report, or automatically 24 hours after we
             send it if you haven&apos;t reported an issue. If you report an issue within that
@@ -338,6 +362,60 @@ const ThankYou = () => {
         <Button variant="hero" size="xl" className="w-full" asChild>
           <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
         </Button>
+      </>,
+    );
+  }
+
+  // State C2 — a card is on file, but NOT yet confirmed for THIS booking.
+  if (card.kind === "choice") {
+    const brand = card.booking?.card_brand ? card.booking.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card";
+    const last4 = card.booking?.card_last4 ?? "";
+    return shell(
+      <>
+        <div className="text-center">
+          <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Use your card on file?</h1>
+          {emailNotice}
+        </div>
+        {summaryCard}
+        <p className="mb-6 text-base leading-relaxed">
+          We found a card on file for your email{last4 ? <> — <strong>{brand} ending in ••••{last4}</strong></> : null}.
+          A card saved earlier is never used for a new booking without your say-so. Choose it for this booking,
+          or add a different card. Nothing is charged today either way.
+        </p>
+        {confirmError && (
+          <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+            We couldn't confirm that card. Please try again, or add a different card.
+          </p>
+        )}
+        {startError && (
+          <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+            Something went wrong opening the secure card page. Your request is saved — please try again.
+          </p>
+        )}
+        <Button variant="hero" size="xl" className="w-full mb-3" onClick={confirmCard} disabled={confirming || !bt}>
+          {confirming ? (
+            <>
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
+              Confirming…
+            </>
+          ) : (
+            "Use this card for this booking"
+          )}
+        </Button>
+        <Button variant="outline" size="xl" className="w-full" onClick={startCard} disabled={starting || !bt}>
+          {starting ? (
+            <>
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
+              Opening Stripe…
+            </>
+          ) : (
+            "Add a different card"
+          )}
+        </Button>
+        <p className="mt-6 text-center text-sm text-muted-foreground">
+          Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.
+        </p>
       </>,
     );
   }

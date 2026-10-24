@@ -21,16 +21,20 @@
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
-import { sendReceiptEmailOnce } from "./booking-action.js";
+import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
 // (pinned at submission) and gh_events (per-booking journal) win for any
 // booking the customer is not currently bound to.
+type ChecklistItem = { label: string; done: boolean };
+type ChecklistRoom = { name: string; items: ChecklistItem[]; skip_reason?: string };
+type Checklist = { rooms: ChecklistRoom[]; problem_note?: string; submitted_at?: string };
 type BookingRow = {
   id: string; booking_id: string; status: string | null;
   amount_cents: number | null; report_sent_at: string | null;
   report_bounced: boolean | null; cleaner_name: string | null;
+  checklist?: Checklist | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
@@ -574,6 +578,9 @@ export default async function handler(req: Req, res: Res) {
         postpay_issue: meta["gh_postpay_issue"] === "1",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
+        // §10/§11: the cleaner's completed checklist travels with the
+        // report — the client sees what was actually done, room by room.
+        checklist: row?.checklist ?? null,
         resolution: meta["gh_issue_resolved_at"]
           ? {
               resolved_at: meta["gh_issue_resolved_at"],
@@ -700,6 +707,7 @@ export default async function handler(req: Req, res: Res) {
         });
         meta["gh_state"] = "payment_failed";
         if (row) await logEvent(row.id, payload.bid, "system", "payment_failed", { reason: "no_payment_method" });
+        await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, customer.id, payload.bid, row?.id ?? null);
         res.status(402).json({ ...view(), error: "no_payment_method" });
         return;
       }
@@ -768,6 +776,7 @@ export default async function handler(req: Req, res: Res) {
           via: "client_approve", status: piStatus, detail: errMsg.slice(0, 200),
         });
       }
+      await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, customer.id, payload.bid, row?.id ?? null);
       logErr("approve_charge", `${payload.bid}: ${errMsg}`);
       res.status(402).json({
         ...view(),
@@ -878,7 +887,7 @@ export default async function handler(req: Req, res: Res) {
           reply_to: "hello@gatehousehomecleaning.com",
           subject: "We received your report — the charge is paused",
           text:
-            `Hi ${firstName},\n\nRequest received. The charge is paused — nothing will be charged while we look into it.\n` +
+            `Hi ${firstName},\n\nIssue received. The charge is paused — nothing will be charged while we look into it.\n` +
             `We'll reply within one business day.\n\n` +
             (room ? `Room: ${room}\n` : "") +
             (reason ? `What you told us: ${reason}\n\n` : "\n") +

@@ -21,6 +21,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import { sendReceiptEmailOnce } from "./booking-action.js";
+import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -232,6 +233,38 @@ export default async function handler(req: Req, res: Res) {
             "metadata[gh_last_payment]": piId,
           });
           log("payment", { state: eventType, booking: bookingId });
+        }
+        // §13: mirror into the booking's DB row + journal, idempotently.
+        // Without this, /report and /visit (which derive state from the
+        // row + journal) would keep showing a paid visit as awaiting.
+        // A DB failure here must never fail the webhook (Stripe would
+        // retry and the meta write above already landed).
+        if (dbConfigured()) {
+          try {
+            const rows = await dbSelect<{ id: string; status: string | null; payment_intent_id: string | null }>(
+              "gh_visits",
+              `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+            );
+            const vrow = rows[0];
+            if (vrow) {
+              if (newState === "paid" && !(vrow.status === "paid" && vrow.payment_intent_id === piId)) {
+                await dbUpdate("gh_visits", `id=eq.${vrow.id}`, {
+                  status: "paid",
+                  paid_at: new Date().toISOString(),
+                  payment_intent_id: piId,
+                });
+                await logEvent(vrow.id, bookingId, "system", "payment_succeeded", {
+                  via: "stripe_webhook", payment_intent_id: piId,
+                });
+              } else if (newState === "payment_failed" && vrow.status !== "paid") {
+                await logEvent(vrow.id, bookingId, "system", "payment_failed", {
+                  via: "stripe_webhook", payment_intent_id: piId,
+                });
+              }
+            }
+          } catch (err) {
+            logErr("db_mirror", err);
+          }
         }
         if (newState === "paid") {
           // Receipt email (idempotent — the helper no-ops when the

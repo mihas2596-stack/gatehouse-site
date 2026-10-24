@@ -1,15 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-// The owner-ordered global price-cut window is time-based; pin it OFF here
-// so these price assertions stay deterministic. Token test mode has its
-// own cases below.
-vi.mock("@/config/calculator", async (importActual) => {
-  const actual = await importActual<typeof import("@/config/calculator")>();
-  return { ...actual, priceCutActive: () => false };
-});
+// Test prices are token-only now (no global window), so these price
+// assertions stay deterministic without mocking the calculator. Token
+// test mode has its own cases below.
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);
@@ -51,7 +47,10 @@ describe("booking price confirmation", () => {
     expect(screen.queryByText(/founding/i)).not.toBeInTheDocument();
   });
 
-  it("shows reduced prices in owner test mode (tp token in the URL)", () => {
+  it("shows reduced prices in owner test mode (verified tp token)", async () => {
+    // The quote page only scales prices after the server verifies the
+    // token — mock that check as verified.
+    vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => ({ ok: true }) })));
     render(
       <MemoryRouter initialEntries={["/quote?tp=tp1.9999999999.token"]}>
         <Quote />
@@ -59,9 +58,12 @@ describe("booking price confirmation", () => {
     );
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
-    expect(screen.getByText(/Test mode: prices on this page are reduced to 1\/100/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/Test booking: prices on this page are reduced for a payment test/)).toBeInTheDocument();
+    });
     // Regular $189 recurring M at 1/100 = $1.89, capped at the $1.50 test ceiling.
     expect(screen.getByText("First visit: $1.50", { exact: false })).toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 
   it("requires another review when the calculator changes after confirmation", () => {
@@ -75,9 +77,9 @@ describe("booking price confirmation", () => {
     fireEvent.click(document.getElementById("b-terms")!);
     fireEvent.click(document.getElementById("b-photo")!);
     fireEvent.click(screen.getByRole("button", { name: "Review my details" }));
-    expect(screen.getByRole("button", { name: /Send request — \$0 today/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Send request & continue to card setup/ })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
-    expect(screen.queryByRole("button", { name: /Send request — \$0 today/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Send request & continue to card setup/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review my details" })).toBeEnabled();
   });
 });

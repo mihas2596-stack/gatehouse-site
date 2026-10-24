@@ -54,15 +54,17 @@ const howItWorks = [
 // Payment story for ad traffic: $0 to book, approve first, charged after approval.
 // Card capture is live via Stripe Checkout (setup mode) — see SaveCard flow.
 const paymentSteps = [
-  ["1", "$0 to book", "booking is free. Nothing is charged when you request your visit."],
-  ["2", "Review your report", "after every clean you get a room-by-room photo report. Your card is charged when you approve it, or automatically 24 hours after we send it if you haven't reported an issue."],
-  ["3", "Approve to pay, or automatic payment after 24 hours", "no surprises: approve the report and we charge your card — or it happens automatically 24 hours after we send it, unless you flag an issue. Flagging an issue pauses the charge while we review it with you."],
+  ["1", "Request", "see your price and send your request. $0 charged today."],
+  ["2", "Confirmed visit", "we confirm your date, arrival window and cleaner by email."],
+  ["3", "Cleaning", "your cleaner works from the room-by-room checklist."],
+  ["4", "Photo report", "you get before-and-after photos of every room."],
+  ["5", "Review & payment", "approve the report to pay, or the charge runs automatically 24 hours after the report is sent if you haven't reported an issue."],
 ];
 
 const trustBadges = [
   { Icon: Tag, label: "See your price online", text: "Your price is based on the home details you enter. No in-home estimate." },
-  { Icon: CalendarX, label: "Free cancellation", text: "Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. If we can't get in at the scheduled time, the full visit price is charged." },
-  { Icon: Wallet, label: "Approve, then pay", text: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. (If we can't access your home at the scheduled time, the visit price applies — see Terms.)" },
+  { Icon: CalendarX, label: "Free cancellation", text: "Free up to 48 hours before your visit. $25 inside 48 hours; full price if we can't get in. Full rules in Terms." },
+  { Icon: Wallet, label: "Approve, then pay", text: "You approve the photo report, then we charge your card. No issue reported? Automatic charge 24 hours after the report is sent. Full rules in Terms." },
 ];
 
 const included = [
@@ -129,6 +131,9 @@ const Index = () => (
             </p>
             <p className="mt-2 text-base font-semibold text-sage-foreground md:text-lg">
               A fixed weekday and arrival window. No membership fee or long-term commitment.
+            </p>
+            <p className="mt-2 text-base text-foreground md:text-lg">
+              One-time and deep cleaning also available.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote">See My Price</Link>

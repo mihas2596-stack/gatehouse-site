@@ -92,7 +92,7 @@ describe("booking-action confirm", () => {
     const emailBody = JSON.parse(String(resendCalls[0])) as { subject: string; text: string; to: string[] };
     expect(emailBody.to).toEqual(["client@example.com"]);
     expect(emailBody.subject).toContain("Booking confirmed");
-    expect(emailBody.text).toContain("First visit: $189.");
+    expect(emailBody.text).toContain("Agreed price: $189 for the first visit.");
   });
 
   it("does not re-email on an identical repeat, but does on a date change", async () => {

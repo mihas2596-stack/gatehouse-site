@@ -482,7 +482,10 @@ export function emailButton(href: string, label: string): string {
 // Canonical payment explanation (Terms 5.2 model): viewing photos is never
 // required for the automatic charge; an unresolved problem pauses it.
 export function paymentExplainer(amount: string): string {
-  return `$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment of ${amount}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.`;
+  // Custom-quote bookings have no amount yet — never print a placeholder
+  // dash where the price belongs.
+  const amt = amount && amount !== "—" ? `payment of ${amount}` : "the agreed payment";
+  return `$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve ${amt}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.`;
 }
 
 async function sendEmail(apiKey: string, payload: Record<string, unknown>, idempotencyKey?: string) {
@@ -620,10 +623,10 @@ export default async function handler(req: Req, res: Res) {
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
     let testScale = false;
-    // Owner-ordered global price cut: every booking at 1/10 until
-    // PRICE_CUT_END_MS (2026-10-25 08:49 UTC), then regular prices return
-    // automatically. Must match PRICE_CUT_END_MS in src/config/calculator.ts.
-    const cutScale = Date.now() < Date.parse("2026-10-25T08:49:00.000Z");
+    // Test prices are token-only now (2026-10-24 spec §6): the retired
+    // global cut window no longer scales anything. Ordinary visitors
+    // always see real prices; only a verified tp1 token scales a booking.
+    const cutScale = false;
     let serverRecurring: string | undefined;
     if (isQuote) {
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
@@ -745,7 +748,16 @@ export default async function handler(req: Req, res: Res) {
           if (visitRow) {
             visitRowId = visitRow.id;
             if (!existingRows[0]) {
-              await logEvent(visitRow.id, bookingId, "system", "visit_created", { service: service ?? null });
+              // Single pricing record for the booking (§5/§7): the server
+              // breakdown's first_service is what every surface must show
+              // ("First visit: Deep clean" vs plain Standard), not the
+              // form's service label alone.
+              await logEvent(visitRow.id, bookingId, "system", "visit_created", {
+                service: service ?? null,
+                first_service: server ? server.first_service : null,
+                first_total: server ? server.first_total : null,
+                recurring_total: server ? server.recurring_total : null,
+              });
             }
             // Customer comments live in the journal, separate from access
             // instructions — the old build stuffed the whole composed
@@ -889,10 +901,13 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
         }
         const deadline = confirmDeadlineLabel();
         const scopeNote = scope_review
-          ? "One note: we may check a couple of scope details with you before confirming. The estimate above is the agreed price for this visit — it won't change unless you agree to a change."
+          ? "One note: we may check a couple of scope details with you before confirming. The quoted price above won't change unless you agree to a change."
           : "";
+        const hasPrice = Boolean(serverFirst || price);
         const requestLines =
-          `Your request: ${homeDetails} · ZIP ${zip || ""}\n\nService: ${serviceLabel}\n\nYour estimate: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.`;
+          `Requested date: ${date || "flexible"}${time ? ` · ${time}` : ""}\nService: ${serviceLabel}\nHome: ${homeDetails} · ZIP ${zip || ""}\n\n${hasPrice
+            ? `Quoted price: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.`
+            : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
         const explainer = paymentExplainer(priceDisplay);
         const textBody = !isQuote ? `Hi ${firstName},
 
@@ -902,18 +917,16 @@ Nick
 Gatehouse Home Cleaning
 hello@gatehousehomecleaning.com` : cardOnFile ? `Hi ${firstName},
 
-Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${deadline}.
+Request received — your visit is not confirmed yet. We'll confirm your cleaner and arrival window by ${deadline}.
 
 ${requestLines}
 ${testNote}${deepPara}
-${explainer}
+One step left: confirm your saved card for THIS booking, or add a different card. A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.
 
-To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.
-${scopeNote ? `\n${scopeNote}\n` : ""}
-Your visit page — status, your cleaner, reschedule or cancel:
+Your visit page — confirm your card, see your status, your cleaner, reschedule or cancel:
 ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
 
-If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.
+${explainer}
 
 Nick
 
@@ -921,7 +934,7 @@ Gatehouse Home Cleaning
 
 hello@gatehousehomecleaning.com` : `Hi ${firstName},
 
-Thanks for your request — it isn't a confirmed booking yet.
+Request received — your visit is not confirmed yet.
 
 Next step: save your card to continue. We never see your card number (Stripe handles it securely).
 
@@ -931,17 +944,13 @@ ${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
 ${requestLines}
 ${testNote}${deepPara}
 We'll confirm your cleaner and arrival window by ${deadline}. Your final confirmation comes in a separate email.
-${scopeNote ? `\n${scopeNote}\n` : ""}
-How payment works:
-
+${scopeNote ? `
+${scopeNote}
+` : ""}
 ${explainer}
-
-To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.
 
 Your visit page — status, your cleaner, reschedule or cancel:
 ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
-
-If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.
 
 Nick
 
@@ -949,32 +958,27 @@ Gatehouse Home Cleaning
 
 hello@gatehousehomecleaning.com`;
         const esc = escapeHtml;
-        const htmlBody = !isQuote ? undefined : cardOnFile ? `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">
+        const htmlBody = !isQuote ? undefined : cardOnFile ? `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">
 <p>Hi ${esc(firstName)},</p>
-<p><strong>Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${esc(deadline)}.</strong></p>
-<p>${esc(requestLines).replace(/\n/g, "<br>")}</p>
+<p><strong>Request received — your visit is not confirmed yet.</strong> We&apos;ll confirm your cleaner and arrival window by ${esc(deadline)}.</p>
+<p>${esc(requestLines).replace(/\\n/g, "<br>")}</p>
 ${testNote ? `<p>${esc(testNote.trim())}</p>` : ""}
-<p>${esc(explainer)}</p>
-<p>To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.</p>
-${scopeNote ? `<p>${esc(scopeNote)}</p>` : ""}
+<p><strong>One step left:</strong> confirm your saved card for this booking, or add a different card. A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.</p>
 ${emailButton(visitUrl ?? "https://www.gatehousehomecleaning.com/visit", "View my visit")}
-<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}</p>
-<p>If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.</p>
+<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>
+<p>${esc(explainer)}</p>
 <p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p>
-</div>` : `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">
+</div>` : `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">
 <p>Hi ${esc(firstName)},</p>
-<p>Thanks for your request — it isn't a confirmed booking yet.</p>
+<p><strong>Request received — your visit is not confirmed yet.</strong></p>
 <p><strong>Next step: save your card to continue.</strong> We never see your card number (Stripe handles it securely).</p>
 ${emailButton(saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card", "Save your card — $0 today")}
-<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}</p>
-<p>${esc(requestLines).replace(/\n/g, "<br>")}</p>
+<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>
+<p>${esc(requestLines).replace(/\\n/g, "<br>")}</p>
 ${testNote ? `<p>${esc(testNote.trim())}</p>` : ""}
 <p>We'll confirm your cleaner and arrival window by ${esc(deadline)}. Your final confirmation comes in a separate email.</p>
 ${scopeNote ? `<p>${esc(scopeNote)}</p>` : ""}
-<p><strong>How payment works:</strong> ${esc(explainer)}</p>
-<p>To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.</p>
-<p>Your visit page — status, your cleaner, reschedule or cancel:<br><a href="${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}">View my visit</a></p>
-<p>If something on our checklist gets missed, we come back within 72 hours and fix it at no charge.</p>
+<p>${esc(explainer)}</p>
 <p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p>
 </div>`;
 
@@ -982,18 +986,13 @@ ${scopeNote ? `<p>${esc(scopeNote)}</p>` : ""}
           from: FROM_AUTO,
           to: [email],
           reply_to: REPLY_TO_AUTO,
-          subject: !isQuote ? "Got your question — I’ll reply within one business day" : cardOnFile ? "Card saved — your request is received" : "Request received — save your card to continue",
+          subject: !isQuote ? "Got your question — I’ll reply within one business day" : cardOnFile ? "Request received — confirm your card" : "Request received — save your card to continue",
           text: textBody,
           ...(htmlBody ? { html: htmlBody } : {}),
         }, parsed.data.request_id ? `customer/${parsed.data.request_id}` : undefined);
-        if (auto.ok && isQuote && cardOnFile && bookingId) {
-          // This email IS the card-saved confirmation for this booking —
-          // journal it so the card-status reconcile does not send a second
-          // one when the customer opens the visit page.
-          try {
-            await logEvent(visitRowId, bookingId, "system", "card_saved_email", { via: "request_email" });
-          } catch { /* journal is best-effort here */ }
-        }
+        // §3: the request email no longer claims "Card saved" — the
+        // card_saved_email event is journaled only by the explicit
+        // confirm_card action or a verified Checkout save.
         if (auto.ok) {
           customerEmailSent = true;
           log("customer_confirmation", "sent");

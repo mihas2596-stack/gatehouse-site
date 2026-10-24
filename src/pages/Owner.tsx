@@ -249,6 +249,43 @@ const Owner = () => {
           </div>
         )}
 
+        {!selected && (() => {
+          const attention = visits.filter((v) =>
+            (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled")
+            || !v.cleaner_name || v.issue_open || v.report_bounced,
+          );
+          const reason = (v: typeof visits[number]): string => {
+            const parts: string[] = [];
+            if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") parts.push("needs date confirmation");
+            if (!v.cleaner_name) parts.push("no cleaner assigned");
+            if (v.issue_open) parts.push("customer issue open");
+            if (v.report_bounced) parts.push("report email failed");
+            return parts.join(" · ");
+          };
+          return attention.length > 0 ? (
+            <div className="mb-6">
+              <h2 className="font-heading text-lg font-bold mb-2">Needs attention</h2>
+              <p className="text-sm text-muted-foreground mb-3">
+                Bookings waiting on you: confirm the date, assign a cleaner, resolve an issue, or fix a failed email.
+              </p>
+              <div className="space-y-2">
+                {attention.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="w-full text-left rounded-xl border border-amber-500/60 bg-amber-50 p-4 hover:border-primary"
+                    onClick={() => void openVisit(v)}
+                  >
+                    <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
+                    <span className="text-sm text-muted-foreground">{v.visit_date ?? "no date"} · {money(v.amount_cents)}</span>
+                    <span className="block text-sm text-amber-900 mt-1">{reason(v)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null;
+        })()}
+
         {!selected && (
           <div className="space-y-2">
             {visits.map((v) => (
@@ -397,12 +434,22 @@ const Owner = () => {
                     If it&apos;s lost, “Revoke & replace link” issues a new one and kills the old.
                   </p>
                 </div>
-                <p className="font-semibold mb-2">Confirm date & cleaner</p>
+                <p className="font-semibold mb-2">Confirm visit</p>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Pick the cleaner, set the agreed date and window, then Confirm visit. The client sees the
+                  confirmed date and cleaner, the job appears in the cleaner&apos;s workspace, and the client
+                  gets a confirmation email. If you agree a different date, use “Propose another time” below
+                  instead — a proposal is not a confirmation.
+                </p>
                 <div className="flex flex-wrap gap-2">
                   <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
                   <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Window, e.g. 8–10 AM" value={confirmWindow} onChange={(e) => setConfirmWindow(e.target.value)} />
-                  <Button variant="outline" onClick={() => void runAction("Confirm date", { action: "confirm", booking_id: selected.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow })}>
-                    Confirm date
+                  <Button variant="outline" onClick={() => void runAction("Confirm visit", { action: "confirm", booking_id: selected.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow }, (j) => {
+                        setActionMsg(j["email_sent"] === true
+                          ? "Confirm visit: done. The client confirmation email was sent."
+                          : "Confirm visit: saved, but the confirmation email was NOT delivered — email the client manually or retry.");
+                      })}>
+                    Confirm visit
                   </Button>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2">
@@ -457,7 +504,7 @@ const Owner = () => {
                       onFocus={(e) => e.target.select()}
                       aria-label="Cleaner link (select and copy if the button does not work)"
                     />
-                    <p className="text-xs mb-1">Ready-to-send message for the cleaner — the link stays valid through the visit date + 2 days (at least 14 days). Replacing the link or changing the cleaner revokes the previous one:</p>
+                    <p className="text-xs mb-1">Ready-to-send message for the cleaner — the link stays valid through the visit date + 2 days (at least 14 days). Replacing the link or changing the cleaner revokes the previous one, and a cleaner change emails the client in advance:</p>
                     <textarea
                       readOnly
                       rows={7}
@@ -476,6 +523,28 @@ const Owner = () => {
                       }}
                     >
                       Copy message
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 ml-2"
+                      onClick={() => {
+                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
+                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+                      }}
+                    >
+                      Send via WhatsApp
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 ml-2"
+                      onClick={() => {
+                        const text = cleanerMsg || `Hi! Here is your Gatehouse job link for ${selected.visit_date ?? "the visit"}${selected.address ? ` at ${selected.address}` : ""}:\n${cleanerUrl}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
+                        window.open(`sms:?body=${encodeURIComponent(text)}`, "_blank");
+                      }}
+                    >
+                      Send via SMS
                     </Button>
                   </div>
                 )}

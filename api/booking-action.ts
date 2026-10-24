@@ -216,6 +216,96 @@ function emailButton(href: string, label: string): string {
 const escHtml = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+// Short event email (§12): one thing happened, one action, one button.
+// The HTML body never prints the raw token URL — the button carries it;
+// the plain-text body keeps the full URL for text-only clients.
+export async function sendShortClientEmail(opts: {
+  secretKey: string;
+  customer: { email?: string; name?: string };
+  bookingId: string;
+  subject: string;
+  heading: string;
+  lines: string[];
+  buttonLabel: string;
+  buttonAnchor?: string;
+}): Promise<boolean> {
+  const key = process.env["RESEND_API_KEY"];
+  const email = (opts.customer.email ?? "").trim();
+  if (!key || !email) return false;
+  const firstName = (opts.customer.name ?? "").trim().split(/\s+/)[0] || "there";
+  const visitToken = encryptBookingPayload(bookingLinkSecret(opts.secretKey), {
+    bid: opts.bookingId,
+    email,
+    name: opts.customer.name ?? "",
+    ts: Math.floor(Date.now() / 1000),
+  });
+  const link = `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
+  const bodyText = opts.lines.join("\n\n");
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [email],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: opts.subject,
+        text:
+          `Hi ${firstName},\n\n${opts.heading}.\n\n${bodyText}\n\n${opts.buttonLabel}:\n${link}\n\n` +
+          `Questions? Email hello@gatehousehomecleaning.com.\n\nNick\nGatehouse Home Cleaning\n`,
+        html:
+          `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">` +
+          `<p>Hi ${escHtml(firstName)},</p>` +
+          `<p><strong>${escHtml(opts.heading)}.</strong></p>` +
+          opts.lines.map((l) => `<p>${escHtml(l)}</p>`).join("") +
+          emailButton(link, opts.buttonLabel) +
+          `<p>Questions? Email <a href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>` +
+          `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Payment-failed notice (§12/§13): short, with the retry path. Guarded by
+// a journal event so a retry storm cannot spam the client.
+export async function sendPaymentFailedEmailOnce(
+  secretKey: string,
+  customerId: string,
+  bookingId: string,
+  visitId: string | null,
+): Promise<boolean> {
+  const key = process.env["RESEND_API_KEY"];
+  if (!key || !dbConfigured()) return false;
+  const prior = await dbSelect<{ id: string }>(
+    "gh_events",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&event=eq.payment_failed_email&limit=1`,
+  );
+  if (prior.length > 0) return true;
+  const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
+  const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+  const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+  if (!custEmail) return false;
+  const ok = await sendShortClientEmail({
+    secretKey,
+    customer: { email: custEmail, name: custName },
+    bookingId,
+    subject: "Payment didn't go through — Gatehouse Home Cleaning",
+    heading: "Payment didn't go through",
+    lines: [
+      "We couldn't charge your saved card for your cleaning. Nothing was charged.",
+      "Open your visit page and try again, or save a different card there.",
+    ],
+    buttonLabel: "View my visit",
+    buttonAnchor: "#report",
+  });
+  if (ok) await logEvent(visitId, bookingId, "system", "payment_failed_email", {});
+  return ok;
+}
+
 export async function sendReceiptEmailOnce(
   secretKey: string,
   customerId: string,
@@ -578,8 +668,10 @@ export default async function handler(req: Req, res: Res) {
           const visitLink = `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`;
           const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
           const priceLine = Number.isFinite(cents) && cents > 0
-            ? `\nFirst visit: $${(cents / 100).toFixed(2).replace(/\.00$/, "")}.`
+            ? `\nAgreed price: $${(cents / 100).toFixed(2).replace(/\.00$/, "")} for the first visit.`
             : "";
+          const serviceLine = row?.service ? `\nService: ${row.service}.` : "";
+          const cleanerLine = meta["gh_cleaner_name"] ? `\nCleaner: ${meta["gh_cleaner_name"]}.` : "";
           try {
             const resp = await fetch("https://api.resend.com/emails", {
               method: "POST",
@@ -593,7 +685,7 @@ export default async function handler(req: Req, res: Res) {
                 reply_to: "hello@gatehousehomecleaning.com",
                 subject: `Booking confirmed — ${date}`,
                 text:
-                  `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${priceLine}\n\n` +
+                  `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
                   `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
                   `Your visit page — status, your cleaner, reschedule or cancel:\n${visitLink}\n\n` +
                   "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
@@ -601,10 +693,10 @@ export default async function handler(req: Req, res: Res) {
                   `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
                   `<p>Hi ${escHtml(firstName)},</p>` +
                   `<p><strong>Your cleaning is confirmed.</strong></p>` +
-                  `<p>Date: ${escHtml(date)}<br>Arrival window: ${escHtml(win || "we'll confirm the window by email the day before")}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
+                  `<p>Date: ${escHtml(date)}<br>Arrival window: ${escHtml(win || "we'll confirm the window by email the day before")}${serviceLine ? `<br>${escHtml(serviceLine.replace(/^\n/, ""))}` : ""}${cleanerLine ? `<br>${escHtml(cleanerLine.replace(/^\n/, ""))}` : ""}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
                   `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
                   emailButton(visitLink, "View my visit") +
-                  `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${visitLink}</p>` +
+                  `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
                   `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
                   `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
               }),
@@ -618,6 +710,15 @@ export default async function handler(req: Req, res: Res) {
       }
       if (row && !already) {
         await logEvent(row.id, bookingId, "owner", "visit_confirmed", { date, window: win });
+        // §7/§8: the visit row is a first-class source too. Before this,
+        // confirmation lived only in the journal + shared Stripe metadata,
+        // so the owner list (which reads the row) kept showing "requested"
+        // with no date after the owner had confirmed.
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          status: "confirmed",
+          confirmed_date: date,
+          confirmed_window: win,
+        });
       }
       log("confirm", { booking: bookingId, emailSent, already });
       return json(200, {
@@ -968,7 +1069,7 @@ export default async function handler(req: Req, res: Res) {
             name: custName,
             ts: Math.floor(Date.now() / 1000),
           });
-          const link = `https://www.gatehousehomecleaning.com/report?bt=${token}`;
+          const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
           const cents = amountCents;
           const priceLine = Number.isFinite(cents) && cents > 0
             ? ` Your card is charged $${(cents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`
@@ -992,16 +1093,16 @@ export default async function handler(req: Req, res: Res) {
                 subject: "Your cleaning report is ready",
                 text:
                   `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
-                  `Open it to check every room.${priceLine} If something isn't right, tap "Report a problem" on that page — the charge stays paused while we make it right.\n\n` +
+                  `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
                   `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
                 html:
                   `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
                   `<p>Hi ${escHtml(firstName)},</p>` +
                   `<p><strong>Your cleaning is done — your photo report is ready.</strong></p>` +
-                  `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report a problem" on that page — the charge stays paused while we make it right.</p>` +
+                  `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.</p>` +
                   `<p>If we don't hear from you by <strong>${escHtml(deadline)}</strong>, your card is charged automatically, as agreed in the Terms.</p>` +
-                  emailButton(link, "View photos & approve payment") +
-                  `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${link}</p>` +
+                  emailButton(link, "View report") +
+                  `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
                   `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
               }),
               signal: AbortSignal.timeout(15000),
@@ -1107,7 +1208,7 @@ export default async function handler(req: Req, res: Res) {
                   `Hi ${firstName},\n\nThanks for your request. The date you picked doesn't work on our side` +
                   (alts.length ? ` — here are the closest dates we can do: ${alts.join(", ")}.` : ".") +
                   `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\nhttps://www.gatehousehomecleaning.com/visit?bt=${token}\n\n` +
-                  `Your card stays saved with this request only, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nNick\n\nGatehouse Home Cleaning\n`,
+                  `Your card stays on file, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nNick\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -1134,6 +1235,8 @@ export default async function handler(req: Req, res: Res) {
       if (photo && !photo.startsWith("https://")) {
         return json(400, { ok: false, error: "invalid_photo_url" });
       }
+      const prevCleaner = row?.cleaner_name ?? "";
+      const wasConfirmed = row?.status === "confirmed";
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
@@ -1162,8 +1265,28 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
-      log("set_cleaner", { booking: bookingId });
-      return json(200, { ok: true, cleaner_name: name, ...(rotatedUrl ? { url: rotatedUrl } : {}) });
+      // §8: the client learns about a cleaner change in advance. A
+      // replacement, or a first assignment after confirmation, emails the
+      // client (a first assignment before confirmation is covered by the
+      // confirmation email itself).
+      let cleanerEmailSent = false;
+      if (row && ((prevCleaner && prevCleaner !== name) || (!prevCleaner && wasConfirmed))) {
+        await logEvent(row.id, bookingId, "owner", "cleaner_changed", { from: prevCleaner || null, to: name });
+        cleanerEmailSent = await sendShortClientEmail({
+          secretKey: STRIPE_SECRET_KEY,
+          customer,
+          bookingId,
+          subject: "Your cleaner has changed — Gatehouse Home Cleaning",
+          heading: "Your cleaner has changed",
+          lines: [
+            `Your cleaning will now be done by ${name}.`,
+            "Nothing else about your visit changes — same date, same price.",
+          ],
+          buttonLabel: "View my visit",
+        });
+      }
+      log("set_cleaner", { booking: bookingId, cleanerEmailSent });
+      return json(200, { ok: true, cleaner_name: name, cleaner_email_sent: cleanerEmailSent, ...(rotatedUrl ? { url: rotatedUrl } : {}) });
     }
 
     if (action === "set_access_notes") {

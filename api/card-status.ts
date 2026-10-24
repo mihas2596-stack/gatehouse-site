@@ -205,6 +205,7 @@ type Req = {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
   query?: Record<string, string | string[] | undefined>;
+  body?: unknown;
 };
 type Res = {
   status(code: number): Res;
@@ -263,29 +264,32 @@ async function stripePost(
 // Stripe's own payment-method list is the source of truth. When a card is
 // found there, the metadata cache is backfilled so every other reader
 // (visit page, operator actions, auto-charge) sees the same truth.
+type CardDetails = { id: string; brand: string; last4: string };
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
-): Promise<string> {
+): Promise<CardDetails | null> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
-  if (existing) return existing;
   const res = await stripeGet(
     secretKey,
     `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
   );
-  if (!res.ok) return "";
-  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
-  const pm = list[0]?.id ?? "";
-  if (!pm) return "";
-  const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
-  const state = customer.metadata["gh_state"] ?? "";
-  if (!state || state === "awaiting_card" || state === "card_failed") {
-    patch["metadata[gh_state]"] = "card_ready";
+  if (!res.ok) return null;
+  const list = (res.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
+  const pm = list[0];
+  const pmId = pm?.id ?? existing;
+  if (!pmId) return null;
+  if (!existing) {
+    const patch: Record<string, string> = { "metadata[gh_payment_method]": pmId };
+    const state = customer.metadata["gh_state"] ?? "";
+    if (!state || state === "awaiting_card" || state === "card_failed") {
+      patch["metadata[gh_state]"] = "card_ready";
+    }
+    await stripePost(secretKey, `/customers/${customer.id}`, patch);
+    customer.metadata["gh_payment_method"] = pmId;
+    if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
   }
-  await stripePost(secretKey, `/customers/${customer.id}`, patch);
-  customer.metadata["gh_payment_method"] = pm;
-  if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
-  return pm;
+  return { id: pmId, brand: String(pm?.card?.brand ?? ""), last4: String(pm?.card?.last4 ?? "") };
 }
 
 const fmtMoney = (dollars: string): string => {
@@ -408,7 +412,7 @@ async function maybeSendCardSavedEmail(
     `Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${deadline}.\n\n` +
     `Your request: ${service}${price ? ` \u2014 first visit ${price}` : ""}${date ? ` \u00b7 requested date ${date}` : ""}.\n\n` +
     `${explainer}\n\n` +
-    "To report a problem after the cleaning, open the report link and tap \"Report a problem\" — the charge stays paused while we review it with you.\n\n" +
+    "To report a problem after the cleaning, open the report link and tap \"Report an issue\" — the charge stays paused while we review it with you.\n\n" +
     "Your visit page \u2014 status, your cleaner, reschedule or cancel:\n" +
     `${visitUrl}\n\n` +
     "Nick\n\nGatehouse Home Cleaning\n\nhello@gatehousehomecleaning.com";
@@ -418,9 +422,9 @@ async function maybeSendCardSavedEmail(
     `<p><strong>Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${escHtml(deadline)}.</strong></p>` +
     `<p>Your request: ${escHtml(service)}${price ? ` \u2014 first visit ${escHtml(price)}` : ""}${date ? ` \u00b7 requested date ${escHtml(date)}` : ""}.</p>` +
     `<p>${escHtml(explainer)}</p>` +
-    `<p>To report a problem after the cleaning, open the report link and tap "Report a problem" — the charge stays paused while we review it with you.</p>` +
+    `<p>To report a problem after the cleaning, open the report link and tap "Report an issue" — the charge stays paused while we review it with you.</p>` +
     emailButton(visitUrl, "View my visit") +
-    `<p style="font-size:13px;color:#555;">If the button doesn't work, open this link: ${visitUrl}</p>` +
+    `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
     `<p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p></div>`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -486,6 +490,57 @@ export default async function handler(req: Req, res: Res) {
   }
   for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
 
+  if (req.method === "POST") {
+    // §3: the client explicitly confirms the saved card FOR THIS booking.
+    // A matching email/card in Stripe is never enough on its own — this
+    // call is the explicit confirmation, and it logs a per-booking event
+    // so every surface can prove the choice instead of assuming it.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const btPost = typeof body["bt"] === "string" ? (body["bt"] as string) : "";
+    const action = typeof body["action"] === "string" ? (body["action"] as string) : "";
+    if (action !== "confirm_card" || !btPost) {
+      res.status(400).json({ ok: false, error: "invalid_action" });
+      return;
+    }
+    const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
+    if (!STRIPE_SECRET_KEY) {
+      res.status(500).json({ ok: false, error: "server_error" });
+      return;
+    }
+    const verified = verifyBookingLink(STRIPE_SECRET_KEY, btPost);
+    if (verified.ok === false || !verified.payload) {
+      res.status(403).json({ ok: false, error: "invalid_token" });
+      return;
+    }
+    const bid = verified.payload.bid;
+    const cust = (await findCustomerByBooking(STRIPE_SECRET_KEY, bid))
+      ?? (verified.payload.email ? await findCustomerByEmail(STRIPE_SECRET_KEY, verified.payload.email) : null);
+    if (!cust) {
+      res.status(409).json({ ok: false, error: "no_card" });
+      return;
+    }
+    const card = await reconcileCard(STRIPE_SECRET_KEY, cust);
+    if (!card) {
+      res.status(409).json({ ok: false, error: "no_card" });
+      return;
+    }
+    const row = await latestBookingRow(bid);
+    const events = row ? await bookingEvents(bid) : [];
+    const already = events.some(
+      (e) => e.event === "card_confirmed" && (e.detail?.["payment_method_id"] as string | undefined) === card.id,
+    );
+    if (!already) {
+      await logEvent(row?.id ?? null, bid, "client", "card_confirmed", {
+        payment_method_id: card.id, brand: card.brand, last4: card.last4,
+      });
+      await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
+        visitId: row?.id ?? null,
+        amountCents: row?.amount_cents ?? null,
+      });
+    }
+    res.status(200).json({ ok: true, card_brand: card.brand, card_last4: card.last4 });
+    return;
+  }
   if (req.method !== "GET") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
     return;
@@ -556,15 +611,21 @@ export default async function handler(req: Req, res: Res) {
           const emailCust = !boundCust && p.email ? await findCustomerByEmail(revisitKey, p.email) : null;
           const cust = boundCust ?? emailCust;
           if (cust) {
-            const pm = await reconcileCard(revisitKey, cust);
-            if (pm) {
+            const card = await reconcileCard(revisitKey, cust);
+            if (card) {
               booking.has_card = "1";
               booking.card_state = "card_ready";
-              await maybeSendCardSavedEmail(revisitKey, cust, p, {
-                visitId: row?.id ?? null,
-                amountCents: row?.amount_cents ?? null,
-              });
+              if (card.brand) booking.card_brand = card.brand;
+              if (card.last4) booking.card_last4 = card.last4;
+              // §3: a card on file is NOT a confirmation for this booking.
+              // Only a card_confirmed event (explicit choice, or a
+              // verified Checkout save for this booking) counts.
+              if (events.some((e) => e.event === "card_confirmed")) booking.card_confirmed = "1";
             }
+          }
+          const vcEv = latestEvent(events, "visit_created");
+          if (vcEv?.detail && typeof vcEv.detail["first_service"] === "string" && vcEv.detail["first_service"]) {
+            booking.first_service = vcEv.detail["first_service"] as string;
           }
           if (confirmEv) {
             booking.booking_confirmed = "1";
@@ -660,10 +721,21 @@ export default async function handler(req: Req, res: Res) {
             email: typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : undefined,
             name: typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : undefined,
           };
-          const pm = await reconcileCard(STRIPE_SECRET_KEY, cust);
-          if (pm) {
-            if (booking) booking.has_card = "1";
+          const card = await reconcileCard(STRIPE_SECRET_KEY, cust);
+          if (card) {
+            if (booking) {
+              booking.has_card = "1";
+              booking.card_confirmed = "1";
+              if (card.brand) booking.card_brand = card.brand;
+              if (card.last4) booking.card_last4 = card.last4;
+            }
             const row = bookingId ? await latestBookingRow(bookingId) : null;
+            const evs = bookingId ? await bookingEvents(bookingId) : [];
+            if (!evs.some((e) => e.event === "card_confirmed" && (e.detail?.["payment_method_id"] as string | undefined) === card.id)) {
+              await logEvent(row?.id ?? null, bookingId, "client", "card_confirmed", {
+                payment_method_id: card.id, brand: card.brand, last4: card.last4, via: "checkout_session",
+              });
+            }
             await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
               visitId: row?.id ?? null,
               amountCents: row?.amount_cents ?? null,

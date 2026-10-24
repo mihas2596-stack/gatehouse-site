@@ -40,7 +40,7 @@ describe("/thank-you card states", () => {
   });
 
   it("state C: card saved — all set, no action needed, View my visit", async () => {
-    renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08", has_card: "1" } });
+    renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08", has_card: "1", card_confirmed: "1" } });
     expect(await screen.findByText(/You're all set — your request is received/)).toBeInTheDocument();
     expect(screen.getByText(/Card saved · \$0 charged today/)).toBeInTheDocument();
     expect(screen.getByText(/No further action is needed right now/)).toBeInTheDocument();
@@ -48,6 +48,15 @@ describe("/thank-you card states", () => {
     expect(screen.getByRole("link", { name: "View my visit" })).toBeInTheDocument();
     expect(screen.getByText(/Your card is charged when you approve the report, or automatically 24 hours after we send it/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save card/ })).not.toBeInTheDocument();
+  });
+
+  it("state C2: card on file but not confirmed for this booking — explicit choice", async () => {
+    renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08", has_card: "1", card_brand: "visa", card_last4: "4242" } });
+    expect(await screen.findByText("Use your card on file?")).toBeInTheDocument();
+    expect(screen.getByText(/ending in ••••4242/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use this card for this booking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a different card" })).toBeInTheDocument();
+    expect(screen.queryByText(/Card saved · \$0 charged today/)).not.toBeInTheDocument();
   });
 
   it("state D: card failed — wasn't saved, retry offered, no confirmation claim", async () => {

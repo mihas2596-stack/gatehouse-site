@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
-import { PRICES, ADDONS , fmtPrice} from "@/config/calculator";
+import { PRICES, ADDONS , fmtPrice, scaleTestPrice} from "@/config/calculator";
+import { useEffect, useState } from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 type ServiceCard = {
@@ -56,6 +57,14 @@ const alsoAvailable: ServiceCard[] = [
 ];
 
 const Services = () => {
+  // Owner test sessions (a verified tp1 token on the quote page sets this
+  // flag for the tab) scale these cells to match the calculator — so one
+  // regime never shows two different prices for the same add-on.
+  const [testPricing, setTestPricing] = useState(false);
+  useEffect(() => {
+    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1"); } catch { /* private mode */ }
+  }, []);
+  const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
   return (
     <div className="page-shell">
       <SEO
@@ -122,27 +131,27 @@ const Services = () => {
                 </tr>
                 <tr>
                   <th className="font-semibold">Inside oven</th>
-                  <td>Add-on +${ADDONS.insideOven.price}</td>
+                  <td>Add-on +${disp(ADDONS.insideOven.price)}</td>
                   <td>Included</td>
                   <td>Included</td>
                 </tr>
                 <tr>
                   <th className="font-semibold">Inside fridge</th>
-                  <td>Add-on +${ADDONS.insideFridge.price}</td>
+                  <td>Add-on +${disp(ADDONS.insideFridge.price)}</td>
                   <td>Included</td>
                   <td>Included</td>
                 </tr>
                 <tr>
                   <th className="font-semibold">Inside cabinets &amp; drawers</th>
-                  <td>Add-on +${ADDONS.insideCabinets.price}</td>
+                  <td>Add-on +${disp(ADDONS.insideCabinets.price)}</td>
                   <td>Included</td>
                   <td>Included</td>
                 </tr>
                 <tr>
                   <th className="font-semibold">Interior windows</th>
-                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
-                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
-                  <td>Add-on +${ADDONS.interiorWindow.price} each</td>
+                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
+                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
+                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
                 </tr>
                 <tr>
                   <th className="font-semibold">Price — small / medium / large</th>

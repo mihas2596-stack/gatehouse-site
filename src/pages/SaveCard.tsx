@@ -227,7 +227,7 @@ const SaveCard = () => {
               <li aria-hidden="true" className="text-muted-foreground">→</li>
               <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
               <li aria-hidden="true" className="text-muted-foreground">→</li>
-              <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">3 · Secure your card</li>
+              <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">3 · Save your card — $0 today</li>
             </ol>
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
               Last step: save your card — $0 today
@@ -248,13 +248,20 @@ const SaveCard = () => {
               </p>
             )}
             <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
-              <h2 className="mb-2 font-heading text-lg font-bold">Save your card for your cleaning — $0 today</h2>
+              <h2 className="mb-2 font-heading text-lg font-bold">Why save a card now?</h2>
               <p className="text-base leading-relaxed">
+                Save your card now so you won&apos;t need to enter it again after your cleaning.
+                <strong> $0 charged today.</strong>
+              </p>
+              <p className="mt-2 text-base leading-relaxed">
                 After your cleaning, we&apos;ll email your photo report. We charge the agreed visit
                 price when you approve it, or 24 hours after we send it if you haven&apos;t reported
                 an issue. Reporting an issue within that window pauses the charge until it&apos;s
-                resolved. Your card is only for paying after the cleaning — Gatehouse never sees
-                your full card number.
+                resolved. Your card details are stored securely by Stripe, our payment processor —
+                Gatehouse never sees your full card number.
+              </p>
+              <p className="mt-2 text-base leading-relaxed">
+                Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.
               </p>
               <p className="mt-4 text-sm text-muted-foreground">
                 Free cancellation until 48 hours before your visit; after that a $25 fee applies.
