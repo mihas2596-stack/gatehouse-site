@@ -117,9 +117,26 @@ export default async function handler(req: Req, res: Res) {
       const openedEv = (events as { event: string; created_at: string }[])
         .filter((e) => e.event === "cleaner_link_opened")
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+      const visitConfirmed = (events as { event: string }[])
+        .some((e) => e.event === "visit_confirmed");
+      // Confirmation-email status after the latest confirmation: the
+      // owner panel shows it next to the Schedule block, with a resend
+      // action when delivery failed. Event names only — no addresses.
+      const confirmEmailEvents = (events as { event: string; created_at: string }[])
+        .filter((e) => e.event === "confirmation_email_sent" || e.event === "confirmation_email_failed")
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       return json(200, {
         ok: true,
-        visit: { ...annotateVisit(visit, openedEv?.created_at ?? null), payment_failed: paymentFailed },
+        visit: {
+          ...annotateVisit(visit, openedEv?.created_at ?? null),
+          payment_failed: paymentFailed,
+          visit_confirmed: visitConfirmed,
+          confirmation_email: confirmEmailEvents[0]?.event === "confirmation_email_sent"
+            ? "sent"
+            : confirmEmailEvents[0]?.event === "confirmation_email_failed"
+              ? "failed"
+              : null,
+        },
         photos: photosWithUrls,
         events,
       });
@@ -157,12 +174,24 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const f of fails) failed.add(f.visit_id);
     }
+    // Confirmed visits (batched, like opened/failed): the "Needs review"
+    // signal is a submitted report WITHOUT a confirmation event — row
+    // status alone cannot tell, because submit overwrites it.
+    const confirmed = new Set<string>();
+    if (ids.length > 0) {
+      const confs = await dbSelect<{ visit_id: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.visit_confirmed&limit=500`,
+      );
+      for (const c of confs) confirmed.add(c.visit_id);
+    }
     return json(200, {
       ok: true,
       visits: visits.map((v) => ({
         ...annotateVisit(v, opened.get(v.id) ?? null),
         photo_count: counts.get(v.id) ?? 0,
         payment_failed: failed.has(v.id),
+        visit_confirmed: confirmed.has(v.id),
       })),
     });
   } catch (err) {

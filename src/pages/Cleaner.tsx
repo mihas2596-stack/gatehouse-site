@@ -34,6 +34,7 @@ type CleanerView = {
   photos: Photo[];
   report_status: string;
   editable: boolean;
+  confirmed: boolean;
   owner_note: string | null;
   error?: string;
 };
@@ -242,7 +243,10 @@ const Cleaner = () => {
   }
 
   const v = data.visit;
-  const locked = !data.editable;
+  // Unconfirmed visits are read-only: the cleaner may look, but no
+  // photos, checklist edits, or submit until the owner confirms. The
+  // server enforces the same gate, so this is display, not security.
+  const locked = !data.editable || data.confirmed === false;
 
   return (
     <div className="min-h-screen bg-background">
@@ -255,6 +259,13 @@ const Cleaner = () => {
           {v.window ? <> · {v.window}</> : null}
         </p>
         {v.service && <p className="text-muted-foreground">{v.service}{v.client_first_name ? <> · for {v.client_first_name}</> : null}</p>}
+
+        {data.confirmed === false && (
+          <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
+            <p className="text-sm font-semibold">Visit awaiting confirmation</p>
+            <p className="text-sm text-muted-foreground">The owner has not confirmed this visit yet. You can look around, but photos and the report stay disabled until confirmation arrives.</p>
+          </div>
+        )}
 
         <div className="rounded-xl border border-border bg-card p-4 mt-4 space-y-2">
           {v.address && (
@@ -297,7 +308,7 @@ const Cleaner = () => {
         {data.report_status === "submitted" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report submitted.</p>
+            <p className="font-semibold">Report submitted — awaiting Gatehouse review.</p>
             <p className="text-sm text-muted-foreground">Gatehouse will review it before sharing it with the customer. You&apos;re done here — thank you!</p>
           </div>
         )}

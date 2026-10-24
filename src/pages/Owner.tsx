@@ -30,6 +30,8 @@ type Visit = {
   issue_ever: boolean;
   report_bounced: boolean;
   payment_failed?: boolean;
+  visit_confirmed?: boolean;
+  confirmation_email?: string | null;
   paid_at: string | null;
   is_test: boolean;
   checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
@@ -445,6 +447,18 @@ const Owner = () => {
     }
   };
 
+  const previewClientView = async () => {
+    // Opens the live client page for viewing only: no client action is
+    // taken from a preview (no approve, issue, cancel, or reschedule).
+    if (!selected) return;
+    const j = await act({ action: "preview_link", booking_id: selected.booking_id });
+    if (j.ok && typeof j["visit_url"] === "string") {
+      window.open(j["visit_url"] as string, "_blank");
+    } else {
+      setActionMsg("Couldn't load the client preview — try again.");
+    }
+  };
+
   const replaceCleanerLink = () => {
     if (!selected) return;
     if (selected.cleaner_link_issued && !window.confirm("This will disable the previous link. Send the new link to your cleaner.")) return;
@@ -545,7 +559,13 @@ const Owner = () => {
   // block that needs it. (Issue/bounce flags stay as badges on the row.)
   const attentionItems = (v: Visit): { label: string; focus: FocusBlock }[] => {
     const items: { label: string; focus: FocusBlock }[] = [];
+    // A submitted (or sent) report without a confirmation event is an
+    // inconsistent record: work happened without an agreed visit. It
+    // needs an explicit review-and-repair confirmation, not a routine
+    // date confirmation.
+    const needsReview = !v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent");
     if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "cleaner" });
+    else if (needsReview) items.push({ label: "Needs review", focus: "schedule" });
     else if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") items.push({ label: "Confirm the date", focus: "schedule" });
     if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
     if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
@@ -884,30 +904,62 @@ const Owner = () => {
                 )}
               </section>
 
-              {/* C. Schedule — confirming the date stays separate from assigning the cleaner */}
+              {/* C. Schedule — confirming the visit is the owner's explicit action */}
               <section id="block-schedule" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Schedule</h3>
                 {v.status === "confirmed" && !scheduleEditing ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
-                    <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.visit_date ?? ""); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
-                      Change
-                    </Button>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
+                      <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.visit_date ?? ""); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
+                        Change
+                      </Button>
+                    </div>
+                    {v.confirmation_email === "sent" && <p className="text-sm text-muted-foreground mt-1">Confirmation email: sent.</p>}
+                    {v.confirmation_email === "failed" && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <p className="text-sm text-destructive">Visit confirmed. Confirmation email failed.</p>
+                        <Button variant="outline" size="sm" onClick={() => void runAction("Resend confirmation", { action: "resend_confirmation", booking_id: v.booking_id }, (j) => {
+                          setActionMsg(j["email_sent"] === true ? "Confirmation email sent." : "Confirmation email failed again — check the address and retry.");
+                        })}>
+                          Resend confirmation email
+                        </Button>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>Copy client link</Button>
+                      <Button variant="outline" size="sm" onClick={() => void previewClientView()}>Preview client view</Button>
+                    </div>
                   </div>
+                ) : v.status === "cancelled" || v.status === "paid" ? (
+                  <p className="text-sm text-muted-foreground">This visit is {v.status} — confirmation no longer applies.</p>
                 ) : (
                   <div>
+                    {(!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) && (
+                      <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-3 mb-3">
+                        <p className="text-sm font-semibold">Needs review</p>
+                        <p className="text-sm">This visit has a submitted report but was never confirmed. Confirming below keeps the report in review — use the actual date, window, and cleaner from the run.</p>
+                      </div>
+                    )}
+                    <h4 className="font-semibold mb-2">Confirm this visit</h4>
+                    <dl className="space-y-1 text-sm mb-3">
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Cleaner</dt><dd className="font-semibold text-right">{v.cleaner_name ?? "No cleaner assigned yet — assign one in the Cleaner block above."}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-right">{v.service ?? "—"}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Agreed amount</dt><dd className="font-semibold text-right">{money(v.amount_cents)}</dd></div>
+                    </dl>
                     <div className="flex flex-wrap gap-2">
                       <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
                       <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Window, e.g. 8–10 AM" value={confirmWindow} onChange={(e) => setConfirmWindow(e.target.value)} />
-                      <Button variant="outline" onClick={() => void runAction("Confirm visit", { action: "confirm", booking_id: v.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow }, (j) => {
+                      <Button variant="hero" disabled={acting !== "" || !v.cleaner_name || !confirmDate || !confirmWindow} onClick={() => void runAction("Confirm visit & notify customer", { action: "confirm", booking_id: v.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow, ...((!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) ? { repair: true } : {}) }, (j) => {
                         setScheduleEditing(false);
-                        setActionMsg(j["email_sent"] === true
-                          ? "Confirm visit: done. The client confirmation email was sent."
-                          : "Confirm visit: saved, but the confirmation email was NOT delivered — email the client manually or retry.");
+                        if (j["already_confirmed"] === true) setActionMsg("Already confirmed — no duplicate email sent.");
+                        else if (j["email_sent"] === true) setActionMsg("Visit confirmed. Confirmation email sent.");
+                        else setActionMsg("Visit confirmed. Confirmation email failed.");
                       })}>
-                        Confirm visit
+                        Confirm visit & notify customer
                       </Button>
                     </div>
+                    {!v.cleaner_name && <p className="text-xs text-muted-foreground mt-1">Assign a cleaner first — confirmation requires one.</p>}
                     <p className="text-xs text-muted-foreground mt-1">Confirming emails the client the agreed date and window.</p>
                     <div className="flex flex-wrap gap-2 mt-3">
                       <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={altDate} onChange={(e) => setAltDate(e.target.value)} />

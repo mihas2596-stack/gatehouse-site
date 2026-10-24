@@ -7,6 +7,8 @@ import { verifyBooking } from "../../api/create-checkout-session";
 // It must set the orthogonal gh_booking_confirmed flag (never touching the
 // gh_state charge machine), email the client once, and treat a repeat with
 // the same date/window as a no-op (no second email). A changed date re-emails.
+// Confirmation requires an assigned cleaner and a window; the email subject
+// is "Your cleaning is confirmed — [date]".
 
 const BID = "bid-test-123";
 const CUSTOMER = {
@@ -17,6 +19,7 @@ const CUSTOMER = {
     gh_booking_id: BID,
     gh_state: "card_ready",
     gh_first_price_cents: "18900",
+    gh_cleaner_name: "Test Cleaner",
   },
 };
 
@@ -92,7 +95,7 @@ describe("booking-action confirm", () => {
     expect(resendCalls).toHaveLength(1);
     const emailBody = JSON.parse(String(resendCalls[0])) as { subject: string; text: string; to: string[] };
     expect(emailBody.to).toEqual(["client@example.com"]);
-    expect(emailBody.subject).toContain("Booking confirmed");
+    expect(emailBody.subject).toContain("Your cleaning is confirmed");
     expect(emailBody.text).toContain("Agreed price: $189 for the first visit.");
   });
 

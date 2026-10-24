@@ -113,7 +113,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
   booking_id: z.string().min(1).max(100),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
@@ -122,6 +122,9 @@ const ActionSchema = z.object({
   // confirm / decline_date:
   confirmed_date: z.string().max(20).optional(),
   confirmed_window: z.string().max(80).optional(),
+  // confirm: explicit repair of a visit whose report was submitted
+  // without confirmation (the "Needs review" case).
+  repair: z.boolean().optional(),
   alt_dates: z.array(z.string().min(1).max(20)).max(3).optional(),
   // resolve: agreed re-clean date (YYYY-MM-DD)
   reclean_date: z.string().max(20).optional(),
@@ -631,6 +634,72 @@ async function hydrateCustomerMeta(
   Object.assign(customer.metadata, values);
 }
 
+
+/** A visit counts as confirmed only when the owner confirmed it: the
+ * visit_confirmed journal event is the proof. Row status alone cannot
+ * prove it — submit overwrites status to report_submitted, so a
+ * submitted row may or may not have been confirmed first. */
+async function hasVisitConfirmed(visitId: string): Promise<boolean> {
+  const rows = await dbSelect<{ id: number }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.visit_confirmed&limit=1`,
+  );
+  return rows.length > 0;
+}
+
+/** The owner confirmation email, shared by confirm and resend. Returns
+ * true only when Resend accepted the message — acceptance is not proof
+ * of inbox delivery, and callers must never claim otherwise. */
+async function sendConfirmationEmail(args: {
+  to: string; firstName: string; date: string; win: string;
+  service: string; cleaner: string; cents: number | null; visitLink: string;
+}): Promise<boolean> {
+  const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+  if (!RESEND_API_KEY) return false;
+  const priceLine = args.cents !== null
+    ? `\nAgreed price: $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")} for the first visit.`
+    : "";
+  const serviceLine = args.service ? `\nService: ${args.service}.` : "";
+  const cleanerLine = args.cleaner ? `\nCleaner: ${args.cleaner}.` : "";
+  const amountLine = args.cents !== null
+    ? ` of $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")}`
+    : "";
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [args.to],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: `Your cleaning is confirmed — ${args.date}`,
+        text:
+          `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\nDate: ${args.date}\nArrival window: ${args.win}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
+          `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
+          `Your visit page — status, your cleaner, reschedule or cancel:\n${args.visitLink}\n\n` +
+          "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
+        html:
+          `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
+          `<p>Hi ${escHtml(args.firstName)},</p>` +
+          `<p><strong>Your cleaning is confirmed.</strong></p>` +
+          `<p>Date: ${escHtml(args.date)}<br>Arrival window: ${escHtml(args.win)}${serviceLine ? `<br>${escHtml(serviceLine.replace(/^\n/, ""))}` : ""}${cleanerLine ? `<br>${escHtml(cleanerLine.replace(/^\n/, ""))}` : ""}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
+          `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
+          emailButton(args.visitLink, "View my visit") +
+          `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
+          `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
+          `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
@@ -745,14 +814,40 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "confirm") {
-      // Owner confirms the visit date/window with the client. Orthogonal to
-      // gh_state: the report-approval/charge machine is untouched. Repeating
-      // the same confirmation does not re-email the client; changing the
-      // date or window does (it is a change notification).
+      // Owner confirms the visit date/window with the client. Confirmation
+      // and email delivery are separate results: the saved record decides
+      // success, the email only decides the notification status.
       const date = (parsed.data.confirmed_date ?? "").trim();
       const win = (parsed.data.confirmed_window ?? "").trim();
+      const repair = parsed.data.repair === true;
       if (!date) {
         return json(400, { ok: false, error: "confirmed_date_required" });
+      }
+      if (!win) {
+        return json(400, { ok: false, error: "confirmed_window_required" });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return json(400, { ok: false, error: "invalid_date" });
+      }
+      const cleanerName = (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim();
+      if (!cleanerName) {
+        return json(400, { ok: false, error: "cleaner_required" });
+      }
+      // Transition guard: confirmation is for requested visits, plus the
+      // explicit repair of a visit whose report was submitted without
+      // confirmation (the "Needs review" case). Cancelled/paid visits
+      // never come back through confirm.
+      const rowStatus = row?.status ?? "";
+      if (rowStatus === "cancelled" || rowStatus === "paid") {
+        return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
+      }
+      const wasConfirmed = row
+        ? await hasVisitConfirmed(row.id)
+        : meta["gh_booking_confirmed"] === "1";
+      const reportStatus = row?.report_status ?? "";
+      const needsRepair = !wasConfirmed && (reportStatus === "submitted" || reportStatus === "sent");
+      if (needsRepair && !repair) {
+        return json(409, { ok: false, error: "needs_review" });
       }
       // §7/§8: "already" is per-booking, from the visit ROW. The shared
       // Stripe customer metadata follows the LAST booking for the email,
@@ -767,14 +862,48 @@ export default async function handler(req: Req, res: Res) {
       const already = row
         ? row.status === "confirmed" && row.visit_date === date && (row.window ?? "") === win
         : metaAlready;
+      // Metadata refresh (idempotent): the client page reads confirmation
+      // from metadata, and the shared customer record may currently carry
+      // another booking's values.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_booking_confirmed]": "1",
         "metadata[gh_confirmed_date]": date,
         "metadata[gh_confirmed_window]": win,
       });
-      let emailSent = false;
+      if (already) {
+        // Repeating the same confirmation sends no second email.
+        return json(200, {
+          ok: true,
+          booking_confirmed: true,
+          confirmed_date: date,
+          confirmed_window: win,
+          email_sent: false,
+          already_confirmed: true,
+        });
+      }
+      // Save FIRST: never report success when the record did not persist.
+      // Only EXISTING columns: gh_visits has no confirmed_date /
+      // confirmed_window columns, and a PATCH naming one fails as a
+      // whole. The confirmed date/window become the row's operative
+      // visit_date / window; the requested date stays in the journal.
+      // Report state is untouched: a repair confirmation keeps a
+      // submitted report in review instead of silently dropping it.
+      if (row) {
+        const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          status: "confirmed",
+          visit_date: date,
+          window: win,
+        });
+        if (!rowOk) {
+          logErr("confirm", "visit row update failed");
+          return json(502, { ok: false, error: "db_error" });
+        }
+      }
+      // Email second: a failed send keeps the confirmation and surfaces
+      // as notification status, never as a rolled-back confirmation.
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
-      if (!already && RESEND_API_KEY) {
+      let emailSent = false;
+      if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
         const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
         const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
@@ -786,76 +915,76 @@ export default async function handler(req: Req, res: Res) {
             name: custName,
             ts: Math.floor(Date.now() / 1000),
           });
-          const visitLink = `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`;
           const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
-          const priceLine = Number.isFinite(cents) && cents > 0
-            ? `\nAgreed price: $${(cents / 100).toFixed(2).replace(/\.00$/, "")} for the first visit.`
-            : "";
-          const serviceLine = row?.service ? `\nService: ${row.service}.` : "";
-          const cleanerLine = meta["gh_cleaner_name"] ? `\nCleaner: ${meta["gh_cleaner_name"]}.` : "";
-          try {
-            const resp = await fetch("https://api.resend.com/emails", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${RESEND_API_KEY}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-                to: [custEmail],
-                reply_to: "hello@gatehousehomecleaning.com",
-                subject: `Booking confirmed — ${date}`,
-                text:
-                  `Hi ${firstName},\n\nYour cleaning is confirmed.\n\nDate: ${date}\nArrival window: ${win || "we'll confirm the window by email the day before"}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
-                  `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
-                  `Your visit page — status, your cleaner, reschedule or cancel:\n${visitLink}\n\n` +
-                  "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
-                html:
-                  `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
-                  `<p>Hi ${escHtml(firstName)},</p>` +
-                  `<p><strong>Your cleaning is confirmed.</strong></p>` +
-                  `<p>Date: ${escHtml(date)}<br>Arrival window: ${escHtml(win || "we'll confirm the window by email the day before")}${serviceLine ? `<br>${escHtml(serviceLine.replace(/^\n/, ""))}` : ""}${cleanerLine ? `<br>${escHtml(cleanerLine.replace(/^\n/, ""))}` : ""}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
-                  `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${Number.isFinite(cents) && cents > 0 ? ` of $${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
-                  emailButton(visitLink, "View my visit") +
-                  `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
-                  `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
-                  `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
-              }),
-              signal: AbortSignal.timeout(15000),
-            });
-            emailSent = resp.ok;
-          } catch {
-            emailSent = false;
-          }
+          emailSent = await sendConfirmationEmail({
+            to: custEmail,
+            firstName,
+            date,
+            win,
+            service: row?.service ?? "",
+            cleaner: cleanerName,
+            cents: Number.isFinite(cents) && cents > 0 ? cents : null,
+            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+          });
         }
       }
-      if (row && !already) {
-        await logEvent(row.id, bookingId, "owner", "visit_confirmed", { date, window: win });
-        // §7/§8: the visit row is a first-class source too. Before this,
-        // confirmation lived only in the journal + shared Stripe metadata,
-        // so the owner list (which reads the row) kept showing "requested"
-        // with no date after the owner had confirmed.
-        // Only EXISTING columns: gh_visits has no confirmed_date /
-        // confirmed_window columns, and a PATCH naming one fails as a
-        // whole — which silently left confirmed rows "requested". The
-        // confirmed date/window become the row's operative visit_date /
-        // window; the requested date stays in the journal.
-        const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-          status: "confirmed",
-          visit_date: date,
-          window: win,
-        });
-        if (!rowOk) logErr("confirm", "visit row update failed");
+      if (row) {
+        await logEvent(row.id, bookingId, "owner", "visit_confirmed", { date, window: win, ...(repair ? { repair: true } : {}) });
+        await logEvent(row.id, bookingId, "system", emailSent ? "confirmation_email_sent" : "confirmation_email_failed", {});
       }
-      log("confirm", { booking: bookingId, emailSent, already });
+      log("confirm", { booking: bookingId, emailSent, already: false });
       return json(200, {
         ok: true,
         booking_confirmed: true,
         confirmed_date: date,
         confirmed_window: win,
         email_sent: emailSent,
-        already_confirmed: already,
+        already_confirmed: false,
       });
+    }
+
+    if (action === "resend_confirmation") {
+      // Explicit owner retry of the confirmation email. It never changes
+      // the booking itself and never re-creates the confirmation: one
+      // call sends one email, and only for a visit that was confirmed.
+      const wasConfirmed = row
+        ? await hasVisitConfirmed(row.id)
+        : meta["gh_booking_confirmed"] === "1";
+      if (!wasConfirmed) {
+        return json(409, { ok: false, error: "not_confirmed" });
+      }
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      let emailSent = false;
+      if (RESEND_API_KEY) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        if (custEmail) {
+          const firstName = custName.trim().split(/\s+/)[0] || "there";
+          const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId,
+            email: custEmail,
+            name: custName,
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+          emailSent = await sendConfirmationEmail({
+            to: custEmail,
+            firstName,
+            date: row?.visit_date ?? meta["gh_confirmed_date"] ?? "",
+            win: row?.window ?? meta["gh_confirmed_window"] ?? "",
+            service: row?.service ?? "",
+            cleaner: (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim(),
+            cents: Number.isFinite(cents) && cents > 0 ? cents : null,
+            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+          });
+        }
+      }
+      if (row) {
+        await logEvent(row.id, bookingId, "system", emailSent ? "confirmation_email_sent" : "confirmation_email_failed", {});
+      }
+      log("resend_confirmation", { booking: bookingId, emailSent });
+      return json(200, { ok: true, email_sent: emailSent });
     }
 
     if (action === "dispute") {
@@ -1083,6 +1212,13 @@ export default async function handler(req: Req, res: Res) {
       if (visitRow) {
         if (visitRow.report_status !== "submitted" && visitRow.report_status !== "sent") {
           return json(409, { ok: false, error: "report_not_ready", report_status: visitRow.report_status });
+        }
+        // First publish requires a confirmed visit: a report submitted
+        // without confirmation is a "Needs review" record, and publishing
+        // it would show the client a report for a visit that was never
+        // agreed. Re-sends of an already-published report are exempt.
+        if (visitRow.report_status === "submitted" && !(await hasVisitConfirmed(visitRow.id))) {
+          return json(409, { ok: false, error: "needs_confirmation" });
         }
         if (visitRow.report_status === "submitted" || visitRow.report_status === "sent") {
           // Also for an already-sent report: the photo set must be

@@ -30,7 +30,29 @@ type BookingRow = {
   amount_cents: number | null; cleaner_name: string | null;
   report_sent_at: string | null; report_bounced: boolean | null;
   access_notes: string | null; no_photo_zones: string | null;
+  report_status?: string | null;
+  cleaner_profile?: unknown;
 };
+
+/** Cleaner photo from the per-visit profile (v2): the row is the truth,
+ * because shared Stripe metadata is overwritten by other bookings. */
+function rowCleanerPhoto(row: BookingRow | null): string {
+  const raw = row?.cleaner_profile;
+  if (raw && typeof raw === "object") {
+    const photo = (raw as Record<string, unknown>)["photo"];
+    return typeof photo === "string" ? photo : "";
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        const photo = (parsed as Record<string, unknown>)["photo"];
+        return typeof photo === "string" ? photo : "";
+      }
+    } catch { /* fall through */ }
+  }
+  return "";
+}
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
   if (!dbConfigured()) return null;
@@ -120,7 +142,9 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: bo
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_confirmed_window: evStr(confirmEv, "window"),
     gh_cleaner_name: row.cleaner_name ?? "",
-    gh_cleaner_photo: "",
+    // The row's own profile photo: metadata alone is shared across the
+    // customer's bookings and used to be wiped to "" on every hydrate.
+    gh_cleaner_photo: rowCleanerPhoto(row),
     gh_alt_dates: evStr(proposedEv, "alt_dates"),
     gh_proposed_date: evStr(proposedEv, "date"),
     gh_cancel_scope: evStr(cancelledEv, "scope"),
@@ -545,7 +569,7 @@ export default async function handler(req: Req, res: Res) {
           recurring: money(Number.isFinite(recCents) ? recCents : null),
         },
         cleaner: meta["gh_cleaner_name"]
-          ? { name: meta["gh_cleaner_name"], photo: meta["gh_cleaner_photo"] ?? "" }
+          ? { name: meta["gh_cleaner_name"], photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "" }
           : null,
         alt_dates: (meta["gh_alt_dates"] ?? "").split(",").filter(Boolean),
         cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),
@@ -559,7 +583,12 @@ export default async function handler(req: Req, res: Res) {
         card_confirmed: cardConfirmed,
         // The cleaner has submitted the report and the owner has not
         // published it yet: the customer's review period has NOT started.
-        report_preparing: Boolean(row && row.report_status === "submitted" && !row.report_sent_at),
+        // Gated on confirmation: a report submitted for a visit that was
+        // never confirmed must NOT render as "cleaning complete" next to
+        // "awaiting confirmation" — that contradiction was the reported
+        // break. Unpublished reports stay invisible to the client either
+        // way; this flag only drives the "preparing" note.
+        report_preparing: Boolean(row && row.report_status === "submitted" && !row.report_sent_at && latestEvent(events, "visit_confirmed")),
         // Internal scope-review flag, surfaced to the customer only as a
         // plain explanation (the agreed price never changes silently).
         scope_review_needed: Boolean(latestEvent(events, "scope_review")),

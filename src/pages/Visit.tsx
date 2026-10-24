@@ -293,6 +293,17 @@ const Visit = () => {
     void load();
   }, [load]);
 
+  // An already-open client page must pick up the owner's confirmation
+  // without a manual reload: refetch when the tab becomes visible again.
+  // No polling, no extra infrastructure — one fetch on return.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [load]);
+
   const post = async (payload: Record<string, unknown>) => {
     setBusy(true);
     setError("");
@@ -350,6 +361,11 @@ const Visit = () => {
   if (b.window) rows.push(["Arrival window (Atlanta time)", b.window]);
   if (b.first) rows.push(["First visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
+  // Payment-method status without full details: brand + last 4 only,
+  // shown once the card is confirmed for this booking.
+  if (data?.card_confirmed && data.card_last4 && data.state !== "cancelled") {
+    rows.push(["Payment method", `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} on file ••••${data.card_last4}`]);
+  }
 
   return (
     <div className="page-shell min-h-[80vh] bg-background">

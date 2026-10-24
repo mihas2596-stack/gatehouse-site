@@ -177,6 +177,18 @@ async function photosOf(visitId: string): Promise<PhotoRow[]> {
   );
 }
 
+/** A visit counts as confirmed only when the owner confirmed it: the
+ * visit_confirmed journal event is the proof. Row status alone cannot
+ * prove it — submit overwrites status to report_submitted, so a
+ * submitted row may or may not have been confirmed first. */
+async function visitConfirmed(visitId: string): Promise<boolean> {
+  const rows = await dbSelect<{ id: number }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.visit_confirmed&limit=1`,
+  );
+  return rows.length > 0;
+}
+
 async function view(visit: VisitRow) {
   const photos = await photosOf(visit.id);
   const withUrls = await Promise.all(
@@ -202,6 +214,7 @@ async function view(visit: VisitRow) {
   const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
   return {
     ok: true,
+    confirmed: await visitConfirmed(visit.id),
     visit: {
       service: visit.service,
       date: visit.visit_date,
@@ -270,6 +283,16 @@ export default async function handler(req: Req, res: Res) {
     const resolved = await resolveVisit(ct);
     if ("error" in resolved) return json(resolved.status, { ok: false, error: resolved.error });
     const visit = resolved.visit;
+
+    // Pipeline gate: no ordinary work on an unconfirmed or cancelled
+    // booking. Starting work (checklist/photos) and finishing it (submit)
+    // both require the owner's confirmation first — otherwise the client
+    // page ends up showing "awaiting confirmation" and "cleaning
+    // complete" at the same time. Cancelled bookings never reach here
+    // with a live link, but the status check keeps the gate explicit.
+    if (visit.status === "cancelled" || !(await visitConfirmed(visit.id))) {
+      return json(409, { ok: false, error: "visit_not_confirmed" });
+    }
 
     if (!EDITABLE.has(visit.report_status) && action !== "submit") {
       return json(409, { ok: false, error: "report_locked", report_status: visit.report_status });
