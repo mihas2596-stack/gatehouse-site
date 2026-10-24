@@ -557,7 +557,10 @@ export default async function handler(req: Req, res: Res) {
         ok: true,
         state: deriveVisitState(meta),
         booking: {
-          service: payload.service ?? "",
+          // Service falls back to the visit row: owner-minted and report
+          // links carry no service in their payload, so without this the
+          // client page shows no service at all on those visits.
+          service: payload.service || (row as unknown as { service?: string } | null)?.service || "",
           // §5: the server-recorded first-visit service ("deep" when the
           // client answered No to recent professional cleaning) — the
           // label every surface must show, not the form's "Standard".
