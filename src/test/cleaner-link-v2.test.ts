@@ -369,11 +369,13 @@ describe("booking-action cleaner links", () => {
     expect(rows[0]["cleaner_link_issuance"]).toBe(firstIssuance);
     expect((rows[0]["cleaner_profile"] as Row)["phone"]).toBe("+1 404 555 0199");
 
-    // Different person: old access revoked, profile NOT carried over.
+    // A different person by free text is refused: assignments go through
+    // the roster (cleaner_id), so an unlisted name can never take a visit.
     const r3 = await call({ action: "set_cleaner", booking_id: BID, cleaner_name: "Bea" });
-    expect(r3.body["ok"]).toBe(true);
-    expect(rows[0]["cleaner_link_issuance"]).not.toBe(firstIssuance);
-    expect(rows[0]["cleaner_profile"]).toEqual({ phone: null, photo: null });
+    expect(r3.code).toBe(400);
+    expect(r3.body["error"]).toBe("cleaner_id_required");
+    expect(rows[0]["cleaner_name"]).toBe("Ana");
+    expect(rows[0]["cleaner_link_issuance"]).toBe(firstIssuance);
   });
 
   it("set_cleaner validates phone and photo", async () => {

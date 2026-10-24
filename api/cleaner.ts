@@ -28,6 +28,7 @@ import {
   tokenHashEquals,
 } from "./_db.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
+import { createHash, createCipheriv, randomBytes } from "node:crypto";
 
 type Req = {
   method?: string;
@@ -58,6 +59,9 @@ type VisitRow = {
   no_photo_zones: string | null;
   checklist: Checklist;
   report_status: string;
+  issue_open?: boolean | null;
+  amount_cents?: number | null;
+  client_email?: string | null;
   cleaner_token_hash: string | null;
   cleaner_token_expires: string | null;
   cleaner_link_version?: string | null;
@@ -233,6 +237,207 @@ async function view(visit: VisitRow) {
   };
 }
 
+const STRIPE_API = "https://api.stripe.com/v1";
+
+async function stripeGet(
+  secretKey: string,
+  path: string,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const response = await fetch(`${STRIPE_API}${path}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${secretKey}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    /* ignore */
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+async function stripePost(
+  secretKey: string,
+  path: string,
+  params: Record<string, string>,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const response = await fetch(`${STRIPE_API}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(15000),
+  });
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    /* ignore */
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+async function findCustomerByBooking(
+  secretKey: string,
+  bookingId: string,
+): Promise<{ id: string } | null> {
+  const q = `metadata['gh_booking_id']:'${bookingId}'`;
+  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query: q, limit: "1" })}`);
+  if (res.ok && Array.isArray(res.data["data"]) && res.data["data"].length > 0) {
+    const c = res.data["data"][0] as { id?: string };
+    if (c.id) return { id: c.id };
+  }
+  const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
+  if (listRes.ok && Array.isArray(listRes.data["data"])) {
+    for (const c of listRes.data["data"] as Array<{ id?: string; metadata?: Record<string, string> }>) {
+      if (c.id && c.metadata?.["gh_booking_id"] === bookingId) return { id: c.id };
+    }
+  }
+  return null;
+}
+
+// v2 booking-link minting (same scheme as booking-action /
+// send-contact-email): the report email links the client to
+// /visit?bt=...#report.
+type BookingPayload = { bid: string; email: string; name: string; ts: number };
+
+function encryptBookingPayload(secret: string, payload: BookingPayload): string {
+  const key = createHash("sha256").update(`gatehouse-booking-link:${secret}`).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2.${Buffer.concat([iv, tag, ct]).toString("base64url")}`;
+}
+
+const escHtml = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Publish a finished report straight to the client: the row moves to
+ * report_sent, the 24h Terms clock starts from the publish time, and
+ * the client gets the "Your cleaning report is ready" email — the same
+ * email the owner's manual publish used to send. A failed email does
+ * NOT start the clock: the report is marked bounced, auto-charge skips
+ * it, and the owner re-sends from the panel. Returns ok:false when the
+ * publish itself cannot happen (no customer, no pinned amount, an open
+ * issue) — the caller then falls back to the owner review queue. */
+async function publishReportToClient(
+  visit: VisitRow,
+  photos: PhotoRow[],
+): Promise<{ ok: true; email_sent: boolean; version: number; sent_at: string } | { ok: false; error: string }> {
+  const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
+  if (!STRIPE_SECRET_KEY) return { ok: false, error: "stripe_not_configured" };
+  const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, visit.booking_id);
+  if (!customer) return { ok: false, error: "customer_not_found" };
+  const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+  const meta = (custRes.data["metadata"] ?? {}) as Record<string, string>;
+  if (meta["gh_issue_open"] === "1") return { ok: false, error: "issue_open" };
+  const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+  const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+  const amountCents = visit.amount_cents ?? parseInt(meta["gh_first_price_cents"] ?? "", 10);
+  if (!Number.isFinite(amountCents) || amountCents <= 0) return { ok: false, error: "quote_missing" };
+  const version = (parseInt(meta["gh_report_version"] ?? "0", 10) || 0) + 1;
+  const sentAt = new Date().toISOString();
+  const photoHash = createHash("sha256").update(photos.map((p) => p.storage_path).join("|")).digest("hex").slice(0, 16);
+  const params: Record<string, string> = {
+    "metadata[gh_state]": "report_sent",
+    "metadata[gh_issue_open]": "",
+    "metadata[gh_issue_reason]": "",
+    "metadata[gh_report_sent_at]": sentAt,
+    "metadata[gh_report_version]": String(version),
+    "metadata[gh_report_amount_cents]": String(amountCents),
+    "metadata[gh_report_bounced]": "",
+    "metadata[gh_rp_hash]": photoHash,
+    "metadata[gh_rp_source]": "db",
+  };
+  for (let i = 0; i < 4; i++) params[`metadata[gh_rp_${i}]`] = "";
+  await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+  let emailSent = false;
+  let reportEmailId = "";
+  const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+  if (RESEND_API_KEY && custEmail) {
+    const firstName = custName.trim().split(/\s+/)[0] || "there";
+    const token = encryptBookingPayload(process.env["BOOKING_LINK_SECRET"] || STRIPE_SECRET_KEY, {
+      bid: visit.booking_id,
+      email: custEmail,
+      name: custName,
+      ts: Math.floor(Date.now() / 1000),
+    });
+    const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
+    const priceLine = ` Your card is charged $${(amountCents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`;
+    const deadline = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    }).format(new Date(Date.parse(sentAt) + 24 * 3600 * 1000));
+    try {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+          to: [custEmail],
+          reply_to: "hello@gatehousehomecleaning.com",
+          subject: "Your cleaning report is ready",
+          text:
+            `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
+            `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
+            `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
+          html:
+            `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
+            `<p>Hi ${escHtml(firstName)},</p>` +
+            `<p><strong>Your cleaning is done — your photo report is ready.</strong></p>` +
+            `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.</p>` +
+            `<p>If we don't hear from you by <strong>${escHtml(deadline)}</strong>, your card is charged automatically, as agreed in the Terms.</p>` +
+            `<p><a href="${escHtml(link)}" style="display:inline-block;background:#1a56db;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">View report</a></p>` +
+            `<p style="font-size:13px;color:#555;">If the button doesn't work, use the link in the plain-text version of this email.</p>` +
+            `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      emailSent = resp.ok;
+      if (resp.ok) {
+        try {
+          const j = (await resp.json()) as { id?: string };
+          if (typeof j.id === "string" && j.id) {
+            reportEmailId = j.id;
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+              "metadata[gh_report_email_id]": j.id,
+            });
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
+    } catch {
+      emailSent = false;
+    }
+  }
+  if (!emailSent) {
+    // The client cannot see the report, so the 24h clock must NOT run.
+    await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      "metadata[gh_report_bounced]": "1",
+    });
+  }
+  await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
+    report_status: "sent",
+    report_sent_at: sentAt,
+    report_email_id: reportEmailId || null,
+    report_bounced: !emailSent,
+    status: "report_sent",
+  });
+  await logEvent(visit.id, visit.booking_id, "cleaner", "report_sent", {
+    version, email_sent: emailSent, photos: photos.length, auto: true,
+  });
+  return { ok: true, email_sent: emailSent, version, sent_at: sentAt };
+}
+
 async function sendOwnerEmail(subject: string, text: string): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   if (!key) return false;
@@ -393,16 +598,50 @@ export default async function handler(req: Req, res: Res) {
         photos: photos.length,
         problem_note: checklist.problem_note ?? null,
       });
+      // Auto-publish: the finished report goes straight to the client —
+      // no mandatory owner step between the cleaner's finish and the
+      // client's report. Exceptions stay with the owner: an open issue
+      // holds the report in the review queue, and a failed publish falls
+      // back to the same queue instead of starting an invisible clock.
+      const held = visit.issue_open === true;
+      if (held) {
+        const emailed = await sendOwnerEmail(
+          `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
+          `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
+        );
+        if (!emailed) {
+          await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
+            what: "report_submitted",
+          });
+        }
+        return json(200, { ok: true, published: false, held: true });
+      }
+      const published = await publishReportToClient(visit, photos);
+      if (!published.ok) {
+        await logEvent(visit.id, visit.booking_id, "system", "report_publish_failed", {
+          error: published.error,
+        });
+        const emailed = await sendOwnerEmail(
+          `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
+          `The cleaner submitted the photo report, but automatic publishing failed (${published.error}). The report is waiting in the owner review queue — publish it from the owner panel.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}`,
+        );
+        if (!emailed) {
+          await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
+            what: "report_submitted",
+          });
+        }
+        return json(200, { ok: true, published: false, publish_error: published.error });
+      }
       const emailed = await sendOwnerEmail(
-        `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
-        `The cleaner submitted the photo report for review.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to review and send it to the client.`,
+        `Report published to client — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
+        `The cleaner finished the visit and the photo report went straight to the client — no action needed.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\nReport email to the client: ${published.email_sent ? "sent" : "FAILED — the 24h clock is blocked; re-send it from the owner panel."}\n\nOpen the owner view to see the report and its notification status.`,
       );
       if (!emailed) {
         await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
-          what: "report_submitted",
+          what: "report_published",
         });
       }
-      return json(200, { ok: true });
+      return json(200, { ok: true, published: true, email_sent: published.email_sent });
     }
 
     return json(400, { ok: false, error: "invalid_action" });

@@ -34,6 +34,28 @@ type BookingRow = {
   cleaner_profile?: unknown;
 };
 
+/** Cleaner work phone from the per-visit profile (v2): the row is the
+ * truth, because shared Stripe metadata is overwritten by other
+ * bookings. Only the assigned cleaner's work contact is ever shown to
+ * the client — never any other contact data. */
+export function rowCleanerPhone(row: BookingRow | null): string {
+  const raw = row?.cleaner_profile;
+  if (raw && typeof raw === "object") {
+    const phone = (raw as Record<string, unknown>)["phone"];
+    return typeof phone === "string" ? phone : "";
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        const phone = (parsed as Record<string, unknown>)["phone"];
+        return typeof phone === "string" ? phone : "";
+      }
+    } catch { /* fall through */ }
+  }
+  return "";
+}
+
 /** Cleaner photo from the per-visit profile (v2): the row is the truth,
  * because shared Stripe metadata is overwritten by other bookings. */
 function rowCleanerPhoto(row: BookingRow | null): string {
@@ -572,7 +594,7 @@ export default async function handler(req: Req, res: Res) {
           recurring: money(Number.isFinite(recCents) ? recCents : null),
         },
         cleaner: meta["gh_cleaner_name"]
-          ? { name: meta["gh_cleaner_name"], photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "" }
+          ? { name: meta["gh_cleaner_name"], photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "", phone: rowCleanerPhone(row) }
           : null,
         alt_dates: (meta["gh_alt_dates"] ?? "").split(",").filter(Boolean),
         cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),

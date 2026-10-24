@@ -269,7 +269,12 @@ const Cleaner = () => {
 
         <div className="rounded-xl border border-border bg-card p-4 mt-4 space-y-2">
           {v.address && (
-            <p className="text-sm"><span className="font-semibold">Address:</span> {v.address}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm"><span className="font-semibold">Address:</span> {v.address}</p>
+              <a className="text-sm underline shrink-0" target="_blank" rel="noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.address)}`}>
+                Open in Maps
+              </a>
+            </div>
           )}
           {v.access_notes && (
             <p className="text-sm"><span className="font-semibold">Access:</span> {v.access_notes}</p>
@@ -315,8 +320,8 @@ const Cleaner = () => {
         {data.report_status === "sent" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report published.</p>
-            <p className="text-sm text-muted-foreground">Gatehouse reviewed this report and shared it with the customer. You&apos;re done here — thank you!</p>
+            <p className="font-semibold">Report sent to the client.</p>
+            <p className="text-sm text-muted-foreground">The client has received the photos and checklist. You&apos;re done here — thank you!</p>
           </div>
         )}
 
@@ -565,10 +570,10 @@ const Cleaner = () => {
               </p>
             )}
             <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy} onClick={() => void submit()}>
-              {busy ? "Sending…" : "Submit report for review"}
+              {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              Your draft saves automatically — you can close this page and come back.
+              Sending publishes the report to the client right away. Your draft saves automatically — you can close this page and come back.
             </p>
           </>
         )}

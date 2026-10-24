@@ -2,6 +2,7 @@
 //   GET /api/owner?view=list              → latest visits + photo counts
 //   GET /api/owner?view=detail&visit_id=  → one visit: photos (signed URLs),
 //                                           checklist, event history
+//   GET /api/owner?view=roster            → the cleaner directory
 // Auth: ADMIN_TOKEN (Bearer), same as booking-action. All WRITE actions
 // stay in booking-action (confirm, set_cleaner, cleaner_link,
 // return_report, send_report, charge) — this endpoint never mutates.
@@ -89,6 +90,15 @@ export default async function handler(req: Req, res: Res) {
 
   try {
     const viewName = typeof req.query?.["view"] === "string" ? (req.query["view"] as string) : "list";
+    if (viewName === "roster") {
+      // The cleaner directory: only owner-selected people, never the
+      // raw Indeed applicant pool. No client data lives here.
+      const cleaners = await dbSelect(
+        "gh_cleaners",
+        "order=name.asc&limit=200",
+      );
+      return json(200, { ok: true, cleaners });
+    }
     if (viewName === "detail") {
       const visitId = typeof req.query?.["visit_id"] === "string" ? (req.query["visit_id"] as string) : "";
       if (!/^[0-9a-f-]{36}$/i.test(visitId)) return json(400, { ok: false, error: "invalid_visit" });
@@ -119,6 +129,14 @@ export default async function handler(req: Req, res: Res) {
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
       const visitConfirmed = (events as { event: string }[])
         .some((e) => e.event === "visit_confirmed");
+      const requestApproved = (events as { event: string }[])
+        .some((e) => e.event === "request_approved");
+      // Report-email status after the latest publish (manual or
+      // automatic): the owner panel shows it next to the Report block,
+      // with a re-send action when delivery failed.
+      const reportEmailEvents = (events as { event: string; detail: { email_sent?: boolean } | null; created_at: string }[])
+        .filter((e) => e.event === "report_sent")
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       // Confirmation-email status after the latest confirmation: the
       // owner panel shows it next to the Schedule block, with a resend
       // action when delivery failed. Event names only — no addresses.
@@ -131,6 +149,12 @@ export default async function handler(req: Req, res: Res) {
           ...annotateVisit(visit, openedEv?.created_at ?? null),
           payment_failed: paymentFailed,
           visit_confirmed: visitConfirmed,
+          request_approved: requestApproved,
+          report_email: reportEmailEvents.length === 0
+            ? null
+            : reportEmailEvents[0]?.detail?.email_sent === true
+              ? "sent"
+              : "failed",
           confirmation_email: confirmEmailEvents[0]?.event === "confirmation_email_sent"
             ? "sent"
             : confirmEmailEvents[0]?.event === "confirmation_email_failed"
@@ -185,6 +209,14 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const c of confs) confirmed.add(c.visit_id);
     }
+    const approved = new Set<string>();
+    if (ids.length > 0) {
+      const apprs = await dbSelect<{ visit_id: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.request_approved&limit=500`,
+      );
+      for (const a of apprs) approved.add(a.visit_id);
+    }
     return json(200, {
       ok: true,
       visits: visits.map((v) => ({
@@ -192,6 +224,7 @@ export default async function handler(req: Req, res: Res) {
         photo_count: counts.get(v.id) ?? 0,
         payment_failed: failed.has(v.id),
         visit_confirmed: confirmed.has(v.id),
+        request_approved: approved.has(v.id),
       })),
     });
   } catch (err) {

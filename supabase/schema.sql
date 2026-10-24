@@ -68,3 +68,19 @@ create index if not exists gh_events_visit_idx on gh_events(visit_id);
 alter table gh_visits enable row level security;
 alter table gh_photos enable row level security;
 alter table gh_events enable row level security;
+
+-- Minimal-flow roster (2026-10-24): the cleaner directory. Only
+-- owner-selected people go here — never the raw Indeed applicant pool.
+-- Assignment runs on the roster's stable ID; the per-visit snapshot
+-- (name/phone/photo) stays on gh_visits.cleaner_profile.
+create table if not exists gh_cleaners (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  phone text,
+  photo_url text,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+alter table gh_visits add column if not exists cleaner_id uuid references gh_cleaners(id) on delete set null;
+create index if not exists gh_visits_cleaner_id_idx on gh_visits(cleaner_id);
+alter table gh_cleaners enable row level security;

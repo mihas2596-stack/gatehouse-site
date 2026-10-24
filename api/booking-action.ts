@@ -113,8 +113,10 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete"]),
-  booking_id: z.string().min(1).max(100),
+  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
+  // Roster actions carry no booking; the handler enforces booking_id
+  // for every other action after the roster branch.
+  booking_id: z.string().min(1).max(100).optional(),
   // charge only:
   amount_cents: z.number().int().positive().max(200000).optional(), // sanity cap $2000
   report_version: z.number().int().positive().max(1000).optional(),
@@ -142,6 +144,11 @@ const ActionSchema = z.object({
   // issue together with the re-send (C3 — never silently).
   resolve_issue: z.boolean().optional(),
   cleaner_photo: z.string().max(1000).optional(),
+  // assign_confirm / set_cleaner / roster_update: stable roster ID.
+  cleaner_id: z.string().max(50).optional(),
+  // roster_update: active flag; roster_import: pasted CSV text.
+  active: z.boolean().optional(),
+  csv: z.string().max(20000).optional(),
   // send_report only: photo URLs, optionally with room + note per photo.
   photos: z.array(z.union([
     z.string().min(1).max(1000),
@@ -647,6 +654,76 @@ async function hasVisitConfirmed(visitId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** The owner's "Approve request" step (distinct from confirming the
+ * visit): recorded as a journal event, never as a claim that a cleaner
+ * is assigned or the date is final. */
+async function hasRequestApproved(visitId: string): Promise<boolean> {
+  const rows = await dbSelect<{ id: number }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.request_approved&limit=1`,
+  );
+  return rows.length > 0;
+}
+
+type RosterRow = {
+  id: string;
+  name: string;
+  phone: string | null;
+  photo_url: string | null;
+  active: boolean;
+};
+
+async function findRosterCleaner(cleanerId: string): Promise<RosterRow | null> {
+  const rows = await dbSelect<RosterRow>(
+    "gh_cleaners",
+    `id=eq.${encodeURIComponent(cleanerId)}&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+
+/** Parse a pasted roster CSV (the Indeed transfer path: the employer
+ * dashboard export pasted into the panel). Columns: name, phone,
+ * photo URL, active. A header row is skipped when its first cell reads
+ * "name". Returns valid rows plus per-line errors; callers import only
+ * the valid rows. */
+function parseRosterCsv(csv: string): {
+  rows: { name: string; phone: string | null; photo_url: string | null; active: boolean }[];
+  errors: { line: number; error: string }[];
+} {
+  const rows: { name: string; phone: string | null; photo_url: string | null; active: boolean }[] = [];
+  const errors: { line: number; error: string }[] = [];
+  const lines = csv.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = (lines[i] ?? "").trim();
+    if (!raw) continue;
+    const cells = raw.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+    if (i === 0 && cells[0]?.toLowerCase() === "name") continue;
+    const name = cells[0] ?? "";
+    const phone = cells[1] ?? "";
+    const photo = cells[2] ?? "";
+    const activeRaw = (cells[3] ?? "").toLowerCase();
+    if (!name) {
+      errors.push({ line: i + 1, error: "missing_name" });
+      continue;
+    }
+    if (phone && !validCleanerPhone(phone)) {
+      errors.push({ line: i + 1, error: "invalid_phone" });
+      continue;
+    }
+    if (photo && !photo.startsWith("https://")) {
+      errors.push({ line: i + 1, error: "invalid_photo_url" });
+      continue;
+    }
+    rows.push({
+      name: name.slice(0, 80),
+      phone: phone || null,
+      photo_url: photo || null,
+      active: !(activeRaw === "false" || activeRaw === "no" || activeRaw === "0"),
+    });
+  }
+  return { rows, errors };
+}
+
 /** The owner confirmation email, shared by confirm and resend. Returns
  * true only when Resend accepted the message — acceptance is not proof
  * of inbox delivery, and callers must never claim otherwise. */
@@ -749,6 +826,67 @@ export default async function handler(req: Req, res: Res) {
       return json(400, { ok: false, error: "invalid_request" });
     }
     const { action, booking_id: bookingId } = parsed.data;
+
+    // Roster actions carry no booking: they run before the per-booking
+    // customer/row resolution below (which would 404 without a booking).
+    if (action === "roster_add" || action === "roster_update" || action === "roster_import") {
+      if (action === "roster_add") {
+        const name = (parsed.data.cleaner_name ?? "").trim();
+        if (!name) return json(400, { ok: false, error: "cleaner_name_required" });
+        const phone = (parsed.data.cleaner_phone ?? "").trim();
+        if (phone && !validCleanerPhone(phone)) return json(400, { ok: false, error: "invalid_phone" });
+        const photo = (parsed.data.cleaner_photo ?? "").trim();
+        if (photo && !photo.startsWith("https://")) return json(400, { ok: false, error: "invalid_photo_url" });
+        const created = await dbInsert<RosterRow>("gh_cleaners", {
+          name: name.slice(0, 80),
+          phone: phone || null,
+          photo_url: photo || null,
+          active: parsed.data.active !== false,
+        });
+        if (!created) return json(502, { ok: false, error: "db_error" });
+        return json(200, { ok: true, cleaner: created });
+      }
+      if (action === "roster_update") {
+        const cleanerId = (parsed.data.cleaner_id ?? "").trim();
+        if (!cleanerId) return json(400, { ok: false, error: "cleaner_id_required" });
+        const existing = await findRosterCleaner(cleanerId);
+        if (!existing) return json(404, { ok: false, error: "cleaner_not_found" });
+        const patch: Record<string, unknown> = {};
+        if (parsed.data.cleaner_name !== undefined) {
+          const name = parsed.data.cleaner_name.trim();
+          if (!name) return json(400, { ok: false, error: "cleaner_name_required" });
+          patch["name"] = name.slice(0, 80);
+        }
+        if (parsed.data.cleaner_phone !== undefined) {
+          const phone = parsed.data.cleaner_phone.trim();
+          if (phone && !validCleanerPhone(phone)) return json(400, { ok: false, error: "invalid_phone" });
+          patch["phone"] = phone || null;
+        }
+        if (parsed.data.cleaner_photo !== undefined) {
+          const photo = parsed.data.cleaner_photo.trim();
+          if (photo && !photo.startsWith("https://")) return json(400, { ok: false, error: "invalid_photo_url" });
+          patch["photo_url"] = photo || null;
+        }
+        if (parsed.data.active !== undefined) patch["active"] = parsed.data.active;
+        if (Object.keys(patch).length === 0) return json(400, { ok: false, error: "nothing_to_update" });
+        const ok = await dbUpdate("gh_cleaners", `id=eq.${encodeURIComponent(cleanerId)}`, patch);
+        if (!ok) return json(502, { ok: false, error: "db_error" });
+        return json(200, { ok: true, cleaner: { ...existing, ...patch } });
+      }
+      // roster_import
+      const csv = (parsed.data.csv ?? "").trim();
+      if (!csv) return json(400, { ok: false, error: "csv_required" });
+      const { rows: importRows, errors } = parseRosterCsv(csv);
+      if (importRows.length > 50) return json(400, { ok: false, error: "too_many_rows" });
+      let imported = 0;
+      for (const r of importRows) {
+        const created = await dbInsert("gh_cleaners", r);
+        if (created) imported++;
+        else errors.push({ line: 0, error: "db_error" });
+      }
+      return json(200, { ok: true, imported, errors });
+    }
+    if (!bookingId) return json(400, { ok: false, error: "invalid_request" });
 
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
     const row = await latestBookingRow(bookingId);
@@ -943,6 +1081,154 @@ export default async function handler(req: Req, res: Res) {
       });
     }
 
+    if (action === "assign_confirm") {
+      // One step: assign a roster cleaner AND confirm the visit. The
+      // assignment runs on the roster's stable ID (never free text for a
+      // new assignment), and the confirmation email carries the roster
+      // cleaner's name. Repeat clicks with the same cleaner/date/window
+      // are a no-op — no duplicate email, no link rotation.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const cleanerId = (parsed.data.cleaner_id ?? "").trim();
+      if (!cleanerId) return json(400, { ok: false, error: "cleaner_id_required" });
+      const date = (parsed.data.confirmed_date ?? "").trim();
+      const win = (parsed.data.confirmed_window ?? "").trim();
+      const repair = parsed.data.repair === true;
+      if (!date) return json(400, { ok: false, error: "confirmed_date_required" });
+      if (!win) return json(400, { ok: false, error: "confirmed_window_required" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json(400, { ok: false, error: "invalid_date" });
+      const roster = await findRosterCleaner(cleanerId);
+      if (!roster) return json(404, { ok: false, error: "cleaner_not_found" });
+      if (!roster.active) return json(409, { ok: false, error: "cleaner_inactive" });
+      const name = roster.name;
+      const rowStatus = row.status ?? "";
+      if (rowStatus === "cancelled" || rowStatus === "paid") {
+        return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
+      }
+      const wasConfirmed = await hasVisitConfirmed(row.id);
+      const reportStatus = row.report_status ?? "";
+      const needsRepair = !wasConfirmed && (reportStatus === "submitted" || reportStatus === "sent");
+      if (needsRepair && !repair) {
+        return json(409, { ok: false, error: "needs_review" });
+      }
+      const prevCleaner = row.cleaner_name ?? "";
+      const rowCleanerId = (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null;
+      const changed = Boolean(prevCleaner) && prevCleaner !== name;
+      const firstAssignment = !prevCleaner;
+      const already =
+        rowStatus === "confirmed" &&
+        row.visit_date === date &&
+        (row.window ?? "") === win &&
+        (rowCleanerId === cleanerId || (!rowCleanerId && prevCleaner === name));
+      // Metadata refresh (idempotent): the client page reads
+      // confirmation from metadata, and the shared customer record may
+      // currently carry another booking's values.
+      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+        "metadata[gh_booking_confirmed]": "1",
+        "metadata[gh_confirmed_date]": date,
+        "metadata[gh_confirmed_window]": win,
+        "metadata[gh_cleaner_name]": name.slice(0, 80),
+        "metadata[gh_cleaner_photo]": roster.photo_url ?? "",
+      });
+      if (already) {
+        return json(200, {
+          ok: true,
+          booking_confirmed: true,
+          confirmed_date: date,
+          confirmed_window: win,
+          cleaner_id: cleanerId,
+          cleaner_name: name,
+          email_sent: false,
+          already_confirmed: true,
+        });
+      }
+      // Save FIRST: one patch for assignment + confirmation, so the
+      // record can never show one without the other. Report state is
+      // untouched: a repair keeps a submitted report in review.
+      const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        cleaner_id: cleanerId,
+        cleaner_name: name.slice(0, 80),
+        cleaner_profile: { phone: roster.phone, photo: roster.photo_url },
+        status: "confirmed",
+        visit_date: date,
+        window: win,
+      });
+      if (!rowOk) {
+        logErr("assign_confirm", "visit row update failed");
+        return json(502, { ok: false, error: "db_error" });
+      }
+      // Link: a new or changed person gets a fresh v2 link (old one
+      // dies); the same person keeps the current link.
+      let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
+      if (changed || firstAssignment) {
+        const v2 = mintV2Link(row.id, row.visit_date);
+        if (v2 && (await writeV2Link(row.id, v2))) {
+          linkOut = { url: v2.url, expires: v2.expires, reusable: true };
+        } else {
+          const leg = mintLegacyLink(row.visit_date);
+          const okLeg = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+            cleaner_token_hash: hashToken(leg.token),
+            cleaner_token_expires: leg.expires,
+          });
+          if (okLeg) {
+            await clearV2Fields(row.id);
+            linkOut = { url: leg.url, expires: leg.expires, reusable: false };
+          }
+        }
+        if (linkOut) {
+          await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
+        }
+      } else {
+        const recomputed = recomputeV2Link(row as unknown as CleanerRow);
+        if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
+      }
+      if (changed || firstAssignment) {
+        await logEvent(row.id, bookingId, "owner", "cleaner_assigned", { cleaner_id: cleanerId, cleaner_name: name });
+      }
+      // Email second: a failed send keeps the assignment + confirmation
+      // and surfaces as notification status, never as a rollback.
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      let emailSent = false;
+      if (RESEND_API_KEY) {
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
+        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        if (custEmail) {
+          const firstName = custName.trim().split(/\s+/)[0] || "there";
+          const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId,
+            email: custEmail,
+            name: custName,
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const cents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
+          emailSent = await sendConfirmationEmail({
+            to: custEmail,
+            firstName,
+            date,
+            win,
+            service: row.service ?? "",
+            cleaner: name,
+            cents: Number.isFinite(cents) && cents > 0 ? cents : null,
+            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+          });
+        }
+      }
+      await logEvent(row.id, bookingId, "owner", "visit_confirmed", { date, window: win, ...(repair ? { repair: true } : {}) });
+      await logEvent(row.id, bookingId, "system", emailSent ? "confirmation_email_sent" : "confirmation_email_failed", {});
+      log("assign_confirm", { booking: bookingId, cleaner: name, emailSent, already: false });
+      return json(200, {
+        ok: true,
+        booking_confirmed: true,
+        confirmed_date: date,
+        confirmed_window: win,
+        cleaner_id: cleanerId,
+        cleaner_name: name,
+        email_sent: emailSent,
+        already_confirmed: false,
+        ...(linkOut ? { url: linkOut.url, expires: linkOut.expires, reusable: linkOut.reusable } : {}),
+      });
+    }
+
     if (action === "resend_confirmation") {
       // Explicit owner retry of the confirmation email. It never changes
       // the booking itself and never re-creates the confirmation: one
@@ -985,6 +1271,24 @@ export default async function handler(req: Req, res: Res) {
       }
       log("resend_confirmation", { booking: bookingId, emailSent });
       return json(200, { ok: true, email_sent: emailSent });
+    }
+
+    if (action === "approve_request") {
+      // The owner accepts the request into the pipeline. This is NOT a
+      // confirmation: it claims neither an assigned cleaner nor a final
+      // date. The client page keeps showing "awaiting confirmation"
+      // until Assign & confirm runs — approval alone must never imply
+      // the visit is settled.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const rowStatus = row.status ?? "";
+      if (rowStatus === "cancelled" || rowStatus === "paid") {
+        return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
+      }
+      if (await hasRequestApproved(row.id)) {
+        return json(200, { ok: true, request_approved: true, already: true });
+      }
+      await logEvent(row.id, bookingId, "owner", "request_approved", {});
+      return json(200, { ok: true, request_approved: true, already: false });
     }
 
     if (action === "dispute") {
@@ -1280,7 +1584,11 @@ export default async function handler(req: Req, res: Res) {
         : photosJson;
       const photoHash = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
       const prevSentMs = Date.parse(meta["gh_report_sent_at"] ?? "");
+      // A failed (bounced) send is always retryable: without this, a
+      // re-send within 10 minutes of a failed send would no-op and the
+      // client would never get the report email.
       if (
+        meta["gh_report_bounced"] !== "1" &&
         meta["gh_state"] === "report_sent" &&
         meta["gh_rp_hash"] === photoHash &&
         Number.isFinite(prevSentMs) &&
@@ -1497,17 +1805,35 @@ export default async function handler(req: Req, res: Res) {
       // contact over, and editing the same person's details keeps the
       // current link (re-saving a name must not kill a link already
       // handed out — only a real change or an explicit Replace does).
-      const name = (parsed.data.cleaner_name ?? "").trim();
+      // Roster-first: a cleaner_id resolves name/phone/photo from the
+      // roster (the stable ID is the assignment). A new person by free
+      // text alone is refused — the owner picks from the roster instead.
+      // Same-person detail edits without an ID keep working.
+      const rosterId = (parsed.data.cleaner_id ?? "").trim();
+      const prevCleaner = row?.cleaner_name ?? "";
+      let name = (parsed.data.cleaner_name ?? "").trim();
+      let photo = (parsed.data.cleaner_photo ?? "").trim();
+      let rosterPhone: string | null | undefined;
+      if (rosterId) {
+        const roster = await findRosterCleaner(rosterId);
+        if (!roster) return json(404, { ok: false, error: "cleaner_not_found" });
+        if (!roster.active) return json(409, { ok: false, error: "cleaner_inactive" });
+        name = roster.name;
+        photo = roster.photo_url ?? "";
+        rosterPhone = roster.phone;
+      } else if (prevCleaner && name && prevCleaner !== name) {
+        return json(400, { ok: false, error: "cleaner_id_required" });
+      }
       if (!name) return json(400, { ok: false, error: "cleaner_name_required" });
-      const photo = (parsed.data.cleaner_photo ?? "").trim();
       if (photo && !photo.startsWith("https://")) {
         return json(400, { ok: false, error: "invalid_photo_url" });
       }
-      const phoneRaw = parsed.data.cleaner_phone !== undefined ? parsed.data.cleaner_phone.trim() : null;
+      const phoneRaw = rosterPhone !== undefined
+        ? rosterPhone
+        : (parsed.data.cleaner_phone !== undefined ? parsed.data.cleaner_phone.trim() : null);
       if (phoneRaw !== null && !validCleanerPhone(phoneRaw)) {
         return json(400, { ok: false, error: "invalid_phone" });
       }
-      const prevCleaner = row?.cleaner_name ?? "";
       const wasConfirmed = row?.status === "confirmed";
       const changed = Boolean(prevCleaner) && prevCleaner !== name;
       const firstAssignment = !prevCleaner;
@@ -1521,12 +1847,14 @@ export default async function handler(req: Req, res: Res) {
       // never silently inherits the previous person's phone or photo.
       let nextProfile: CleanerProfile | null = null;
       let profileSaved = true;
-      if (row && (changed || parsed.data.cleaner_phone !== undefined || parsed.data.cleaner_photo !== undefined)) {
+      if (row && (changed || rosterId || parsed.data.cleaner_phone !== undefined || parsed.data.cleaner_photo !== undefined)) {
         const base = changed ? { phone: null, photo: null } : parseCleanerProfile((row as unknown as CleanerRow).cleaner_profile);
-        nextProfile = {
-          phone: parsed.data.cleaner_phone !== undefined ? (phoneRaw && phoneRaw.length > 0 ? phoneRaw : null) : base.phone,
-          photo: parsed.data.cleaner_photo !== undefined ? (photo ? photo : null) : base.photo,
-        };
+        nextProfile = rosterId
+          ? { phone: rosterPhone ?? null, photo: photo || null }
+          : {
+              phone: parsed.data.cleaner_phone !== undefined ? (phoneRaw && phoneRaw.length > 0 ? phoneRaw : null) : base.phone,
+              photo: parsed.data.cleaner_photo !== undefined ? (photo ? photo : null) : base.photo,
+            };
         // Separate PATCH on purpose: if the profile columns are absent
         // (migration not applied), this fails alone and must not take
         // the name assignment or the link down with it.
@@ -1534,7 +1862,10 @@ export default async function handler(req: Req, res: Res) {
       }
       let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
       if (row) {
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, { cleaner_name: name.slice(0, 80) });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          cleaner_name: name.slice(0, 80),
+          ...(rosterId ? { cleaner_id: rosterId } : {}),
+        });
         const visitRow = row as unknown as CleanerRow;
         if (changed || firstAssignment) {
           // A different person (or the first assignment) revokes the

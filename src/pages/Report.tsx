@@ -315,7 +315,7 @@ const Report = () => {
             {!issueOpen ? (
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                  {busy ? "Working…" : data.amount ? `Approve cleaning & pay ${data.amount}` : "Approve report"}
+                  {busy ? "Working…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
                 </Button>
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
                   Report an issue

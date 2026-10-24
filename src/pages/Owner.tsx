@@ -20,7 +20,10 @@ type Visit = {
   status: string;
   report_status: string;
   cleaner_name: string | null;
+  cleaner_id?: string | null;
   cleaner_profile?: CleanerProfile | null;
+  request_approved?: boolean;
+  report_email?: string | null;
   cleaner_link_issued?: boolean;
   cleaner_link_active?: boolean;
   cleaner_link_expires?: string | null;
@@ -37,6 +40,8 @@ type Visit = {
   checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
   photo_count?: number;
 };
+
+type RosterCleaner = { id: string; name: string; phone: string | null; photo_url: string | null; active: boolean };
 
 type Photo = { id: string; room: string; kind: string; note: string | null; url: string | null };
 type GhEvent = { id: number; actor: string; event: string; detail: Record<string, unknown> | null; created_at: string };
@@ -88,11 +93,14 @@ const reportLabel = (s: string): string => {
 };
 
 const EVENT_LABELS: Record<string, string> = {
+  request_approved: "Request approved",
+  cleaner_assigned: "Cleaner assigned",
   cleaner_link_opened: "Cleaner opened the job link",
   cleaner_link_issued: "Cleaner link issued",
   cleaner_link_rotated: "Cleaner link replaced",
   cleaner_changed: "Cleaner changed",
   report_submitted: "Cleaner submitted the report",
+  report_sent: "Report sent to the client",
   report_returned: "Report returned to cleaner",
   issue_opened: "Customer issue opened",
   issue_resolved: "Issue resolved",
@@ -108,7 +116,7 @@ const EVENT_LABELS: Record<string, string> = {
 // events should not carry them, but the panel never displays them).
 const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
 
-type FocusBlock = "cleaner" | "schedule" | "report" | "payment";
+type FocusBlock = "summary" | "cleaner" | "schedule" | "report" | "payment";
 
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
@@ -146,6 +154,24 @@ const Owner = () => {
   // Schedule block state.
   const [scheduleEditing, setScheduleEditing] = useState(false);
   const [altDate, setAltDate] = useState("");
+  const [assignCleanerId, setAssignCleanerId] = useState("");
+  const [cleanerChanging, setCleanerChanging] = useState(false);
+  const [changeCleanerId, setChangeCleanerId] = useState("");
+
+  // Cleaner directory (roster) state.
+  const [roster, setRoster] = useState<RosterCleaner[]>([]);
+  const [rosterLoaded, setRosterLoaded] = useState(false);
+  const [rosterMsg, setRosterMsg] = useState("");
+  const [rosterName, setRosterName] = useState("");
+  const [rosterPhone, setRosterPhone] = useState("");
+  const [rosterPhoto, setRosterPhoto] = useState("");
+  const [rosterCsv, setRosterCsv] = useState("");
+  const [rosterCsvMsg, setRosterCsvMsg] = useState("");
+  const [editRosterId, setEditRosterId] = useState<string | null>(null);
+  const [editRosterName, setEditRosterName] = useState("");
+  const [editRosterPhone, setEditRosterPhone] = useState("");
+  const [editRosterPhoto, setEditRosterPhoto] = useState("");
+  const [editRosterActive, setEditRosterActive] = useState(true);
 
   // Concurrency guard: mutation responses carry a sequence number, and
   // only the newest one may set the link shown for a visit — a late
@@ -209,6 +235,20 @@ const Owner = () => {
     void loadList();
   }, [loadList]);
 
+  const loadRoster = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await fetch("/api/owner?view=roster", { headers: headers() });
+      const j = (await r.json()) as { ok: boolean; cleaners?: RosterCleaner[] };
+      if (j.ok) {
+        setRoster(j.cleaners ?? []);
+        setRosterLoaded(true);
+      }
+    } catch {
+      /* the directory section reports the failure on use */
+    }
+  }, [token, headers]);
+
   // Needs-attention deep links: after the detail loads, scroll to the
   // block that needs the action.
   useEffect(() => {
@@ -241,6 +281,9 @@ const Owner = () => {
       setReturnNote("");
       setScheduleEditing(false);
       setAltDate("");
+      setAssignCleanerId("");
+      setCleanerChanging(false);
+      setChangeCleanerId("");
       setCleanerEditing(!v.cleaner_name);
       setFormName(v.cleaner_name ?? "");
       setFormPhone(v.cleaner_profile?.phone ?? "");
@@ -249,6 +292,7 @@ const Owner = () => {
     }
     setConfirmDate(v.visit_date ?? "");
     setConfirmWindow(v.window ?? "");
+    if (!rosterLoaded) void loadRoster();
     try {
       const r = await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
@@ -508,6 +552,88 @@ const Owner = () => {
     });
   };
 
+  const addRosterCleaner = async () => {
+    if (!rosterName.trim()) {
+      setRosterMsg("Enter the cleaner’s name.");
+      return;
+    }
+    if (rosterPhoto.trim() && !rosterPhoto.trim().startsWith("https://")) {
+      setRosterMsg("Photo URL must start with https://.");
+      return;
+    }
+    const j = await act({
+      action: "roster_add",
+      cleaner_name: rosterName.trim(),
+      cleaner_phone: rosterPhone.trim(),
+      cleaner_photo: rosterPhoto.trim(),
+    });
+    if (j.ok) {
+      setRosterMsg("Cleaner added to the directory.");
+      setRosterName("");
+      setRosterPhone("");
+      setRosterPhoto("");
+      void loadRoster();
+    } else {
+      setRosterMsg(`Couldn’t add the cleaner: ${j.error ?? "failed"}`);
+    }
+  };
+
+  const saveRosterEdit = async () => {
+    if (!editRosterId) return;
+    if (!editRosterName.trim()) {
+      setRosterMsg("Enter the cleaner’s name.");
+      return;
+    }
+    if (editRosterPhoto.trim() && !editRosterPhoto.trim().startsWith("https://")) {
+      setRosterMsg("Photo URL must start with https://.");
+      return;
+    }
+    const j = await act({
+      action: "roster_update",
+      cleaner_id: editRosterId,
+      cleaner_name: editRosterName.trim(),
+      cleaner_phone: editRosterPhone.trim(),
+      cleaner_photo: editRosterPhoto.trim(),
+      active: editRosterActive,
+    });
+    if (j.ok) {
+      setRosterMsg("Cleaner updated.");
+      setEditRosterId(null);
+      void loadRoster();
+    } else {
+      setRosterMsg(`Couldn’t update the cleaner: ${j.error ?? "failed"}`);
+    }
+  };
+
+  const toggleRosterActive = async (c: RosterCleaner) => {
+    const j = await act({ action: "roster_update", cleaner_id: c.id, active: !c.active });
+    if (j.ok) {
+      setRosterMsg(c.active ? `${c.name} deactivated — no longer assignable.` : `${c.name} activated.`);
+      void loadRoster();
+    } else {
+      setRosterMsg(`Couldn’t change the cleaner: ${j.error ?? "failed"}`);
+    }
+  };
+
+  const importRosterCsv = async () => {
+    if (!rosterCsv.trim()) {
+      setRosterCsvMsg("Paste the list first (name, phone, photo URL, active).");
+      return;
+    }
+    const j = await act({ action: "roster_import", csv: rosterCsv });
+    if (j.ok) {
+      const errs = Array.isArray(j["errors"]) ? (j["errors"] as { line: number; error: string }[]) : [];
+      setRosterCsvMsg(
+        `Imported ${String(j["imported"] ?? 0)} cleaner(s).` +
+        (errs.length > 0 ? ` Skipped ${errs.length} line(s): ${errs.map((e) => `line ${e.line || "?"} (${e.error})`).join(", ")}.` : ""),
+      );
+      setRosterCsv("");
+      void loadRoster();
+    } else {
+      setRosterCsvMsg(`Import failed: ${j.error ?? "failed"}`);
+    }
+  };
+
   if (!token) {
     return (
       <div className="min-h-screen bg-background px-4 py-16">
@@ -564,12 +690,33 @@ const Owner = () => {
     // needs an explicit review-and-repair confirmation, not a routine
     // date confirmation.
     const needsReview = !v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent");
-    if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "cleaner" });
+    if (v.status === "requested" && !v.request_approved) items.push({ label: "Approve request", focus: "summary" });
+    if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "schedule" });
     else if (needsReview) items.push({ label: "Needs review", focus: "schedule" });
     else if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") items.push({ label: "Confirm the date", focus: "schedule" });
     if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
     if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
     return items;
+  };
+
+  // Next action for a list row (same order as the detail's Next line,
+  // from the row alone — no event/stripe detail on the list).
+  // Confirmation proof is the visit_confirmed event, not the row status:
+  // after a report is published the row moves to report_sent, and deriving
+  // "Confirm the date" from the status would contradict the client page.
+  const rowNextAction = (v: Visit): string => {
+    if (v.status === "cancelled" || v.status === "paid") return "No action needed";
+    if (!v.visit_confirmed) {
+      if (v.status === "requested" && !v.request_approved) return "Approve request";
+      if (!v.cleaner_name) return "Assign a cleaner";
+      return "Confirm the date";
+    }
+    if (v.report_status === "submitted") return "Review the report";
+    if (v.payment_failed) return "Retry the payment";
+    if (v.issue_open) return "Resolve the customer issue";
+    if (v.report_status === "sent") return "Waiting for the customer’s review";
+    if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
+    return "No action needed";
   };
 
   return (
@@ -584,6 +731,68 @@ const Owner = () => {
         </div>
         {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
         {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
+
+        {!selected && (
+          <details
+            className="mb-5 rounded-xl border border-border bg-card p-4"
+            onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !rosterLoaded) void loadRoster(); }}
+          >
+            <summary className="font-semibold cursor-pointer">Cleaners — directory</summary>
+            <p className="text-sm text-muted-foreground mt-2">
+              Only people you add here can be assigned to visits. Candidates from Indeed are added by hand
+              or by pasting their exported list below — there is no automatic sync.
+            </p>
+            {roster.length === 0 ? (
+              <p className="text-sm text-muted-foreground mt-2">No cleaners in the directory yet.</p>
+            ) : (
+              <ul className="space-y-2 mt-3">
+                {roster.map((c) => (
+                  <li key={c.id} className="rounded-lg border border-border p-3">
+                    {editRosterId === c.id ? (
+                      <div className="space-y-2">
+                        <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" value={editRosterName} onChange={(e) => setEditRosterName(e.target.value)} placeholder="Name" />
+                        <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" value={editRosterPhone} onChange={(e) => setEditRosterPhone(e.target.value)} placeholder="Phone — optional" />
+                        <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" value={editRosterPhoto} onChange={(e) => setEditRosterPhoto(e.target.value)} placeholder="Photo URL — optional (https://)" />
+                        <label className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={editRosterActive} onChange={(e) => setEditRosterActive(e.target.checked)} /> Active (assignable)
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="hero" size="sm" onClick={() => void saveRosterEdit()}>Save</Button>
+                          <Button variant="outline" size="sm" onClick={() => setEditRosterId(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">{c.name}</span>
+                        {c.phone && <span className="text-sm">{c.phone}</span>}
+                        <span className={`text-[11px] px-2 py-0.5 rounded ${c.active ? "bg-green-100 text-green-900" : "bg-muted text-muted-foreground"}`}>{c.active ? "Active" : "Inactive"}</span>
+                        <span className="ml-auto flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => { setEditRosterId(c.id); setEditRosterName(c.name); setEditRosterPhone(c.phone ?? ""); setEditRosterPhoto(c.photo_url ?? ""); setEditRosterActive(c.active); }}>Edit</Button>
+                          <Button variant="outline" size="sm" onClick={() => void toggleRosterActive(c)}>{c.active ? "Deactivate" : "Activate"}</Button>
+                        </span>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="space-y-2 mt-4">
+              <p className="text-sm font-medium">Add a cleaner</p>
+              <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Name" value={rosterName} onChange={(e) => setRosterName(e.target.value)} />
+              <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Phone — optional" value={rosterPhone} onChange={(e) => setRosterPhone(e.target.value)} />
+              <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Photo URL — optional (https://)" value={rosterPhoto} onChange={(e) => setRosterPhoto(e.target.value)} />
+              <Button variant="hero" size="sm" onClick={() => void addRosterCleaner()}>Add cleaner</Button>
+            </div>
+            <div className="space-y-2 mt-4">
+              <p className="text-sm font-medium">Import a list (Indeed export or spreadsheet)</p>
+              <p className="text-xs text-muted-foreground">One cleaner per line: name, phone, photo URL, active. A header row starting with “name” is skipped.</p>
+              <textarea rows={4} className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder={"Chenika Williams, 7705550100, https://…, yes\nTaylor Allen, 7705550101, , yes"} value={rosterCsv} onChange={(e) => setRosterCsv(e.target.value)} />
+              <Button variant="outline" size="sm" onClick={() => void importRosterCsv()}>Import list</Button>
+              {rosterCsvMsg && <p className="text-sm" role="status">{rosterCsvMsg}</p>}
+            </div>
+            {rosterMsg && <p className="text-sm mt-3" role="status">{rosterMsg}</p>}
+          </details>
+        )}
 
         {!selected && visits.some((v) => v.report_status === "submitted") && (
           <div className="mb-5">
@@ -657,6 +866,8 @@ const Owner = () => {
                   <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ?? ""}</span>
                   <span className="text-sm">{money(v.amount_cents)}</span>
                 </div>
+                {v.address && <div className="text-sm text-muted-foreground mt-1">{v.address}</div>}
+                <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
                   <span className="bg-muted px-2 py-0.5 rounded">visit: {v.status}</span>
                   <span className="bg-muted px-2 py-0.5 rounded">report: {v.report_status}</span>
@@ -688,10 +899,14 @@ const Owner = () => {
           if (!selected) return null;
           const v = selected;
           const paymentFailed = Boolean(v.payment_failed) || events.some((e) => e.event === "payment_failed") || stripeState === "payment_failed";
-          const nextAction = !v.cleaner_name
-            ? "Assign a cleaner"
-            : v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled"
-              ? "Confirm the date"
+          const nextAction = v.status === "cancelled" || v.status === "paid"
+            ? "No action needed"
+            : !v.visit_confirmed
+              ? v.status === "requested" && !v.request_approved
+                ? "Approve request"
+                : !v.cleaner_name
+                  ? "Assign a cleaner"
+                  : "Confirm the date"
               : v.report_status === "submitted"
                 ? "Review the report"
                 : paymentFailed
@@ -762,28 +977,78 @@ const Owner = () => {
                     <input readOnly className="w-full text-xs bg-muted rounded p-2 mt-1" value={manualCopy.text} onFocus={(e) => e.target.select()} aria-label="Client link (select and copy if the button does not work)" />
                   </div>
                 )}
+                {v.status === "requested" && !v.request_approved && (
+                  <div className="mt-3">
+                    <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Approve request", { action: "approve_request", booking_id: v.booking_id })}>
+                      Approve request
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1">Approving takes the request into your pipeline. It does not assign a cleaner or confirm the date — those come next.</p>
+                  </div>
+                )}
+                {v.request_approved && v.status === "requested" && (
+                  <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
+                )}
               </section>
 
               {/* B. Cleaner — assignment and link in one block */}
               <section id="block-cleaner" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Cleaner</h3>
-                {(!assigned || cleanerEditing) ? (
-                  <div className="space-y-2">
-                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={formName} onChange={(e) => setFormName(e.target.value)} />
-                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Phone — optional" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} />
-                    <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Photo URL — optional (https://)" value={formPhoto} onChange={(e) => setFormPhoto(e.target.value)} />
-                    {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
-                    <div className="flex flex-wrap gap-2">
-                      <Button variant="hero" onClick={assignCleaner}>
-                        {assigned ? "Save details" : "Assign cleaner"}
+                {(!assigned || cleanerEditing || cleanerChanging) ? (
+                  cleanerChanging ? (
+                    <div className="space-y-2">
+                      <select className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" value={changeCleanerId} onChange={(e) => setChangeCleanerId(e.target.value)}>
+                        <option value="">Choose a cleaner…</option>
+                        {roster.filter((r) => r.active).map((r) => (
+                          <option key={r.id} value={r.id}>{r.name}{r.phone ? ` · ${r.phone}` : ""}</option>
+                        ))}
+                      </select>
+                      {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="hero"
+                          disabled={acting !== "" || !changeCleanerId}
+                          onClick={() => void runAction("Change cleaner", { action: "set_cleaner", booking_id: v.booking_id, cleaner_id: changeCleanerId }, (j) => {
+                            if (typeof j["url"] === "string") {
+                              const seq = linkSeqRef.current + 1;
+                              linkSeqRef.current = seq;
+                              noteLinkResult(v.id, j["url"] as string, seq);
+                              setViewLinkUrl(j["url"] as string);
+                              setViewLinkOpen(true);
+                            }
+                            setCleanerChanging(false);
+                          })}
+                        >
+                          Change cleaner
+                        </Button>
+                        <Button variant="outline" onClick={() => { setCleanerChanging(false); setFormError(""); }}>
+                          Cancel
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Changing the cleaner replaces the access link — the old link stops working. The client is emailed about the change.</p>
+                    </div>
+                  ) : !assigned ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">No cleaner assigned yet. Choose one in the Schedule block below, then Assign &amp; confirm the visit.</p>
+                      <Button variant="outline" onClick={() => document.getElementById("block-schedule")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                        Go to Schedule
                       </Button>
-                      {assigned && (
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={formName} onChange={(e) => setFormName(e.target.value)} />
+                      <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Phone — optional" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} />
+                      <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Photo URL — optional (https://)" value={formPhoto} onChange={(e) => setFormPhoto(e.target.value)} />
+                      {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="hero" onClick={assignCleaner}>
+                          Save details
+                        </Button>
                         <Button variant="outline" onClick={() => { setCleanerEditing(false); setFormError(""); }}>
                           Cancel
                         </Button>
-                      )}
+                      </div>
                     </div>
-                  </div>
+                  )
                 ) : (
                   <div>
                     <div className="flex items-start gap-3 mb-2">
@@ -799,7 +1064,7 @@ const Owner = () => {
                         <p className="font-semibold">{v.cleaner_name}</p>
                         {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>{phone}</a></p>}
                       </div>
-                      <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={openEditDetails}>
+                      <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={() => { setChangeCleanerId(v.cleaner_id ?? roster.find((r) => r.name === v.cleaner_name)?.id ?? ""); setFormError(""); setCleanerChanging(true); }}>
                         Change
                       </Button>
                     </div>
@@ -907,7 +1172,7 @@ const Owner = () => {
               {/* C. Schedule — confirming the visit is the owner's explicit action */}
               <section id="block-schedule" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Schedule</h3>
-                {v.status === "confirmed" && !scheduleEditing ? (
+                {(v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid") && !scheduleEditing ? (
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
@@ -943,35 +1208,61 @@ const Owner = () => {
                     )}
                     <h4 className="font-semibold mb-2">Confirm this visit</h4>
                     <dl className="space-y-1 text-sm mb-3">
-                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Cleaner</dt><dd className="font-semibold text-right">{v.cleaner_name ?? "No cleaner assigned yet — assign one in the Cleaner block above."}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Cleaner</dt><dd className="font-semibold text-right">{v.cleaner_name ?? "No cleaner assigned yet — choose below."}</dd></div>
                       <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-right">{v.service ?? "—"}</dd></div>
                       <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Agreed amount</dt><dd className="font-semibold text-right">{money(v.amount_cents)}</dd></div>
                     </dl>
+                    {!assigned && (
+                      <div className="mb-3">
+                        <label className="block text-sm font-medium mb-1" htmlFor="assign-cleaner">Cleaner</label>
+                        <select id="assign-cleaner" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" value={assignCleanerId} onChange={(e) => setAssignCleanerId(e.target.value)}>
+                          <option value="">Choose a cleaner…</option>
+                          {roster.filter((r) => r.active).map((r) => (
+                            <option key={r.id} value={r.id}>{r.name}{r.phone ? ` · ${r.phone}` : ""}</option>
+                          ))}
+                        </select>
+                        {roster.length === 0 && <p className="text-xs text-muted-foreground mt-1">No cleaners in the directory yet — add one in the Cleaners section on the visits list.</p>}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={confirmDate} onChange={(e) => setConfirmDate(e.target.value)} />
                       <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Window, e.g. 8–10 AM" value={confirmWindow} onChange={(e) => setConfirmWindow(e.target.value)} />
-                      <Button variant="hero" disabled={acting !== "" || !v.cleaner_name || !confirmDate || !confirmWindow} onClick={() => void runAction("Confirm visit & notify customer", { action: "confirm", booking_id: v.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow, ...((!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) ? { repair: true } : {}) }, (j) => {
-                        setScheduleEditing(false);
-                        if (j["already_confirmed"] === true) setActionMsg("Already confirmed — no duplicate email sent.");
-                        else if (j["email_sent"] === true) setActionMsg("Visit confirmed. Confirmation email sent.");
-                        else setActionMsg("Visit confirmed. Confirmation email failed.");
-                      })}>
-                        Confirm visit & notify customer
-                      </Button>
+                      {!assigned ? (
+                        <Button variant="hero" disabled={acting !== "" || !assignCleanerId || !confirmDate || !confirmWindow} onClick={() => void runAction("Assign & confirm visit", { action: "assign_confirm", booking_id: v.booking_id, cleaner_id: assignCleanerId, confirmed_date: confirmDate, confirmed_window: confirmWindow, ...((!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) ? { repair: true } : {}) }, (j) => {
+                          setScheduleEditing(false);
+                          if (j["already_confirmed"] === true) setActionMsg("Already assigned and confirmed — no duplicate email sent.");
+                          else if (j["email_sent"] === true) setActionMsg("Cleaner assigned and visit confirmed. Confirmation email sent.");
+                          else setActionMsg("Cleaner assigned and visit confirmed. Confirmation email failed.");
+                        })}>
+                          Assign &amp; confirm visit
+                        </Button>
+                      ) : (
+                        <Button variant="hero" disabled={acting !== "" || !confirmDate || !confirmWindow} onClick={() => void runAction("Confirm visit & notify customer", { action: "confirm", booking_id: v.booking_id, confirmed_date: confirmDate, confirmed_window: confirmWindow, ...((!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) ? { repair: true } : {}) }, (j) => {
+                          setScheduleEditing(false);
+                          if (j["already_confirmed"] === true) setActionMsg("Already confirmed — no duplicate email sent.");
+                          else if (j["email_sent"] === true) setActionMsg("Visit confirmed. Confirmation email sent.");
+                          else setActionMsg("Visit confirmed. Confirmation email failed.");
+                        })}>
+                          Confirm visit &amp; notify customer
+                        </Button>
+                      )}
                     </div>
-                    {!v.cleaner_name && <p className="text-xs text-muted-foreground mt-1">Assign a cleaner first — confirmation requires one.</p>}
+                    {!assigned && <p className="text-xs text-muted-foreground mt-1">Assignment uses the cleaner’s directory entry — the client gets the date, window, and cleaner in one confirmation email.</p>}
                     <p className="text-xs text-muted-foreground mt-1">Confirming emails the client the agreed date and window.</p>
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={altDate} onChange={(e) => setAltDate(e.target.value)} />
-                      <Button variant="outline" onClick={() => void runAction("Propose another time", { action: "decline_date", booking_id: v.booking_id, alt_dates: altDate ? [altDate] : [] }, (j) => {
-                        setActionMsg(j["email_sent"] === true
-                          ? "Propose another time: done. The client was emailed the alternative date."
-                          : "Propose another time: saved, but the email was NOT delivered — contact the client manually.");
-                      })}>
-                        Propose another time
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">Proposing emails the client an alternative date — a proposal is not a confirmation.</p>
+                    <details className="mt-3">
+                      <summary className="text-sm underline text-muted-foreground cursor-pointer">More scheduling options</summary>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <input type="date" className="border border-border rounded-lg px-3 py-2 bg-background text-sm" value={altDate} onChange={(e) => setAltDate(e.target.value)} />
+                        <Button variant="outline" onClick={() => void runAction("Propose another time", { action: "decline_date", booking_id: v.booking_id, alt_dates: altDate ? [altDate] : [] }, (j) => {
+                          setActionMsg(j["email_sent"] === true
+                            ? "Propose another time: done. The client was emailed the alternative date."
+                            : "Propose another time: saved, but the email was NOT delivered — contact the client manually.");
+                        })}>
+                          Propose another time
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">Proposing emails the client an alternative date — a proposal is not a confirmation.</p>
+                    </details>
                   </div>
                 )}
               </section>
@@ -1085,6 +1376,29 @@ const Owner = () => {
                         Request changes
                       </Button>
                     </div>
+                  </div>
+                )}
+
+                {v.report_status === "sent" && (
+                  <div className="mb-3">
+                    <p className="text-sm">
+                      Report sent to the client
+                      {v.report_email === "sent" ? " · Email: sent." : (v.report_email === "failed" || v.report_bounced) ? " · Email failed." : ""}
+                    </p>
+                    {(v.report_email === "failed" || v.report_bounced) && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <Button
+                          variant="outline"
+                          disabled={acting !== ""}
+                          onClick={() => void runAction("Re-send report email", { action: "send_report", booking_id: v.booking_id }, (j) => {
+                            setPublishMsg(j["email_sent"] === true ? "Report email re-sent." : "Report email failed again — check the address and retry.");
+                          })}
+                        >
+                          Re-send report email
+                        </Button>
+                      </div>
+                    )}
+                    {publishMsg && <p className="text-sm mt-2" role="status">{publishMsg}</p>}
                   </div>
                 )}
 

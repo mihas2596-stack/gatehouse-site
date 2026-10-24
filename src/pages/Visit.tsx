@@ -31,7 +31,7 @@ type VisitData = {
     first?: string;
     recurring?: string | null;
   };
-  cleaner?: { name: string; photo: string } | null;
+  cleaner?: { name: string; photo: string; phone?: string } | null;
   alt_dates?: string[];
   cancel_fee_cents?: number;
   cancel_fee?: string;
@@ -532,6 +532,11 @@ const Visit = () => {
                 <div className="text-left">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Your cleaner</p>
                   <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
+                  {data.cleaner.phone && (
+                    <p className="text-sm">
+                      <a className="underline" href={`tel:${data.cleaner.phone.replace(/\D/g, "")}`}>{data.cleaner.phone}</a>
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground">
                     An independent cleaning professional matched to your home by Gatehouse. If your
                     cleaner ever changes, we tell you before the visit — never a surprise stranger.

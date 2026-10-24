@@ -297,11 +297,13 @@ describe("visit confirmation flow", () => {
       { ct: "legacy-cleaner-token-1234567890", action: "submit", checklist: { rooms: [] } },
     );
     expect(r.body["ok"]).toBe(true);
-    expect(rows[0]["report_status"]).toBe("submitted");
-    expect(rows[0]["status"]).toBe("report_submitted");
+    // The finish now publishes straight to the client (no owner review).
+    expect(r.body["published"]).toBe(true);
+    expect(rows[0]["report_status"]).toBe("sent");
+    expect(rows[0]["status"]).toBe("report_sent");
     const view = await clean("GET", null, { ct: "legacy-cleaner-token-1234567890", pv: "1" });
     expect(view.body["confirmed"]).toBe(true);
-    expect(view.body["report_status"]).toBe("submitted");
+    expect(view.body["report_status"]).toBe("sent");
   });
 
   it("cleaner view reports unconfirmed visits as unconfirmed", async () => {
