@@ -287,22 +287,20 @@ const Cleaner = () => {
           )}
         </div>
 
-        <div className="rounded-xl border border-border bg-muted/40 p-4 mt-4">
-          <p className="text-sm text-foreground">
+        <details className="rounded-xl border border-border bg-card p-4 mt-4">
+          <summary className="text-sm font-semibold cursor-pointer">How photos work</summary>
+          <p className="text-sm text-foreground mt-2">
             Please don&apos;t photograph people, documents, bank cards, alarm codes or other
             personal items. Photos go only into the client&apos;s report for this visit — they are
             never used for marketing without separate consent.
           </p>
-        </div>
-        <div className="rounded-xl border border-border bg-card p-4 mt-4">
-          <p className="text-sm text-foreground">
-            <strong>How to photograph:</strong> take a “before” photo of each area before you
-            start, and an “after” photo when you finish — from a similar angle, so the client
-            can compare. Add a close-up only where it helps (inside the oven, a stain you
-            couldn&apos;t remove, damage you found). A photo counts as uploaded only when it
-            appears above with its picture.
+          <p className="text-sm text-foreground mt-2">
+            Take a “before” photo of each area before you start, and an “after” photo when
+            you finish — from a similar angle, so the client can compare. Add a close-up only
+            where it helps (inside the oven, a stain you couldn&apos;t remove, damage you found).
+            A photo counts as uploaded only when it appears above with its picture.
           </p>
-        </div>
+        </details>
 
         {data.report_status === "returned" && data.owner_note && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4">
@@ -313,15 +311,15 @@ const Cleaner = () => {
         {data.report_status === "submitted" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report submitted — awaiting Gatehouse review.</p>
-            <p className="text-sm text-muted-foreground">Gatehouse will review it before sharing it with the customer. You&apos;re done here — thank you!</p>
+            <p className="font-semibold">Report received — the owner will share it with the client.</p>
+            <p className="text-sm text-muted-foreground">You&apos;re done here — thank you!</p>
           </div>
         )}
         {data.report_status === "sent" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report sent to the client.</p>
-            <p className="text-sm text-muted-foreground">The client has received the photos and checklist. You&apos;re done here — thank you!</p>
+            <p className="font-semibold">Report published — the client can open it from their link.</p>
+            <p className="text-sm text-muted-foreground">The client can open the photos and checklist from their link. You&apos;re done here — thank you!</p>
           </div>
         )}
 
@@ -472,6 +470,22 @@ const Cleaner = () => {
 
                 <div className="flex gap-2">
                   <label className="flex-1">
+                    <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                      <Camera className="w-4 h-4" /> Take BEFORE photo
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void uploadPhoto(room.name, "before", f);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <label className="flex-1">
                     <span className="flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-sm font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take AFTER photo
                     </span>
@@ -499,22 +513,6 @@ const Cleaner = () => {
                       onChange={(e) => {
                         const files = Array.from(e.target.files ?? []);
                         for (const f of files) void uploadPhoto(room.name, "after", f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <label className="flex-1">
-                    <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
-                      <Camera className="w-4 h-4" /> Take BEFORE photo
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void uploadPhoto(room.name, "before", f);
                         e.target.value = "";
                       }}
                     />

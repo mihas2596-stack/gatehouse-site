@@ -1,6 +1,6 @@
 // @vitest-environment node
 // Owner email-link login tokens (owner order 2026-10-24): link tokens (ol1,
-// 30 min) exchange for session tokens (os1, 24h); owner APIs accept the
+// 24h) exchange for session tokens (os1, 24h); owner APIs accept the
 // hand-typed key or a valid session via isOwnerAuth. The HTTP handler lives
 // in api/owner-auth.ts (merged from owner-login + owner-login-verify +
 // test-price-check: the Vercel Hobby plan allows only 12 functions).
@@ -35,8 +35,8 @@ describe("owner login tokens (ol1)", () => {
     expect(verifyOwnerLoginToken(tok.replace("ol1", "os1"), ADMIN, NOW)).toBe(false);
     expect(verifyOwnerLoginToken("", ADMIN, NOW)).toBe(false);
   });
-  it("link TTL is 30 minutes", () => {
-    expect(OWNER_LOGIN_LINK_TTL_SEC).toBe(1800);
+  it("link TTL is 24 hours", () => {
+    expect(OWNER_LOGIN_LINK_TTL_SEC).toBe(24 * 3600);
   });
 });
 

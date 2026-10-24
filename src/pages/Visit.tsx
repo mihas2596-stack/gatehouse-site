@@ -92,7 +92,7 @@ const fmtDeadline = (iso: string): string => {
 
 // §11: the report lives INSIDE the client cabinet — same booking, same
 // page, anchored at #report (the report email links straight here).
-function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: string; onChanged: () => void }) {
+function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string; visitState: string; cleanerName?: string | null; onChanged: () => void }) {
   const [rep, setRep] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -154,6 +154,23 @@ function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: 
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+      {cleanerName && <p className="text-sm text-muted-foreground mb-3">Cleaned by {cleanerName}</p>}
+      {canAct && (
+        <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4">
+          <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to pause payment.</p>
+          {rep.deadline && (
+            <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+              {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
+              Report an issue
+            </Button>
+          </div>
+        </div>
+      )}
       {rep.state === "issue_open" && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
           Issue received — payment paused while we review it with you.
@@ -201,8 +218,8 @@ function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: 
       )}
       {rep.deadline && rep.state !== "paid" && (
         <p className="mb-3 text-sm">
-          Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time). After that, your saved card is
-          charged automatically unless you report an issue.
+          Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card
+          is charged automatically unless you report an issue.
         </p>
       )}
       {err && <p className="mb-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{err}</p>}
@@ -215,6 +232,9 @@ function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: 
             Report an issue
           </Button>
         </div>
+      )}
+      {canAct && (
+        <p className="mt-2 text-sm text-muted-foreground">Not happy? Report an issue — the charge pauses until we make it right.</p>
       )}
       {canAct && showIssue && (
         <div className="mt-4">
@@ -362,8 +382,10 @@ const Visit = () => {
   if (b.first) rows.push(["First visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
   // Payment-method status without full details: brand + last 4 only,
-  // shown once the card is confirmed for this booking.
-  if (data?.card_confirmed && data.card_last4 && data.state !== "cancelled") {
+  // shown once the card is confirmed for this booking. report_sent has
+  // its own "Card we'll charge" line below, so it is excluded here to
+  // avoid showing the card twice.
+  if (data?.card_confirmed && data.card_last4 && data.state !== "cancelled" && data.state !== "report_sent") {
     rows.push(["Payment method", `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} on file ••••${data.card_last4}`]);
   }
 
@@ -490,7 +512,7 @@ const Visit = () => {
             )}
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") ? (
               <section id="report" className="scroll-mt-28">
-                <ReportSection bt={bt} visitState={data.state} onChanged={() => void load()} />
+                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} onChanged={() => void load()} />
               </section>
             ) : (
               <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
@@ -509,6 +531,16 @@ const Visit = () => {
                     </div>
                   ))}
                 </dl>
+              </div>
+            )}
+
+            {data.state === "report_sent" && data.has_card && data.card_last4 && (
+              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
+                <p className="text-sm">
+                  Card we&apos;ll charge: <strong>{data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••{data.card_last4}</strong>
+                  {" · "}
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link>
+                </p>
               </div>
             )}
 

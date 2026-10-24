@@ -14,8 +14,8 @@
 // the fixed owner address, so there is nothing to bind it to.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-/** Minutes a login link stays clickable. */
-export const OWNER_LOGIN_LINK_TTL_SEC = 1800;
+/** Seconds a login link stays clickable (24 hours). */
+export const OWNER_LOGIN_LINK_TTL_SEC = 24 * 3600;
 /** Hours a verified panel session stays valid. */
 export const OWNER_SESSION_TTL_SEC = 24 * 3600;
 

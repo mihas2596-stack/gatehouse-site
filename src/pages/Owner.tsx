@@ -92,6 +92,41 @@ const reportLabel = (s: string): string => {
   }
 };
 
+// Plain-words visit status for badges and headers — the owner should
+// never have to translate internal row statuses.
+const visitLabel = (s: string): string => {
+  switch (s) {
+    case "requested": return "Requested";
+    case "confirmed": return "Confirmed";
+    case "report_sent": return "Report sent";
+    case "approved": return "Approved";
+    case "paid": return "Paid";
+    case "cancelled": return "Cancelled";
+    case "issue_open": return "Issue open";
+    default: return s || "—";
+  }
+};
+
+// One source of truth for "what's next" — the list row, Needs attention,
+// and the detail card all derive from it. Confirmation proof is the
+// visit_confirmed event, never the row status: after a report is
+// published the row moves to report_sent, and deriving "Confirm the
+// date" from the status would contradict the client page.
+const nextActionFor = (v: Visit, paymentFailed: boolean): string => {
+  if (v.status === "cancelled" || v.status === "paid") return "No action needed";
+  if (!v.visit_confirmed) {
+    if (v.status === "requested" && !v.request_approved) return "Approve request";
+    if (!v.cleaner_name) return "Assign a cleaner";
+    return "Confirm the date";
+  }
+  if (v.report_status === "submitted") return "Review the report";
+  if (paymentFailed) return "Retry the payment";
+  if (v.issue_open) return "Resolve the customer issue";
+  if (v.report_status === "sent") return "Waiting for the customer’s review";
+  if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
+  return "No action needed";
+};
+
 const EVENT_LABELS: Record<string, string> = {
   request_approved: "Request approved",
   cleaner_assigned: "Cleaner assigned",
@@ -121,8 +156,11 @@ type FocusBlock = "summary" | "cleaner" | "schedule" | "report" | "payment";
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
   const [tokenInput, setTokenInput] = useState("");
+  const [showTokenForm, setShowTokenForm] = useState(false);
   const [linkMsg, setLinkMsg] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [hideTest, setHideTest] = useState(false);
+  const [queueMsg, setQueueMsg] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Visit | null>(null);
@@ -140,7 +178,6 @@ const Owner = () => {
 
   // Cleaner block state.
   const [cleanerEditing, setCleanerEditing] = useState(false);
-  const [formName, setFormName] = useState("");
   const [formPhone, setFormPhone] = useState("");
   const [formPhoto, setFormPhoto] = useState("");
   const [formError, setFormError] = useState("");
@@ -266,6 +303,13 @@ const Owner = () => {
     selectedIdRef.current = v.id;
     if (focus) pendingFocusRef.current = focus;
     setSelected(v);
+    // The edit form always mirrors the loaded card: after an assignment
+    // the panel reopens the same visit from a stale list, and leaving
+    // the old editing state in place used to show a blank form.
+    setCleanerEditing(!v.cleaner_name);
+    setFormPhone(v.cleaner_profile?.phone ?? "");
+    setFormPhoto(v.cleaner_profile?.photo ?? "");
+    setFormError("");
     if (!sameVisit) {
       setPhotos([]);
       setEvents([]);
@@ -284,11 +328,6 @@ const Owner = () => {
       setAssignCleanerId("");
       setCleanerChanging(false);
       setChangeCleanerId("");
-      setCleanerEditing(!v.cleaner_name);
-      setFormName(v.cleaner_name ?? "");
-      setFormPhone(v.cleaner_profile?.phone ?? "");
-      setFormPhoto(v.cleaner_profile?.photo ?? "");
-      setFormError("");
     }
     setConfirmDate(v.visit_date ?? "");
     setConfirmWindow(v.window ?? "");
@@ -300,12 +339,9 @@ const Owner = () => {
         setSelected(j.visit);
         setPhotos(j.photos ?? []);
         setEvents(j.events ?? []);
-        if (!sameVisit) {
-          setCleanerEditing(!j.visit.cleaner_name);
-          setFormName(j.visit.cleaner_name ?? "");
-          setFormPhone(j.visit.cleaner_profile?.phone ?? "");
-          setFormPhoto(j.visit.cleaner_profile?.photo ?? "");
-        }
+        setCleanerEditing(!j.visit.cleaner_name);
+        setFormPhone(j.visit.cleaner_profile?.phone ?? "");
+        setFormPhoto(j.visit.cleaner_profile?.photo ?? "");
       }
       const sr = await fetch("/api/booking-action", {
         method: "POST",
@@ -343,6 +379,22 @@ const Owner = () => {
       }
     } else {
       setActionMsg(`${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+    }
+  };
+
+  // Re-send a bounced report email straight from the review queue.
+  const resendQueueReport = async (v: Visit) => {
+    setQueueMsg("");
+    const j = await act({ action: "send_report", booking_id: v.booking_id });
+    if (j.ok) {
+      setQueueMsg(
+        j["email_sent"] === true
+          ? `Report email re-sent for ${v.client_name ?? "this visit"}.`
+          : `Report email failed again for ${v.client_name ?? "this visit"} — check the address and retry from the visit.`,
+      );
+      void loadList();
+    } else {
+      setQueueMsg(`Couldn’t re-send the report: ${typeof j.error === "string" ? j.error : "failed"}`);
     }
   };
 
@@ -519,12 +571,12 @@ const Owner = () => {
     });
   };
 
+  // Save the assigned cleaner's contact details. The name is read-only
+  // here: assignments come from the directory by ID only, never from a
+  // free-text name — sending the card's own name keeps the link and
+  // updates just the phone/photo.
   const assignCleaner = () => {
-    if (!selected) return;
-    if (!formName.trim()) {
-      setFormError("Enter the cleaner’s name.");
-      return;
-    }
+    if (!selected || !selected.cleaner_name) return;
     if (formPhoto.trim() && !formPhoto.trim().startsWith("https://")) {
       setFormError("Photo URL must start with https://.");
       return;
@@ -533,10 +585,10 @@ const Owner = () => {
     const visitId = selected.id;
     const seq = linkSeqRef.current + 1;
     linkSeqRef.current = seq;
-    void runAction("Assign cleaner", {
+    void runAction("Save cleaner details", {
       action: "set_cleaner",
       booking_id: selected.booking_id,
-      cleaner_name: formName.trim(),
+      cleaner_name: selected.cleaner_name,
       cleaner_phone: formPhone.trim(),
       cleaner_photo: formPhoto.trim(),
     }, (j) => {
@@ -640,34 +692,17 @@ const Owner = () => {
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
         <div className="max-w-sm mx-auto text-center">
           <h1 className="font-heading text-3xl font-bold mb-4">Owner view</h1>
-          <p className="text-sm text-muted-foreground mb-4">Enter the admin token, or get a login link by email.</p>
+          <p className="text-sm text-muted-foreground mb-4">Get a login link by email — no key needed.</p>
           {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
-          <input
-            type="password"
-            className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="ADMIN_TOKEN"
-          />
           <Button
             variant="hero"
             className="w-full"
-            onClick={() => {
-              sessionStorage.setItem("gh_admin_token", tokenInput.trim());
-              setToken(tokenInput.trim());
-            }}
-          >
-            Open
-          </Button>
-          <Button
-            variant="outline"
-            className="w-full mt-3"
             onClick={async () => {
               setLinkMsg("");
               try {
                 const r = await fetch("/api/owner-auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send" }) });
                 const j = await r.json();
-                setLinkMsg(j?.ok ? "Login link sent — check nikolajmihasenok@gmail.com (valid 30 minutes)." : "Couldn't send the link — try again in a minute.");
+                setLinkMsg(j?.ok ? "Login link sent — check nikolajmihasenok@gmail.com (valid 24 hours)." : "Couldn't send the link — try again in a minute.");
               } catch {
                 setLinkMsg("Couldn't send the link — try again in a minute.");
               }
@@ -676,6 +711,34 @@ const Owner = () => {
             Send login link to my email
           </Button>
           {linkMsg && <p className="text-sm mt-3">{linkMsg}</p>}
+          {!showTokenForm ? (
+            <button type="button" className="text-sm underline text-muted-foreground mt-4" onClick={() => setShowTokenForm(true)}>
+              Use admin token instead
+            </button>
+          ) : (
+            <div className="mt-4">
+              <input
+                type="password"
+                className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder="ADMIN_TOKEN"
+              />
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  sessionStorage.setItem("gh_admin_token", tokenInput.trim());
+                  setToken(tokenInput.trim());
+                }}
+              >
+                Open with admin token
+              </Button>
+              <button type="button" className="text-sm underline text-muted-foreground mt-3" onClick={() => setShowTokenForm(false)}>
+                Back to email login
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -693,31 +756,19 @@ const Owner = () => {
     if (v.status === "requested" && !v.request_approved) items.push({ label: "Approve request", focus: "summary" });
     if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "schedule" });
     else if (needsReview) items.push({ label: "Needs review", focus: "schedule" });
-    else if (v.status !== "confirmed" && v.status !== "paid" && v.status !== "cancelled") items.push({ label: "Confirm the date", focus: "schedule" });
+    else if (!v.visit_confirmed) items.push({ label: "Confirm the date", focus: "schedule" });
     if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
     if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
     return items;
   };
 
-  // Next action for a list row (same order as the detail's Next line,
-  // from the row alone — no event/stripe detail on the list).
-  // Confirmation proof is the visit_confirmed event, not the row status:
-  // after a report is published the row moves to report_sent, and deriving
-  // "Confirm the date" from the status would contradict the client page.
-  const rowNextAction = (v: Visit): string => {
-    if (v.status === "cancelled" || v.status === "paid") return "No action needed";
-    if (!v.visit_confirmed) {
-      if (v.status === "requested" && !v.request_approved) return "Approve request";
-      if (!v.cleaner_name) return "Assign a cleaner";
-      return "Confirm the date";
-    }
-    if (v.report_status === "submitted") return "Review the report";
-    if (v.payment_failed) return "Retry the payment";
-    if (v.issue_open) return "Resolve the customer issue";
-    if (v.report_status === "sent") return "Waiting for the customer’s review";
-    if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
-    return "No action needed";
-  };
+  // Next action for a list row — the shared nextActionFor, from the row
+  // alone (no event/stripe detail on the list).
+  const rowNextAction = (v: Visit): string => nextActionFor(v, Boolean(v.payment_failed));
+
+  // The list, the review queue, and Needs attention all read through this
+  // filter so "Hide test bookings" hides test rows everywhere at once.
+  const listedVisits = hideTest ? visits.filter((v) => !v.is_test) : visits;
 
   return (
     <div className="min-h-screen bg-background">
@@ -731,6 +782,12 @@ const Owner = () => {
         </div>
         {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
         {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
+        {!selected && (
+          <label className="flex items-center gap-2 text-sm mb-4">
+            <input type="checkbox" checked={hideTest} onChange={(e) => setHideTest(e.target.checked)} />
+            Hide test bookings
+          </label>
+        )}
 
         {!selected && (
           <details
@@ -794,29 +851,39 @@ const Owner = () => {
           </details>
         )}
 
-        {!selected && visits.some((v) => v.report_status === "submitted") && (
+        {!selected && listedVisits.some((v) => v.report_status === "submitted" || v.report_bounced) && (
           <div className="mb-5">
             <h2 className="font-heading text-xl font-bold mb-2">Reports awaiting review</h2>
+            {queueMsg && <p className="text-sm mb-2" role="status">{queueMsg}</p>}
             <div className="space-y-2">
-              {visits
-                .filter((v) => v.report_status === "submitted")
+              {listedVisits
+                .filter((v) => v.report_status === "submitted" || v.report_bounced)
                 .map((v) => {
                   const since = v.checklist?.submitted_at ? Date.parse(v.checklist.submitted_at) : NaN;
                   const hours = Number.isFinite(since) ? Math.max(0, Math.round((Date.now() - since) / 3600000)) : null;
                   return (
-                    <button
-                      key={v.id}
-                      type="button"
-                      className="w-full text-left rounded-xl border border-amber-500/60 bg-amber-50 p-4 hover:border-primary"
-                      onClick={() => void openVisit(v, "report")}
-                    >
-                      <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
-                      <span className="text-sm text-muted-foreground">
-                        {fmtVisitDate(v.visit_date)} · {v.photo_count ?? 0} photos
-                        {hours !== null ? <> · waiting {hours < 1 ? "<1" : hours}h</> : null}
-                        {v.checklist?.problem_note ? <> · cleaner note attached</> : null}
-                      </span>
-                    </button>
+                    <div key={v.id} className="w-full rounded-xl border border-amber-500/60 bg-amber-50 p-4">
+                      <button
+                        type="button"
+                        className="w-full text-left hover:text-primary"
+                        onClick={() => void openVisit(v, "report")}
+                      >
+                        <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
+                        <span className="text-sm text-muted-foreground">
+                          {fmtVisitDate(v.visit_date)} · {v.photo_count ?? 0} photos
+                          {hours !== null ? <> · waiting {hours < 1 ? "<1" : hours}h</> : null}
+                          {v.checklist?.problem_note ? <> · cleaner note attached</> : null}
+                          {v.report_bounced ? <> · <span className="text-destructive font-semibold">email failed</span></> : null}
+                        </span>
+                      </button>
+                      {v.report_bounced && (
+                        <div className="mt-2">
+                          <Button variant="outline" size="sm" onClick={() => void resendQueueReport(v)}>
+                            Re-send report email
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
             </div>
@@ -824,7 +891,7 @@ const Owner = () => {
         )}
 
         {!selected && (() => {
-          const withAttention = visits
+          const withAttention = listedVisits
             .map((v) => ({ v, items: attentionItems(v) }))
             .filter((x) => x.items.length > 0);
           return withAttention.length > 0 ? (
@@ -853,7 +920,7 @@ const Owner = () => {
 
         {!selected && (
           <div className="space-y-2">
-            {visits.map((v) => (
+            {listedVisits.map((v) => (
               <button
                 key={v.id}
                 type="button"
@@ -869,8 +936,8 @@ const Owner = () => {
                 {v.address && <div className="text-sm text-muted-foreground mt-1">{v.address}</div>}
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
-                  <span className="bg-muted px-2 py-0.5 rounded">visit: {v.status}</span>
-                  <span className="bg-muted px-2 py-0.5 rounded">report: {v.report_status}</span>
+                  <span className="bg-muted px-2 py-0.5 rounded">Visit: {visitLabel(v.status)}</span>
+                  <span className="bg-muted px-2 py-0.5 rounded">Report: {reportLabel(v.report_status)}</span>
                   <span className="bg-muted px-2 py-0.5 rounded">photos: {v.photo_count ?? 0}</span>
                   {v.cleaner_name
                     ? <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded">cleaner: {v.cleaner_name}</span>
@@ -889,8 +956,8 @@ const Owner = () => {
                 </div>
               </button>
             ))}
-            {visits.length === 0 && !loading && !error && (
-              <p className="text-muted-foreground text-sm">No visits in the database yet.</p>
+            {listedVisits.length === 0 && !loading && !error && (
+              <p className="text-muted-foreground text-sm">{visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them."}</p>
             )}
           </div>
         )}
@@ -899,25 +966,7 @@ const Owner = () => {
           if (!selected) return null;
           const v = selected;
           const paymentFailed = Boolean(v.payment_failed) || events.some((e) => e.event === "payment_failed") || stripeState === "payment_failed";
-          const nextAction = v.status === "cancelled" || v.status === "paid"
-            ? "No action needed"
-            : !v.visit_confirmed
-              ? v.status === "requested" && !v.request_approved
-                ? "Approve request"
-                : !v.cleaner_name
-                  ? "Assign a cleaner"
-                  : "Confirm the date"
-              : v.report_status === "submitted"
-                ? "Review the report"
-                : paymentFailed
-                  ? "Retry the payment"
-                  : v.issue_open
-                    ? "Resolve the customer issue"
-                    : v.report_status === "sent"
-                      ? "Waiting for the customer’s review"
-                      : v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned"
-                        ? "Waiting for the cleaner’s report"
-                        : "No action needed";
+          const nextAction = nextActionFor(v, paymentFailed);
           const assigned = Boolean(v.cleaner_name);
           const phone = v.cleaner_profile?.phone ?? null;
           const photo = v.cleaner_profile?.photo ?? null;
@@ -937,7 +986,6 @@ const Owner = () => {
           };
 
           const openEditDetails = () => {
-            setFormName(v.cleaner_name ?? "");
             setFormPhone(phone ?? "");
             setFormPhoto(photo ?? "");
             setFormError("");
@@ -959,7 +1007,7 @@ const Owner = () => {
                 <p className="text-sm">{v.address ?? ""}</p>
                 {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
                 <p className="text-sm">
-                  Visit: <strong>{v.status}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
+                  Visit: <strong>{visitLabel(v.status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
                   {stripeState && <> · Stripe: <strong>{stripeState}</strong></>}
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
@@ -967,9 +1015,10 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <span className="text-sm text-muted-foreground">{v.client_email ?? ""}</span>
                   <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
-                    Copy client link
+                    Copy client link (visit + payment)
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">For the client — dates, report, payment. Never send this to the cleaner.</p>
                 {clientCopyStatus && <p className="text-sm mt-1" role="status">{clientCopyStatus}</p>}
                 {manualCopy?.owner === "client" && (
                   <div className="mt-1">
@@ -1035,7 +1084,7 @@ const Owner = () => {
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Cleaner name" value={formName} onChange={(e) => setFormName(e.target.value)} />
+                      <p className="text-sm"><span className="text-muted-foreground">Cleaner: </span><strong>{v.cleaner_name}</strong><span className="text-muted-foreground"> — the name comes from the directory; edit the phone and photo here.</span></p>
                       <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Phone — optional" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} />
                       <input type="text" className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm" placeholder="Photo URL — optional (https://)" value={formPhoto} onChange={(e) => setFormPhoto(e.target.value)} />
                       {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
@@ -1069,23 +1118,20 @@ const Owner = () => {
                       </Button>
                     </div>
 
-                    {!linkIssued ? (
-                      <div>
-                        <p className="text-sm text-muted-foreground mb-2">No access link yet.</p>
-                        <Button variant="outline" onClick={replaceCleanerLink}>Create access link</Button>
-                      </div>
-                    ) : !linkActive ? (
-                      <div>
-                        <p className="text-sm mb-2">Access expired.</p>
-                        <Button variant="outline" onClick={replaceCleanerLink}>
-                          {linkReusable ? "Replace access link" : "Create a reusable access link"}
-                        </Button>
-                      </div>
-                    ) : linkReusable ? (
+                    {/* One status line + one hero button for every link state:
+                        WhatsApp/SMS appear only when a link can be copied. */}
+                    {!linkIssued && <p className="text-sm text-muted-foreground mb-2">No access link yet.</p>}
+                    {linkIssued && !linkActive && <p className="text-sm mb-2">Access expired.</p>}
+                    {linkIssued && linkActive && !linkReusable && (
+                      <p className="text-sm mb-2">
+                        This link was created before reusable links existed, so it can’t be re-fetched here. It still works until it expires.
+                      </p>
+                    )}
+                    {linkIssued && linkActive && linkReusable ? (
                       <div>
                         <div className="flex flex-wrap gap-2 mb-2">
                           <Button variant="hero" onClick={() => void copyCleanerLink()}>
-                            Copy cleaner link
+                            Copy cleaner link (job + photos)
                           </Button>
                           <Button variant="outline" onClick={() => void withLink((url) => openShare("wa", cleanerMessage(url), phone))}>
                             WhatsApp
@@ -1094,6 +1140,7 @@ const Owner = () => {
                             SMS
                           </Button>
                         </div>
+                        <p className="text-xs text-muted-foreground mb-2">For the cleaner — address, rooms, checklist, photos. Never send this to the client.</p>
                         <p className="text-sm">
                           {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
                           {" · "}Access expires {fmtDateET(v.cleaner_link_expires)}
@@ -1132,14 +1179,13 @@ const Owner = () => {
                       </div>
                     ) : (
                       <div>
-                        <p className="text-sm mb-2">
-                          This link was created before reusable links existed, so it can’t be re-fetched here. It still works until it expires.
-                        </p>
-                        <p className="text-sm">
-                          {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
-                          {" · "}Access expires {fmtDateET(v.cleaner_link_expires)}
-                        </p>
-                        <Button variant="outline" className="mt-2" onClick={replaceCleanerLink}>
+                        {linkIssued && (
+                          <p className="text-sm mb-2">
+                            {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
+                            {" · "}Access expires {fmtDateET(v.cleaner_link_expires)}
+                          </p>
+                        )}
+                        <Button variant="hero" onClick={replaceCleanerLink}>
                           Create a reusable access link
                         </Button>
                       </div>
@@ -1192,12 +1238,11 @@ const Owner = () => {
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2 mt-2">
-                      <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>Copy client link</Button>
-                      <Button variant="outline" size="sm" onClick={() => void previewClientView()}>Preview client view</Button>
+                      <Button variant="outline" size="sm" onClick={() => void previewClientView()}>Preview client view (view only)</Button>
                     </div>
                   </div>
                 ) : v.status === "cancelled" || v.status === "paid" ? (
-                  <p className="text-sm text-muted-foreground">This visit is {v.status} — confirmation no longer applies.</p>
+                  <p className="text-sm text-muted-foreground">This visit is {visitLabel(v.status).toLowerCase()} — confirmation no longer applies.</p>
                 ) : (
                   <div>
                     {(!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) && (

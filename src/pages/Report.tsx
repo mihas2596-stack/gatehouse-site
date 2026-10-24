@@ -304,8 +304,8 @@ const Report = () => {
                 If something isn&apos;t right, report an issue and the charge stays paused while we
                 make it right.
                 {data.deadline ? (
-                  <> If we don&apos;t hear from you by <strong>{fmtDeadline(data.deadline)}</strong>,
-                  the charge happens automatically, as agreed in the Terms.</>
+                  <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
+                  your saved card is charged automatically unless you report an issue.</>
                 ) : null}
               </p>
             </div>

@@ -3,7 +3,7 @@
 // 12 serverless functions per deployment and the site already uses all of
 // them (2026-10-24: two login endpoints pushed the count to 14 and every
 // deploy failed until they were merged here).
-//   POST { action: "send" } (or no action) -> emails a 30-minute login
+//   POST { action: "send" } (or no action) -> emails a 24-hour login
 //     link to the fixed owner address (nikolajmihasenok@gmail.com). The
 //     recipient is never taken from the caller, so the endpoint cannot be
 //     used to mail links to anyone else, and it always answers ok:true on
@@ -114,7 +114,7 @@ export default async function handler(req: Req, res: Res) {
         from: FROM_EMAIL,
         to: [OWNER_EMAIL],
         subject: "Gatehouse owner login link",
-        text: `Open this link to enter the Gatehouse owner panel (no key needed):\n\n${link}\n\nThe link works for 30 minutes. If you did not request it, ignore this email.`,
+        text: `Open this link to enter the Gatehouse owner panel (no key needed):\n\n${link}\n\nThe link works for 24 hours. If you did not request it, ignore this email.`,
       }),
       signal: AbortSignal.timeout(15000),
     });
