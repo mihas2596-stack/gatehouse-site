@@ -150,7 +150,7 @@ function ReportSection({ bt, visitState, onChanged }: { bt: string; visitState: 
     return acc;
   }, {});
   const rooms = Object.entries(grouped);
-  const canAct = rep.state === "sent" || rep.state === "payment_failed";
+  const canAct = rep.state === "awaiting" || rep.state === "payment_issue";
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
