@@ -441,6 +441,7 @@ type BookingRow = {
   amount_cents: number | null; cleaner_name: string | null;
   client_email: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
+  visit_date: string | null; window: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
@@ -642,10 +643,19 @@ export default async function handler(req: Req, res: Res) {
       if (!date) {
         return json(400, { ok: false, error: "confirmed_date_required" });
       }
-      const already =
+      // §7/§8: "already" is per-booking, from the visit ROW. The shared
+      // Stripe customer metadata follows the LAST booking for the email,
+      // so a metadata-only check wrongly suppresses the row update (and
+      // the journal event) when a different booking for the same email is
+      // confirmed with the same date/window. Row-less legacy bookings
+      // keep the metadata check.
+      const metaAlready =
         meta["gh_booking_confirmed"] === "1" &&
         meta["gh_confirmed_date"] === date &&
         (meta["gh_confirmed_window"] ?? "") === win;
+      const already = row
+        ? row.status === "confirmed" && row.visit_date === date && (row.window ?? "") === win
+        : metaAlready;
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_booking_confirmed]": "1",
         "metadata[gh_confirmed_date]": date,
@@ -714,11 +724,17 @@ export default async function handler(req: Req, res: Res) {
         // confirmation lived only in the journal + shared Stripe metadata,
         // so the owner list (which reads the row) kept showing "requested"
         // with no date after the owner had confirmed.
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        // Only EXISTING columns: gh_visits has no confirmed_date /
+        // confirmed_window columns, and a PATCH naming one fails as a
+        // whole — which silently left confirmed rows "requested". The
+        // confirmed date/window become the row's operative visit_date /
+        // window; the requested date stays in the journal.
+        const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
           status: "confirmed",
-          confirmed_date: date,
-          confirmed_window: win,
+          visit_date: date,
+          window: win,
         });
+        if (!rowOk) logErr("confirm", "visit row update failed");
       }
       log("confirm", { booking: bookingId, emailSent, already });
       return json(200, {
