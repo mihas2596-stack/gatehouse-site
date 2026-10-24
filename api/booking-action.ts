@@ -31,6 +31,7 @@ import {
   newCleanerToken, hashToken, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
+import { isOwnerAuth } from "./_owner_auth.js";
 
 type BookingPayload = {
   bid: string;
@@ -559,7 +560,7 @@ export default async function handler(req: Req, res: Res) {
     // Admin auth: Bearer token. Never log the token value.
     const authRaw = req.headers["authorization"];
     const auth = Array.isArray(authRaw) ? authRaw[0] : authRaw ?? "";
-    if (auth !== `Bearer ${ADMIN_TOKEN}`) {
+    if (!isOwnerAuth(auth, ADMIN_TOKEN, Math.floor(Date.now() / 1000))) {
       logErr("auth", "unauthorized");
       return json(401, { ok: false, error: "unauthorized" });
     }

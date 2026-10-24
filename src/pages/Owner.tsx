@@ -38,8 +38,9 @@ const money = (cents: number | null): string =>
   cents ? `$${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : "—";
 
 const Owner = () => {
-  const [token, setToken] = useState(() => sessionStorage.getItem("gh_admin_token") ?? "");
+  const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
   const [tokenInput, setTokenInput] = useState("");
+  const [linkMsg, setLinkMsg] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -64,6 +65,31 @@ const Owner = () => {
     [token],
   );
 
+  // Email-link login: /owner?ol=<token> exchanges the link for a 24h
+  // session, stored like the hand-typed key. The token is stripped from
+  // the URL right away so it does not linger in the address bar.
+  useEffect(() => {
+    const ol = new URLSearchParams(window.location.search).get("ol");
+    if (!ol) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    fetch("/api/owner-login-verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ol }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.ok && typeof j.session === "string") {
+          sessionStorage.setItem("gh_owner_session", j.session);
+          setToken(j.session);
+        } else {
+          setError("This login link is invalid or expired — request a new one below.");
+        }
+      })
+      .catch(() => setError("Couldn't verify this login link — request a new one below."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadList = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -72,7 +98,7 @@ const Owner = () => {
       const r = await fetch("/api/owner?view=list", { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string };
       if (!j.ok) {
-        setError(j.error === "unauthorized" ? "Token rejected — check the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
+        setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
         setVisits([]);
       } else {
         setVisits(j.visits ?? []);
@@ -184,7 +210,8 @@ const Owner = () => {
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
         <div className="max-w-sm mx-auto text-center">
           <h1 className="font-heading text-3xl font-bold mb-4">Owner view</h1>
-          <p className="text-sm text-muted-foreground mb-4">Enter the admin token to see visits.</p>
+          <p className="text-sm text-muted-foreground mb-4">Enter the admin token, or get a login link by email.</p>
+          {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
           <input
             type="password"
             className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
@@ -202,6 +229,23 @@ const Owner = () => {
           >
             Open
           </Button>
+          <Button
+            variant="outline"
+            className="w-full mt-3"
+            onClick={async () => {
+              setLinkMsg("");
+              try {
+                const r = await fetch("/api/owner-login", { method: "POST" });
+                const j = await r.json();
+                setLinkMsg(j?.ok ? "Login link sent — check nikolajmihasenok@gmail.com (valid 30 minutes)." : "Couldn't send the link — try again in a minute.");
+              } catch {
+                setLinkMsg("Couldn't send the link — try again in a minute.");
+              }
+            }}
+          >
+            Send login link to my email
+          </Button>
+          {linkMsg && <p className="text-sm mt-3">{linkMsg}</p>}
         </div>
       </div>
     );

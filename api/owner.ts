@@ -7,6 +7,7 @@
 // return_report, send_report, charge) — this endpoint never mutates.
 
 import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
+import { isOwnerAuth } from "./_owner_auth.js";
 
 type Req = {
   method?: string;
@@ -63,7 +64,7 @@ export default async function handler(req: Req, res: Res) {
   if (!ADMIN_TOKEN) return json(500, { ok: false, error: "server_error" });
   const authRaw = req.headers["authorization"];
   const auth = Array.isArray(authRaw) ? authRaw[0] : authRaw ?? "";
-  if (auth !== `Bearer ${ADMIN_TOKEN}`) return json(401, { ok: false, error: "unauthorized" });
+  if (!isOwnerAuth(auth, ADMIN_TOKEN, Math.floor(Date.now() / 1000))) return json(401, { ok: false, error: "unauthorized" });
   if (!dbConfigured()) return json(501, { ok: false, error: "db_not_configured" });
 
   try {
