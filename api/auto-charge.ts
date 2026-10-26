@@ -23,7 +23,7 @@
 // charge and a repeated webhook cannot produce two payments for one visit.
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
-import { sendReceiptEmailOnce } from "./booking-action.js";
+import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbDelete, dbUpdate, logEvent, storageRemove } from "./_db.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
@@ -329,11 +329,13 @@ export default async function handler(req: Req, res: Res) {
     }
     // --- Reminder pass (runs BEFORE the charge loop): a report waiting
     // 20+ hours gets ONE reminder before its auto-charge, so the charge
-    // never surprises the client. No upper age bound: with only two cron
-    // runs a day, a report first seen after its 24h mark must still be
-    // reminded in the same run that charges it. Same guards as the
-    // charge itself (no issue, no bounce).
+    // never surprises the client. Same guards as the charge itself
+    // (no issue, no bounce). The charge loop below never charges a
+    // report in the same run that first reminded it, nor one that was
+    // never reminded while reminders are enabled: a late-discovered
+    // report therefore charges one run later, not in the ambush run.
     let reminded = 0;
+    const remindedThisRun = new Set<string>();
     const RESEND_API_KEY = process.env["RESEND_API_KEY"];
     if (RESEND_API_KEY) {
       for (const c of candidates) {
@@ -375,7 +377,7 @@ export default async function handler(req: Req, res: Res) {
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
-                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended, so the visit is charged automatically today, as agreed in the Terms. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nNick\n\nGatehouse Home Cleaning\n`,
+                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nNick\n\nGatehouse Home Cleaning\n`,
             }),
             signal: AbortSignal.timeout(15000),
           });
@@ -390,6 +392,7 @@ export default async function handler(req: Req, res: Res) {
                 `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
               );
               await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", {});
+              remindedThisRun.add(m["gh_booking_id"]);
             }
             reminded++;
           }
@@ -406,6 +409,31 @@ export default async function handler(req: Req, res: Res) {
 
     for (const item of due) {
       try {
+        // Reminder-before-charge: never charge a report in the run that
+        // first reminded it, and never charge one that was never
+        // reminded while reminders are enabled. Fail open when the
+        // journal is unreadable or reminders are disabled, so a DB
+        // outage cannot stall charges — the next run retries the
+        // reminder, and the panel still shows the failure.
+        if (RESEND_API_KEY && dbConfigured()) {
+          let firstReminder = remindedThisRun.has(item.bookingId);
+          if (!firstReminder) {
+            try {
+              const prior = await dbSelect<{ created_at: string }>(
+                "gh_events",
+                `booking_id=eq.${encodeURIComponent(item.bookingId)}&event=eq.reminder_sent&order=created_at.desc&limit=1`,
+              );
+              firstReminder = prior.length === 0;
+            } catch {
+              firstReminder = false;
+            }
+          }
+          if (firstReminder) {
+            skipped++;
+            log("skip_first_reminder", { booking: item.bookingId });
+            continue;
+          }
+        }
         // Fresh re-read: a client issue (or an operator charge) landing
         // since the search must win over this timer run.
         const freshRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${item.customerId}`);
@@ -415,6 +443,37 @@ export default async function handler(req: Req, res: Res) {
           skipped++;
           log("skip_fresh_recheck", { booking: item.bookingId });
           continue;
+        }
+        // G2: re-verify amount + visit identity against the booking's own
+        // row before charging — the due item came from shared customer
+        // metadata, which may describe another booking of this email. A
+        // mismatch blocks the payment (fail-closed, even on a DB error:
+        // the next run retries). A missing row keeps the legacy metadata
+        // path — pre-pipeline bookings have no row.
+        if (dbConfigured()) {
+          try {
+            const vrows = await dbSelect<{ id: string; client_email: string | null; amount_cents: number | null; status: string | null; report_status: string | null }>(
+              "gh_visits",
+              `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
+            );
+            const vrow = vrows[0];
+            if (vrow) {
+              const custEmail = typeof freshRes.data["email"] === "string" ? (freshRes.data["email"] as string) : "";
+              const mismatch = vrow.amount_cents !== item.amountCents
+                || vrow.status === "paid" || vrow.status === "cancelled"
+                || vrow.report_status !== "sent"
+                || (custEmail !== "" && vrow.client_email !== null && vrow.client_email !== custEmail);
+              if (mismatch) {
+                skipped++;
+                log("skip_row_mismatch", { booking: item.bookingId, rowAmount: vrow.amount_cents, dueAmount: item.amountCents, rowStatus: vrow.status, reportStatus: vrow.report_status });
+                continue;
+              }
+            }
+          } catch {
+            skipped++;
+            log("skip_row_unreadable", { booking: item.bookingId });
+            continue;
+          }
         }
         await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
           "metadata[gh_state]": "payment_pending",
@@ -483,16 +542,21 @@ export default async function handler(req: Req, res: Res) {
           await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
             "metadata[gh_state]": "payment_failed",
           });
+          let failedVisitId: string | null = null;
           try {
             const vrows = await dbSelect<{ id: string }>(
               "gh_visits",
               `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
             );
-            await logEvent(vrows[0]?.id ?? null, item.bookingId, "system", "payment_failed", {
+            failedVisitId = vrows[0]?.id ?? null;
+            await logEvent(failedVisitId, item.bookingId, "system", "payment_failed", {
               source: "timer_24h",
               error: String(errMsg).slice(0, 200),
             });
           } catch { /* journal is best-effort here */ }
+          try {
+            await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, item.customerId, item.bookingId, failedVisitId);
+          } catch { /* email is best-effort; the panel badge + journal still surface the failure */ }
           failed++;
           logErr("charge_failed", `${item.bookingId}: ${errMsg}`);
         }
@@ -509,6 +573,17 @@ export default async function handler(req: Req, res: Res) {
         } catch {
           /* ignore */
         }
+        try {
+          const vrows = await dbSelect<{ id: string }>(
+            "gh_visits",
+            `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
+          );
+          await logEvent(vrows[0]?.id ?? null, item.bookingId, "system", "payment_failed", {
+            source: "timer_24h",
+            error: String(err instanceof Error ? err.message : String(err)).slice(0, 200),
+          });
+          await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, item.customerId, item.bookingId, vrows[0]?.id ?? null);
+        } catch { /* journal + email are best-effort; the meta flag still surfaces the failure */ }
       }
     }
 

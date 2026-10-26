@@ -32,6 +32,7 @@ import {
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
+import { paymentBasis, issueStateFrom } from "./_payment_basis.js";
 import {
   cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
   cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
@@ -563,6 +564,10 @@ type BookingRow = {
   client_email: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
   visit_date: string | null; window: string | null;
+  // Synced on every issue transition (client issue, dispute, resolve,
+  // resend, client approval); PostgREST returns them even though the
+  // lite type used to omit them.
+  issue_open?: boolean | null; issue_ever?: boolean | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
@@ -608,7 +613,9 @@ async function hydrateCustomerMeta(
   const resolved = latestEvent(events, "issue_resolved");
   const issueOpen = Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
   const cancelledEv = latestEvent(events, "visit_cancelled");
-  const approvedEv = latestEvent(events, "report_approved");
+  // An operator approval is not client consent: a stale operator event
+  // must not re-arm "approved" when this booking is hydrated (G3).
+  const approvedEv = events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve") ?? null;
   const remindedEv = latestEvent(events, "reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
@@ -1112,7 +1119,11 @@ export default async function handler(req: Req, res: Res) {
       }
       const prevCleaner = row.cleaner_name ?? "";
       const rowCleanerId = (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null;
-      const changed = Boolean(prevCleaner) && prevCleaner !== name;
+      // G4: a change of person is decided by the stable roster ID, not
+      // the name — two roster cleaners can share a name, and the second
+      // one must still revoke the first one's link. Rows minted before
+      // cleaner_id existed fall back to the name comparison.
+      const changed = Boolean(prevCleaner) && (rowCleanerId ? rowCleanerId !== cleanerId : prevCleaner !== name);
       const firstAssignment = !prevCleaner;
       const already =
         rowStatus === "confirmed" &&
@@ -1173,6 +1184,13 @@ export default async function handler(req: Req, res: Res) {
             await clearV2Fields(row.id);
             linkOut = { url: leg.url, expires: leg.expires, reusable: false };
           }
+          // The old code fell back silently: a mint failure and a DB
+          // write failure looked identical afterwards. Log the reason
+          // so the next legacy link is diagnosable.
+          await logEvent(row.id, bookingId, "owner", "cleaner_link_legacy_fallback", {
+            reason: !v2 ? "v2_mint_null" : "v2_write_failed",
+            legacy_saved: Boolean(okLeg),
+          });
         }
         if (linkOut) {
           await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
@@ -1315,9 +1333,14 @@ export default async function handler(req: Req, res: Res) {
     if (action === "resolve") {
       // resolve only re-opens a disputed booking. It must never move a paid
       // (or payment_pending) booking back to approved — that would re-arm
-      // charging for an already-settled visit.
-      if (state !== "issue_open") {
-        logErr("resolve", `blocked: state=${state}, need issue_open`);
+      // charging for an already-settled visit. The gate is booking-scoped
+      // (row + journal) for row-backed bookings: shared customer metadata
+      // may describe another booking of this email (O1).
+      const issueIsOpen = row
+        ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
+        : state === "issue_open";
+      if (!issueIsOpen) {
+        logErr("resolve", `blocked: no open issue (shared state=${state})`);
         return json(409, { ok: false, error: "nothing_to_resolve" });
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -1337,20 +1360,18 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "approve") {
-      if (issueOpen) {
-        logErr("approve", "blocked: issue open");
-        return json(409, { ok: false, error: "issue_open" });
-      }
-      if (state !== "card_ready" && state !== "report_sent") {
-        logErr("approve", `blocked: state=${state}, need card_ready or report_sent`);
-        return json(409, { ok: false, error: "card_not_ready" });
-      }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "approved",
-      });
-      if (row) await logEvent(row.id, bookingId, "owner", "report_approved", { via: "operator_approve" });
-      log("approve", { booking: bookingId });
-      return json(200, { ok: true, state: "approved" });
+      // CLOSED (G3): an operator approval used to write gh_state=approved
+      // and a report_approved journal event, which the charge action then
+      // treated as client consent — so a booking with a card but no sent
+      // report could be charged without the client ever seeing a report.
+      // Payment approval comes only from the client's own Approve on
+      // /report, or from the 24h timer rule; the charge action checks
+      // that basis directly, so no operator "arming" step exists anymore.
+      // Request acceptance stays approve_request; issue handling stays
+      // resolve. (A client who approves by email presses Approve on the
+      // report link; after 24h of silence the timer rule applies.)
+      logErr("approve", "blocked: operator approve is not client payment approval");
+      return json(409, { ok: false, error: "operator_approve_disabled" });
     }
 
     if (action === "charge") {
@@ -1359,14 +1380,45 @@ export default async function handler(req: Req, res: Res) {
       if (!amountCents) {
         return json(400, { ok: false, error: "amount_required" });
       }
-      // Hard safety gates — an open dispute or missing card blocks charging.
-      if (issueOpen) {
-        logErr("charge", "blocked: issue open");
-        return json(409, { ok: false, error: "issue_open" });
-      }
-      if (state !== "approved") {
-        logErr("charge", `blocked: state=${state}, need approved`);
-        return json(409, { ok: false, error: "not_approved" });
+      // Payment basis (G3): for a row-backed booking the charge needs a
+      // saved basis — the CLIENT's own report approval, or the agreed
+      // 24h timer rule (report sent 24h+ ago, no issue ever). Shared
+      // customer metadata is not a basis: it describes whichever booking
+      // this customer was last bound to, and an operator approval never
+      // manufactures client consent. A payment_failed retry passes on
+      // the same saved basis (O4) — the basis lives in the journal, not
+      // in the transient state string. Legacy bookings without a row
+      // keep the previous shared-metadata gates.
+      if (row) {
+        if (row.status === "paid") {
+          logErr("charge", "blocked: already paid");
+          return json(409, { ok: false, error: "already_paid" });
+        }
+        if (row.status === "cancelled") {
+          logErr("charge", "blocked: already cancelled");
+          return json(409, { ok: false, error: "already_cancelled" });
+        }
+        if (issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open) {
+          logErr("charge", "blocked: issue open");
+          return json(409, { ok: false, error: "issue_open" });
+        }
+        const basis = paymentBasis(
+          { reportSentAt: row.report_sent_at, events, issueOpenRow: row.issue_open ?? null, issueEverRow: row.issue_ever ?? null },
+          Date.now(),
+        );
+        if (!basis) {
+          logErr("charge", "blocked: no payment basis (needs client approval or the 24h rule)");
+          return json(409, { ok: false, error: "payment_basis_missing" });
+        }
+      } else {
+        if (issueOpen) {
+          logErr("charge", "blocked: issue open");
+          return json(409, { ok: false, error: "issue_open" });
+        }
+        if (state !== "approved") {
+          logErr("charge", `blocked: state=${state}, need approved`);
+          return json(409, { ok: false, error: "not_approved" });
+        }
       }
       const paymentMethod = meta["gh_payment_method"];
       if (!paymentMethod) {
@@ -1374,8 +1426,7 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "no_payment_method" });
       }
       // Server-side amount check: the charge must equal the amount pinned
-      // to THIS visit's report by send_report (gh_report_amount_cents —
-      // the first or recurring price of the agreed order, validated there).
+      // to THIS visit's report by send_report (gh_report_amount_cents).
       // Bookings without a pinned report amount fall back to the
       // first-visit price stored at card-save time. The request amount is
       // never trusted on its own (fail-closed).
@@ -1390,13 +1441,13 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "amount_mismatch" });
       }
       // Agreed-price invariant: the amount must be THIS booking's pinned
-      // price (gh_visits.amount_cents, fixed server-side at submission) —
-      // or, for a bound booking, its own recurring price. Anything else
-      // means the surfaces disagree: flag the booking for a price review
-      // and stop the payment instead of picking a number.
+      // price (gh_visits.amount_cents, fixed server-side at submission).
+      // No recurring fallback: a recurring price belongs to the NEXT
+      // visit, never to this one (G2). Anything else means the surfaces
+      // disagree: flag the booking for a price review and stop the
+      // payment instead of picking a number.
       if (row?.amount_cents) {
-        const recurringCents = bound ? parseInt(meta["gh_recurring_price_cents"] ?? "", 10) : NaN;
-        if (amountCents !== row.amount_cents && amountCents !== recurringCents) {
+        if (amountCents !== row.amount_cents) {
           await logEvent(row.id, bookingId, "system", "price_review_flagged", {
             amount_cents: amountCents, pinned_cents: row.amount_cents,
           });
@@ -1408,19 +1459,47 @@ export default async function handler(req: Req, res: Res) {
       // many times this is called or how often Stripe redelivers webhooks.
       const idemKey = `charge_${bookingId}_v${reportVersion}`;
       // Fresh re-read immediately before creating the PaymentIntent: a
-      // dispute (or another charge) landing concurrently must win over this
-      // charge. Metadata writes are not transactional, so this narrows —
-      // but cannot fully close — the race; the state machine above is the
-      // backstop.
-      const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-      const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
-      if (freshMeta["gh_issue_open"] === "1") {
-        logErr("charge", "blocked on re-read: issue open");
-        return json(409, { ok: false, error: "issue_open" });
-      }
-      if ((freshMeta["gh_state"] ?? "") !== "approved") {
-        logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
-        return json(409, { ok: false, error: "not_approved" });
+      // dispute (or another charge) landing concurrently must win over
+      // this charge. For row-backed bookings the re-read is booking-
+      // scoped (row + journal), because shared customer metadata may
+      // describe another booking of this email. A concurrent charge on
+      // THIS booking is caught by the payment_pending flip plus the
+      // shared booking_id match; a concurrent resend cannot bump the
+      // version mid-charge because send_report refuses payment_pending
+      // state — so concurrent charges always share one idempotency key
+      // and Stripe dedupes them. (The basis itself lives in the journal:
+      // a concurrent client approval only strengthens it.)
+      if (row) {
+        const freshRow = await latestBookingRow(bookingId);
+        const freshEvents = freshRow ? await bookingEvents(bookingId) : [];
+        if (freshRow?.status === "paid" || freshEvents.some((e) => e.event === "payment_succeeded")) {
+          logErr("charge", "blocked on re-read: already paid");
+          return json(409, { ok: false, error: "already_paid" });
+        }
+        if (freshRow?.status === "cancelled") {
+          logErr("charge", "blocked on re-read: already cancelled");
+          return json(409, { ok: false, error: "already_cancelled" });
+        }
+        if (issueStateFrom(freshEvents, freshRow?.issue_open ?? null, freshRow?.issue_ever ?? null).open) {
+          logErr("charge", "blocked on re-read: issue open");
+          return json(409, { ok: false, error: "issue_open" });
+        }
+        const freshMeta = ((await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`)).data["metadata"] as Record<string, string> | undefined) ?? {};
+        if (freshMeta["gh_state"] === "payment_pending" && freshMeta["gh_booking_id"] === bookingId) {
+          logErr("charge", "blocked on re-read: concurrent charge in flight");
+          return json(409, { ok: false, error: "charge_in_flight" });
+        }
+      } else {
+        const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+        const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
+        if (freshMeta["gh_issue_open"] === "1") {
+          logErr("charge", "blocked on re-read: issue open");
+          return json(409, { ok: false, error: "issue_open" });
+        }
+        if ((freshMeta["gh_state"] ?? "") !== "approved") {
+          logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
+          return json(409, { ok: false, error: "not_approved" });
+        }
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "payment_pending",
@@ -1557,15 +1636,22 @@ export default async function handler(req: Req, res: Res) {
       if (!rpSource && photosJson.length > 450 * 4) {
         return json(400, { ok: false, error: "photo_payload_too_large" });
       }
-      // Pin the agreed amount for THIS visit's report. The operator may
-      // pass amount_cents, but it must equal one of the two prices of the
-      // agreed order stored at card-save time (first or recurring) —
-      // anything else is rejected, never trusted. Default: first-visit
-      // price for the first report, recurring price after that.
+      // Pin the agreed amount for THIS visit's report. A visit's price is
+      // fixed at submission (gh_visits.amount_cents): a (re-)send never
+      // re-prices it — the old "recurring price after the first report"
+      // rule charged resends at the recurring rate (G2). The operator
+      // may pass amount_cents, but for a row-backed booking it must
+      // equal the pinned price. Legacy bookings without a row keep the
+      // agreed-order validation (first or recurring price).
       const firstCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
       const recurringCents = parseInt(meta["gh_recurring_price_cents"] ?? "", 10);
       let amountCents = parsed.data.amount_cents;
-      if (amountCents !== undefined) {
+      if (row?.amount_cents) {
+        if (amountCents !== undefined && amountCents !== row.amount_cents) {
+          return json(400, { ok: false, error: "amount_not_agreed" });
+        }
+        amountCents = row.amount_cents;
+      } else if (amountCents !== undefined) {
         if (amountCents !== firstCents && amountCents !== recurringCents) {
           return json(400, { ok: false, error: "amount_not_agreed" });
         }
@@ -1835,7 +1921,11 @@ export default async function handler(req: Req, res: Res) {
         return json(400, { ok: false, error: "invalid_phone" });
       }
       const wasConfirmed = row?.status === "confirmed";
-      const changed = Boolean(prevCleaner) && prevCleaner !== name;
+      // G4: same rule as assign_confirm — the stable roster ID decides
+      // a change of person; the name is only the fallback for rows
+      // minted before cleaner_id existed.
+      const rowCleanerId = (row as unknown as { cleaner_id?: string | null } | null)?.cleaner_id ?? null;
+      const changed = Boolean(prevCleaner) && (rosterId && rowCleanerId ? rowCleanerId !== rosterId : prevCleaner !== name);
       const firstAssignment = !prevCleaner;
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
@@ -1883,6 +1973,13 @@ export default async function handler(req: Req, res: Res) {
               await clearV2Fields(row.id);
               linkOut = { url: leg.url, expires: leg.expires, reusable: false };
             }
+            // The old code fell back silently: a mint failure and a DB
+            // write failure looked identical afterwards. Log the reason
+            // so the next legacy link is diagnosable.
+            await logEvent(row.id, bookingId, "owner", "cleaner_link_legacy_fallback", {
+              reason: !v2 ? "v2_mint_null" : "v2_write_failed",
+              legacy_saved: Boolean(okLeg),
+            });
           }
           if (linkOut) {
             await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
@@ -1901,7 +1998,7 @@ export default async function handler(req: Req, res: Res) {
       // client (a first assignment before confirmation is covered by the
       // confirmation email itself).
       let cleanerEmailSent = false;
-      if (row && ((prevCleaner && prevCleaner !== name) || (!prevCleaner && wasConfirmed))) {
+      if (row && (changed || (!prevCleaner && wasConfirmed))) {
         await logEvent(row.id, bookingId, "owner", "cleaner_changed", { from: prevCleaner || null, to: name });
         cleanerEmailSent = await sendShortClientEmail({
           secretKey: STRIPE_SECRET_KEY,
@@ -2127,12 +2224,24 @@ export default async function handler(req: Req, res: Res) {
       // Owner sends the cleaner's report back with a note. The cleaner
       // sees the note when they reopen their link; nothing reaches the
       // client and no clock or charge state changes.
+      // O1: a PUBLISHED report can also be returned — but only while a
+      // customer issue is open. That is exactly the fix flow: the charge
+      // is already blocked by the open issue, the published report stays
+      // visible to the client (report_sent_at is kept), and the cleaner
+      // fixes + resubmits; the owner's resend (optionally with
+      // resolve_issue) supersedes it. Returning a sent report with no
+      // open issue is refused: the 24h clock would keep running mid-fix.
       if (!dbConfigured()) {
         return json(501, { ok: false, error: "db_not_configured" });
       }
       const visit = await latestVisit(bookingId);
       if (!visit) return json(404, { ok: false, error: "visit_not_found" });
-      if (visit.report_status !== "submitted") {
+      const issueIsOpen = row
+        ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
+        : false;
+      const returnable = visit.report_status === "submitted"
+        || (visit.report_status === "sent" && issueIsOpen);
+      if (!returnable) {
         return json(409, { ok: false, error: "report_not_submitted", report_status: visit.report_status });
       }
       const noteText = (parsed.data.note ?? "").trim();

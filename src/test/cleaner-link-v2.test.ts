@@ -141,6 +141,7 @@ describe("booking-action cleaner links", () => {
   let rows: Row[];
   let events: { visit_id: string | null; event: string }[];
   let v2ColumnsMissing: boolean;
+  let roster: Row[];
 
   const supRes = (data: unknown, ok = true, status = 200) => ({
     ok, status,
@@ -198,6 +199,14 @@ describe("booking-action cleaner links", () => {
         if (hash) out = out.filter((r) => r["cleaner_token_hash"] === hash);
         return supRes(out.slice(0, 1));
       }
+      if (u.includes("/rest/v1/gh_cleaners")) {
+        const qs = new URLSearchParams(u.split("?")[1] ?? "");
+        const id = qs.get("id");
+        const out = id && id.startsWith("eq.")
+          ? roster.filter((r) => r["id"] === decodeURIComponent(id.slice(3)))
+          : [...roster];
+        return supRes(out.slice(0, 1));
+      }
       if (u.includes("/rest/v1/gh_events")) {
         if (method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}")) as { visit_id?: string | null; event?: string };
@@ -231,6 +240,10 @@ describe("booking-action cleaner links", () => {
     rows = [makeVisitRow()];
     events = [];
     v2ColumnsMissing = false;
+    roster = [
+      { id: "roster-ana-1", name: "Ana", phone: "+1 404 555 0100", photo_url: "https://example.com/ana1.jpg", active: true },
+      { id: "roster-ana-2", name: "Ana", phone: "+1 404 555 0200", photo_url: "https://example.com/ana2.jpg", active: true },
+    ];
     installFetch();
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
@@ -398,6 +411,33 @@ describe("booking-action cleaner links", () => {
     expect(r.body["cleaner_profile_saved"]).toBe(false);
     expect(r.body["reusable"]).toBe(false);
   });
+
+  it("G4: same name, different roster ID still rotates the link (set_cleaner)", async () => {
+    const r1 = await call({ action: "set_cleaner", booking_id: BID, cleaner_id: "roster-ana-1" });
+    expect(r1.body["ok"]).toBe(true);
+    expect(rows[0]["cleaner_id"]).toBe("roster-ana-1");
+    const firstIssuance = rows[0]["cleaner_link_issuance"];
+    expect(firstIssuance).toBeTruthy();
+
+    // Same ID again: link kept.
+    const rSame = await call({ action: "set_cleaner", booking_id: BID, cleaner_id: "roster-ana-1" });
+    expect(rSame.body["ok"]).toBe(true);
+    expect(rows[0]["cleaner_link_issuance"]).toBe(firstIssuance);
+
+    // Same NAME, different ID: a different person — the old link must
+    // die and the profile must come from the new roster row.
+    const eventsBefore = events.length;
+    const r2 = await call({ action: "set_cleaner", booking_id: BID, cleaner_id: "roster-ana-2" });
+    expect(r2.body["ok"]).toBe(true);
+    expect(rows[0]["cleaner_id"]).toBe("roster-ana-2");
+    expect(rows[0]["cleaner_link_issuance"]).not.toBe(firstIssuance);
+    expect((rows[0]["cleaner_profile"] as Row)["phone"]).toBe("+1 404 555 0200");
+    expect(events.slice(eventsBefore).map((e) => e.event)).toContain("cleaner_link_rotated");
+  });
+
+  // NOTE: the assign_confirm half of G4 lives in g4-assign-confirm.test.ts:
+  // booking-action rate-limits 30 calls/min per module instance, and
+  // this file's earlier tests already spend that budget.
 });
 
 // ---------- cleaner.ts handler tests (open tracking) ----------
@@ -405,6 +445,8 @@ describe("booking-action cleaner links", () => {
 describe("cleaner cabinet v2 verification", () => {
   let visit: Row;
   let openedEvents: number;
+  let priorOpens: { created_at: string; detail: Record<string, unknown> | null }[];
+  let openedDetails: (Record<string, unknown> | null)[];
 
   const installCleanerFetch = () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
@@ -430,11 +472,18 @@ describe("cleaner cabinet v2 verification", () => {
       if (u.includes("/rest/v1/gh_photos")) return supRes([]);
       if (u.includes("/rest/v1/gh_events")) {
         if (method === "POST") {
-          const body = JSON.parse(String(init?.body ?? "{}")) as { event?: string };
-          if (body.event === "cleaner_link_opened") openedEvents += 1;
+          const body = JSON.parse(String(init?.body ?? "{}")) as { event?: string; detail?: Record<string, unknown> | null };
+          if (body.event === "cleaner_link_opened") {
+            openedEvents += 1;
+            openedDetails.push(body.detail ?? null);
+          }
           return supRes([{ id: 1 }]);
         }
-        return supRes([]);
+        const qs = new URLSearchParams(u.split("?")[1] ?? "");
+        const issEq = qs.get("detail->>issuance");
+        const iss = issEq && issEq.startsWith("eq.") ? decodeURIComponent(issEq.slice(3)) : null;
+        const out = iss ? priorOpens.filter((o) => o.detail?.["issuance"] === iss) : priorOpens;
+        return supRes(out);
       }
       return supRes({}, false, 404);
     }));
@@ -453,6 +502,8 @@ describe("cleaner cabinet v2 verification", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     openedEvents = 0;
+    priorOpens = [];
+    openedDetails = [];
     visit = makeVisitRow({
       client_name: "Casey Client",
       service: "Standard",
@@ -485,6 +536,18 @@ describe("cleaner cabinet v2 verification", () => {
     const r = await get({ ct: token, pv: "1" });
     expect(r.code).toBe(200);
     expect(openedEvents).toBe(0);
+  });
+
+  it("C2: a cancelled visit reports cancelled and is not editable", async () => {
+    // report_status "none" alone would look editable; the cancelled row
+    // status must win, matching the POST gate (409 visit_not_confirmed).
+    visit["status"] = "cancelled";
+    visit["report_status"] = "none";
+    const token = issueV2ForVisit("aabbccddeeff00112233445566778899");
+    const r = await get({ ct: token });
+    expect(r.code).toBe(200);
+    expect(r.body["cancelled"]).toBe(true);
+    expect(r.body["editable"]).toBe(false);
   });
 
   it("rejects a forged v2 token and a replaced (old-issuance) token", async () => {
@@ -523,6 +586,35 @@ describe("cleaner cabinet v2 verification", () => {
     const r = await get({ ct: token });
     expect(r.code).toBe(404);
     expect(openedEvents).toBe(0);
+  });
+
+  it("O5: a new issuance logs its own opening despite a recent old-issuance open", async () => {
+    const oldIss = "aabbccddeeff00112233445566778899";
+    const newIss = "00112233445566778899aabbccddeeff";
+    priorOpens = [{ created_at: new Date(Date.now() - 3600 * 1000).toISOString(), detail: { issuance: oldIss } }];
+    const token = issueV2ForVisit(newIss);
+    const r = await get({ ct: token });
+    expect(r.code).toBe(200);
+    expect(openedEvents).toBe(1);
+    expect(openedDetails[0]?.["issuance"]).toBe(newIss);
+  });
+
+  it("O5: the same issuance within 6h does not double-log", async () => {
+    const iss = "aabbccddeeff00112233445566778899";
+    priorOpens = [{ created_at: new Date(Date.now() - 3600 * 1000).toISOString(), detail: { issuance: iss } }];
+    const token = issueV2ForVisit(iss);
+    const r = await get({ ct: token });
+    expect(r.code).toBe(200);
+    expect(openedEvents).toBe(0);
+  });
+
+  it("O5: the same issuance after 6h logs again", async () => {
+    const iss = "aabbccddeeff00112233445566778899";
+    priorOpens = [{ created_at: new Date(Date.now() - 7 * 3600 * 1000).toISOString(), detail: { issuance: iss } }];
+    const token = issueV2ForVisit(iss);
+    const r = await get({ ct: token });
+    expect(r.code).toBe(200);
+    expect(openedEvents).toBe(1);
   });
 
   it("fallback-minted links open after the env secret is added", async () => {

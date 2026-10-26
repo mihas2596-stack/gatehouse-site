@@ -33,7 +33,10 @@ type Visit = {
   issue_ever: boolean;
   report_bounced: boolean;
   payment_failed?: boolean;
+  can_charge?: boolean;
   visit_confirmed?: boolean;
+  proposed_date?: string;
+  proposed_pending?: boolean;
   confirmation_email?: string | null;
   paid_at: string | null;
   is_test: boolean;
@@ -159,7 +162,23 @@ const Owner = () => {
   const [showTokenForm, setShowTokenForm] = useState(false);
   const [linkMsg, setLinkMsg] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
-  const [hideTest, setHideTest] = useState(false);
+  // Test bookings are hidden by default (the owner has dozens of them);
+  // the choice persists across sessions.
+  const [hideTest, setHideTest] = useState(() => {
+    try {
+      return typeof localStorage !== "undefined" ? localStorage.getItem("gh_hide_test") !== "0" : true;
+    } catch {
+      return true;
+    }
+  });
+  const setHideTestPersist = (value: boolean) => {
+    setHideTest(value);
+    try {
+      localStorage.setItem("gh_hide_test", value ? "1" : "0");
+    } catch {
+      /* private mode: session-only */
+    }
+  };
   const [queueMsg, setQueueMsg] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -348,8 +367,11 @@ const Owner = () => {
         headers: headers(),
         body: JSON.stringify({ action: "status", booking_id: v.booking_id }),
       });
-      const sj = (await sr.json()) as { ok: boolean; ops?: { state?: string } };
-      if (sj.ok && sj.ops?.state) setStripeState(sj.ops.state);
+      // O2: the status action returns state at the ROOT, not under ops
+      // (ops carries the detail fields). Reading ops.state always yielded
+      // undefined, so the Stripe line never updated.
+      const sj = (await sr.json()) as { ok: boolean; state?: string };
+      if (sj.ok && sj.state) setStripeState(sj.state);
     } catch {
       setActionMsg("Couldn't load the visit details.");
     }
@@ -364,21 +386,35 @@ const Owner = () => {
     return (await r.json()) as Record<string, unknown> & { ok: boolean; error?: string };
   };
 
+  // G5: busy state always resets (finally), a failed fetch or bad JSON
+  // yields a readable message instead of a stuck spinner, and on an
+  // unknown outcome the panel re-reads state before any retry, so a
+  // repeat cannot create a second action.
   const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void) => {
     setActing(label);
     setActionMsg(`${label}: working…`);
-    const j = await act(payload);
-    setActing("");
-    if (j.ok) {
-      setActionMsg(`${label}: done.`);
-      after?.(j);
+    try {
+      const j = await act(payload);
+      if (j.ok) {
+        setActionMsg(`${label}: done.`);
+        after?.(j);
+        void loadList();
+        if (selected) {
+          const fresh = visits.find((x) => x.id === selected.id);
+          if (fresh) void openVisit(fresh);
+        }
+      } else {
+        setActionMsg(`${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+      }
+    } catch {
+      setActionMsg(`${label}: couldn't reach the server — the action may or may not have run. Reloading the visit before you retry.`);
       void loadList();
       if (selected) {
         const fresh = visits.find((x) => x.id === selected.id);
         if (fresh) void openVisit(fresh);
       }
-    } else {
-      setActionMsg(`${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+    } finally {
+      setActing("");
     }
   };
 
@@ -758,6 +794,7 @@ const Owner = () => {
     else if (needsReview) items.push({ label: "Needs review", focus: "schedule" });
     else if (!v.visit_confirmed) items.push({ label: "Confirm the date", focus: "schedule" });
     if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
+    if (v.issue_open) items.push({ label: "Resolve the customer issue", focus: "report" });
     if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
     return items;
   };
@@ -771,9 +808,9 @@ const Owner = () => {
   const listedVisits = hideTest ? visits.filter((v) => !v.is_test) : visits;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background page-shell">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-5xl mx-auto px-4 pb-6">
         <div className="flex items-center justify-between mb-4">
           <h1 className="font-heading text-3xl font-bold">Visits</h1>
           <Button variant="outline" size="sm" onClick={() => void loadList()}>
@@ -784,7 +821,7 @@ const Owner = () => {
         {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
         {!selected && (
           <label className="flex items-center gap-2 text-sm mb-4">
-            <input type="checkbox" checked={hideTest} onChange={(e) => setHideTest(e.target.checked)} />
+            <input type="checkbox" checked={hideTest} onChange={(e) => setHideTestPersist(e.target.checked)} />
             Hide test bookings
           </label>
         )}
@@ -965,7 +1002,22 @@ const Owner = () => {
         {selected && (() => {
           if (!selected) return null;
           const v = selected;
-          const paymentFailed = Boolean(v.payment_failed) || events.some((e) => e.event === "payment_failed") || stripeState === "payment_failed";
+          // O3: the server computes payment_failed from the journal
+          // (latest failure vs later success + paid row). OR-ing in any
+          // historical event or the shared Stripe state here used to
+          // resurrect cleared failures.
+          const paymentFailed = Boolean(v.payment_failed);
+          // O1: show the open problem itself (room + reason), not just
+          // the "Resolve" button: the latest issue_opened event with no
+          // later issue_resolved.
+          const openIssue = (() => {
+            const byTimeDesc = [...events].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+            const opened = byTimeDesc.find((e) => e.event === "issue_opened");
+            if (!opened) return null;
+            const resolved = byTimeDesc.find((e) => e.event === "issue_resolved");
+            if (resolved && resolved.created_at >= opened.created_at) return null;
+            return opened;
+          })();
           const nextAction = nextActionFor(v, paymentFailed);
           const assigned = Boolean(v.cleaner_name);
           const phone = v.cleaner_profile?.phone ?? null;
@@ -1012,6 +1064,27 @@ const Owner = () => {
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
+                {v.issue_open && (
+                  <div className="flex flex-wrap gap-2 mt-2 items-center">
+                    {openIssue && (
+                      <p className="text-sm w-full">
+                        Issue{typeof openIssue.detail?.room === "string" && openIssue.detail.room ? ` · ${openIssue.detail.room}` : ""}: {typeof openIssue.detail?.reason === "string" && openIssue.detail.reason ? openIssue.detail.reason : "no details given"}
+                      </p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={acting !== ""}
+                      onClick={() => {
+                        if (!window.confirm("Mark this issue resolved? The client will be able to approve the existing report. Automatic charging stays off for this booking — the client must approve, or you charge manually.")) return;
+                        void runAction("Resolve issue", { action: "resolve", booking_id: v.booking_id });
+                      }}
+                    >
+                      Resolve issue
+                    </Button>
+                    <span className="text-xs text-muted-foreground">Clears the issue without re-sending the report or restarting the review clock.</span>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <span className="text-sm text-muted-foreground">{v.client_email ?? ""}</span>
                   <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
@@ -1218,6 +1291,12 @@ const Owner = () => {
               {/* C. Schedule — confirming the visit is the owner's explicit action */}
               <section id="block-schedule" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Schedule</h3>
+                {v.proposed_pending && v.proposed_date && v.status !== "cancelled" && v.status !== "paid" && (
+                  <p className="text-sm mb-3 rounded-lg bg-sky-50 border border-sky-200 p-3" role="status">
+                    Client proposed <strong>{fmtVisitDate(v.proposed_date)}</strong> — awaiting your confirmation.
+                    The confirmed date stays until you confirm the new one.
+                  </p>
+                )}
                 {(v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid") && !scheduleEditing ? (
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -1415,7 +1494,7 @@ const Owner = () => {
                       <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What needs to change? (the cleaner sees this note)" value={returnNote} onChange={(e) => setReturnNote(e.target.value)} />
                       <Button
                         variant="outline"
-                        disabled={acting !== "" || v.report_status !== "submitted"}
+                        disabled={acting !== "" || !(v.report_status === "submitted" || (v.report_status === "sent" && v.issue_open))}
                         onClick={() => void runAction("Request changes", { action: "return_report", booking_id: v.booking_id, note: returnNote })}
                       >
                         Request changes
@@ -1443,6 +1522,7 @@ const Owner = () => {
                         </Button>
                       </div>
                     )}
+
                     {publishMsg && <p className="text-sm mt-2" role="status">{publishMsg}</p>}
                   </div>
                 )}
@@ -1496,12 +1576,15 @@ const Owner = () => {
                   <div className="mt-2">
                     <Button
                       variant="outline"
+                      disabled={v.can_charge === false}
                       onClick={() => void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined })}
                     >
                       Charge {money(v.amount_cents)}
                     </Button>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Works only after the client approved (or the agreed automatic rule fired). Server errors are shown as-is.
+                      {v.can_charge === false
+                        ? "No payment basis yet — the client must approve the report, or 24 hours must pass with no open issue. The server enforces this."
+                        : "Works only after the client approved (or the agreed automatic rule fired). Server errors are shown as-is."}
                     </p>
                   </div>
                 </details>

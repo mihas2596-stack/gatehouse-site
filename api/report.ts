@@ -79,7 +79,9 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
   const confirmEv = latestEvent(events, "visit_confirmed");
   const opened = latestEvent(events, "issue_opened");
   const resolved = latestEvent(events, "issue_resolved");
-  const approvedEv = latestEvent(events, "report_approved");
+  // An operator approval is not client consent (G3): it must not surface
+  // as an approved report here either.
+  const approvedEv = events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve") ?? null;
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const issueOpen = issueOpenFrom(events);
   // M5: a failed approve-charge must survive a page reload. Without this,
@@ -574,6 +576,12 @@ export default async function handler(req: Req, res: Res) {
         report_sent_at: sentAt,
         deadline,
         delivery_failed: meta["gh_report_bounced"] === "1",
+        // V3: the auto-charge timer's real eligibility, identical on
+        // /visit and /report. The deadline warning must render only
+        // when the timer actually runs: an open issue or a bounced
+        // report blocks it, and "sent" never means delivered or read.
+        charge_timer_blocked: meta["gh_issue_open"] === "1" || meta["gh_report_bounced"] === "1",
+        charge_timer_block_reason: meta["gh_issue_open"] === "1" ? "issue_open" : (meta["gh_report_bounced"] === "1" ? "bounced" : null),
         receipt_sent: Boolean(meta["gh_receipt_email_id"]),
         postpay_issue: meta["gh_postpay_issue"] === "1",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
@@ -669,7 +677,9 @@ export default async function handler(req: Req, res: Res) {
       // Terms 5.2: the card is charged WHEN the client approves the
       // report. Approval is recorded first (it is a fact even if the
       // payment then fails), then the pinned amount is charged at once.
-      const approvalLogged = Boolean(latestEvent(events, "report_approved"));
+      // An operator approval does not count as the client's: a client
+      // press after one must still log a genuine client approval (G3).
+      const approvalLogged = Boolean(events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve"));
       if (!approvalLogged) {
         const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "approved",

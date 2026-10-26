@@ -210,13 +210,13 @@ describe("report portal", () => {
     expect(piCalls).toHaveLength(1);
   });
 
-  it("operator approve also works after a report was sent (email-approval path)", async () => {
+  it("operator approve is closed: it is not client payment approval (G3)", async () => {
     await sendReport();
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await adminHandler(adminReq({ action: "approve", booking_id: BID }) as any, res as any);
-    expect(res.code).toBe(200);
-    expect(currentMeta["gh_state"]).toBe("approved");
+    expect(res.code).toBe(409);
+    expect(res.body["error"]).toBe("operator_approve_disabled");
   });
 
   it("a paid visit records a post-payment issue (no auto-reversal) and still refuses new reports", async () => {

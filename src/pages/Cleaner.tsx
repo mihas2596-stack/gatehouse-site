@@ -33,8 +33,10 @@ type CleanerView = {
   checklist: Checklist;
   photos: Photo[];
   report_status: string;
+  report_bounced?: boolean;
   editable: boolean;
   confirmed: boolean;
+  cancelled?: boolean;
   owner_note: string | null;
   error?: string;
 };
@@ -64,7 +66,11 @@ const Cleaner = () => {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/cleaner?ct=${encodeURIComponent(ct)}`);
+      // C1: preserve the owner/QA preview flag (?pv=1) on every load, so a
+      // preview reload never creates a cleaner_link_opened event.
+      const pv = searchParams.get("pv");
+      const qs = `ct=${encodeURIComponent(ct)}${pv === "1" ? "&pv=1" : ""}`;
+      const r = await fetch(`/api/cleaner?${qs}`);
       const j = (await r.json()) as CleanerView;
       if (!j.ok) {
         setError(j.error ?? "load_failed");
@@ -76,7 +82,7 @@ const Cleaner = () => {
     } catch {
       setError("load_failed");
     }
-  }, [ct]);
+  }, [ct, searchParams]);
 
   useEffect(() => {
     void load();
@@ -189,21 +195,47 @@ const Cleaner = () => {
   };
 
   const submit = async () => {
+    // C3: never submit while a photo is still uploading — a photo_register
+    // landing after submit would hit report_locked and be lost from the
+    // published report.
+    if (Object.values(uploads).some((u) => u.status === "working")) {
+      setSubmitError("Photos are still uploading — please wait until they finish, then press Finish again.");
+      return;
+    }
     setBusy(true);
     setSubmitError("");
     setMissing([]);
-    const r = await post({ action: "submit", checklist });
-    setBusy(false);
-    if (r.ok) {
+    try {
+      // Flush the debounced checklist save first, so the submitted report
+      // contains the latest edits (no debounce/autosave race).
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        const saved = await post({ action: "checklist", checklist });
+        if (!saved.ok) {
+          setSubmitError("Couldn't save your latest checklist edits — please try again.");
+          return;
+        }
+      }
+      const r = await post({ action: "submit", checklist });
+      if (r.ok) {
+        await load();
+        return;
+      }
+      if (r.error === "rooms_incomplete" && Array.isArray(r["missing"])) {
+        setMissing(r["missing"] as string[]);
+        setSubmitError("Some rooms still need a photo or a reason they were skipped:");
+        return;
+      }
+      setSubmitError("Couldn't submit. Check your connection and try again.");
+    } catch {
+      // G5 (cleaner half): busy always resets; re-read state before any
+      // retry so a repeat cannot create a second action.
+      setSubmitError("Couldn't reach the server — the report may or may not have been sent. Reloading before you retry.");
       await load();
-      return;
+    } finally {
+      setBusy(false);
     }
-    if (r.error === "rooms_incomplete" && Array.isArray(r["missing"])) {
-      setMissing(r["missing"] as string[]);
-      setSubmitError("Some rooms still need a photo or a reason they were skipped:");
-      return;
-    }
-    setSubmitError("Couldn't submit. Check your connection and try again.");
   };
 
   const fmtDate = (iso: string | null): string => {
@@ -246,12 +278,14 @@ const Cleaner = () => {
   // Unconfirmed visits are read-only: the cleaner may look, but no
   // photos, checklist edits, or submit until the owner confirms. The
   // server enforces the same gate, so this is display, not security.
-  const locked = !data.editable || data.confirmed === false;
+  // C2: a cancelled visit is read-only even when the report state alone
+  // would look editable; the server rejects POSTs the same way.
+  const locked = !data.editable || data.confirmed === false || data.cancelled === true;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background page-shell">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
-      <div className="max-w-xl mx-auto px-4 py-6">
+      <div className="max-w-xl mx-auto px-4 pb-6">
         <p className="text-sm font-semibold tracking-wide text-primary mb-1">GATEHOUSE HOME CLEANING</p>
         <h1 className="font-heading text-3xl font-bold mb-1">Your visit</h1>
         <p className="text-lg text-foreground">
@@ -259,6 +293,12 @@ const Cleaner = () => {
           {v.window ? <> · {v.window}</> : null}
         </p>
         {v.service && <p className="text-muted-foreground">{v.service}{v.client_first_name ? <> · for {v.client_first_name}</> : null}</p>}
+        {data.cancelled === true && (
+          <div className="rounded-xl border border-border bg-muted p-4 mt-4" role="status">
+            <p className="font-semibold">This visit was cancelled.</p>
+            <p className="text-sm text-muted-foreground">The form is read-only — no changes can be sent for this visit.</p>
+          </div>
+        )}
 
         {data.confirmed === false && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
@@ -315,7 +355,13 @@ const Cleaner = () => {
             <p className="text-sm text-muted-foreground">You&apos;re done here — thank you!</p>
           </div>
         )}
-        {data.report_status === "sent" && (
+        {data.report_status === "sent" && data.report_bounced && (
+          <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4 text-center">
+            <p className="font-semibold">Sending failed — the client never got this report.</p>
+            <p className="text-sm text-muted-foreground">The owner will re-send it. You don&apos;t need to do anything.</p>
+          </div>
+        )}
+        {data.report_status === "sent" && !data.report_bounced && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
             <p className="font-semibold">Report published — the client can open it from their link.</p>
@@ -408,6 +454,7 @@ const Cleaner = () => {
                       <input
                         type="checkbox"
                         className="mt-0.5 h-5 w-5 accent-primary"
+                        disabled={busy}
                         checked={item.done}
                         onChange={(e) => {
                           const rooms = checklist.rooms.map((r) =>
@@ -478,6 +525,7 @@ const Cleaner = () => {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
+                      disabled={busy}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) void uploadPhoto(room.name, "before", f);
@@ -494,6 +542,7 @@ const Cleaner = () => {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
+                      disabled={busy}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) void uploadPhoto(room.name, "after", f);
@@ -510,6 +559,7 @@ const Cleaner = () => {
                       accept="image/*"
                       multiple
                       className="hidden"
+                      disabled={busy}
                       onChange={(e) => {
                         const files = Array.from(e.target.files ?? []);
                         for (const f of files) void uploadPhoto(room.name, "after", f);
@@ -528,6 +578,7 @@ const Cleaner = () => {
                       id={`skip-${room.name}`}
                       type="text"
                       className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
+                      disabled={busy}
                       placeholder="e.g. Room wasn't part of this visit"
                       value={room.skip_reason ?? ""}
                       onChange={(e) => {
@@ -556,6 +607,7 @@ const Cleaner = () => {
                 id="problem-note"
                 className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
                 rows={3}
+                disabled={busy}
                 placeholder="Damage you found, a room you couldn't access, supplies missing…"
                 value={checklist.problem_note ?? ""}
                 onChange={(e) => saveChecklist({ ...checklist, problem_note: e.target.value })}
@@ -567,7 +619,17 @@ const Cleaner = () => {
                 {missing.length > 0 && <> {missing.join(", ")}</>}
               </p>
             )}
-            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy} onClick={() => void submit()}>
+            {Object.values(uploads).some((u) => u.status === "error") && (
+              <p className="text-sm text-destructive mt-4" role="alert">
+                Some photos failed to upload — retry them above before finishing, or they will not be in the report.
+              </p>
+            )}
+            {Object.values(uploads).some((u) => u.status === "working") && (
+              <p className="text-sm text-muted-foreground mt-4" role="status">
+                Photos are still uploading — Finish will unlock when they are done.
+              </p>
+            )}
+            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">

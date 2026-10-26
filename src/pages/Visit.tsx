@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CalendarClock, AlertTriangle, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
+import { ReportContent } from "@/components/ReportContent";
 
 type VisitStateName =
   | "invalid_link"
+  | "transient_error"
   | "card_needed"
   | "card_failed"
   | "awaiting_confirmation"
@@ -33,6 +35,10 @@ type VisitData = {
   };
   cleaner?: { name: string; photo: string; phone?: string } | null;
   alt_dates?: string[];
+  proposed_date?: string;
+  proposed_pending?: boolean;
+  charge_timer_blocked?: boolean;
+  charge_timer_block_reason?: string | null;
   cancel_fee_cents?: number;
   cancel_fee?: string;
   cancelled_scope?: string;
@@ -71,6 +77,10 @@ type ReportData = {
   checklist?: ReportChecklist | null;
   amount?: string | null;
   deadline?: string | null;
+  delivery_failed?: boolean;
+  charge_timer_blocked?: boolean;
+  charge_timer_block_reason?: string | null;
+  receipt_sent?: boolean;
   issue_reason?: string;
   issue_room?: string;
   error?: string;
@@ -137,19 +147,25 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
     );
   }
   if (rep.state === "not_ready" || !rep.ok) {
+    // V3: same conditions as /report — a bounced report means the
+    // 24-hour window has not started; say so instead of the generic
+    // "will appear" note.
     return (
       <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
         <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
-        <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+        {rep.delivery_failed ? (
+          <p className="text-sm text-foreground">
+            We tried to email your photo report, but it couldn&apos;t be delivered — so the
+            24-hour window has <strong>not</strong> started and no charge will happen until the
+            report reaches you. Email hello@gatehousehomecleaning.com and we&apos;ll resend it
+            another way.
+          </p>
+        ) : (
+          <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+        )}
       </div>
     );
   }
-  const grouped = (rep.photo_items ?? []).reduce<Record<string, ReportPhoto[]>>((acc, p) => {
-    const key = p.room || "Your home";
-    (acc[key] = acc[key] ?? []).push(p);
-    return acc;
-  }, {});
-  const rooms = Object.entries(grouped);
   const canAct = rep.state === "awaiting" || rep.state === "payment_issue";
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
@@ -157,18 +173,41 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
       {cleanerName && <p className="text-sm text-muted-foreground mb-3">Cleaned by {cleanerName}</p>}
       {canAct && (
         <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4">
-          <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to pause payment.</p>
-          {rep.deadline && (
-            <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
+          {rep.state === "payment_issue" ? (
+            <>
+              <p className="font-semibold mb-1">Your payment didn&apos;t go through.</p>
+              <p className="text-sm mb-3">
+                Your bank declined the charge{rep.amount ? ` of ${rep.amount}` : ""}, or asks for an extra confirmation.
+                Your cleaning is done — only the payment is outstanding. Try the same card again, or change it.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+                  {busy ? "Working…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Change card</Link>
+                </Button>
+                <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
+                  Report an issue
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to pause payment.</p>
+              {rep.deadline && !rep.charge_timer_blocked && (
+                <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+                  {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
+                </Button>
+                <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
+                  Report an issue
+                </Button>
+              </div>
+            </>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-              {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
-            </Button>
-            <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
-              Report an issue
-            </Button>
-          </div>
         </div>
       )}
       {rep.state === "issue_open" && (
@@ -179,51 +218,29 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
       )}
       {rep.state === "paid" && (
         <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
-          Paid — thank you. A receipt was emailed to you.
+          Paid — thank you. {rep.receipt_sent ? "A receipt was emailed to you." : "Your receipt is on its way to your email."}
         </p>
       )}
-      {rooms.length === 0 && <p className="text-sm text-muted-foreground mb-3">No photos in this report yet.</p>}
-      {rooms.map(([room, items]) => (
-        <div key={room} className="mb-4">
-          <h3 className="font-semibold mb-2">{room}</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {items.map((p, i) => (
-              <figure key={i}>
-                <img src={p.url} alt={`${room} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
-                <figcaption className="mt-1 text-xs text-muted-foreground">
-                  {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-        </div>
-      ))}
-      {rep.checklist && rep.checklist.rooms.length > 0 && (
-        <div className="mb-4">
-          <h3 className="font-semibold mb-2">What was done</h3>
-          {rep.checklist.rooms.map((r) => (
-            <div key={r.name} className="mb-2">
-              <p className="text-sm font-semibold">{r.name}{r.skip_reason ? <span className="font-normal text-muted-foreground"> — skipped: {r.skip_reason}</span> : null}</p>
-              <ul className="pl-5 text-sm">
-                {r.items.map((it, i) => (
-                  <li key={i} className="list-none">
-                    <span aria-hidden="true">{it.done ? "✓ " : "○ "}</span>{it.label}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          {rep.checklist.problem_note && <p className="mt-2 text-sm text-muted-foreground">Cleaner&apos;s note: {rep.checklist.problem_note}</p>}
-        </div>
-      )}
-      {rep.deadline && rep.state !== "paid" && (
+      <ReportContent
+        photoItems={rep.photo_items ?? []}
+        checklist={rep.checklist}
+        renderPhoto={(p) => (
+          <figure>
+            <img src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
+            <figcaption className="mt-1 text-xs text-muted-foreground">
+              {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
+            </figcaption>
+          </figure>
+        )}
+      />
+      {rep.deadline && rep.state === "awaiting" && !rep.charge_timer_blocked && (
         <p className="mb-3 text-sm">
           Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card
           is charged automatically unless you report an issue.
         </p>
       )}
       {err && <p className="mb-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{err}</p>}
-      {canAct && (
+      {canAct && rep.state === "awaiting" && (
         <div className="flex flex-wrap gap-2">
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
             {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
@@ -233,7 +250,7 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
           </Button>
         </div>
       )}
-      {canAct && (
+      {canAct && rep.state === "awaiting" && (
         <p className="mt-2 text-sm text-muted-foreground">Not happy? Report an issue — the charge pauses until we make it right.</p>
       )}
       {canAct && showIssue && (
@@ -262,13 +279,6 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
           </Button>
         </div>
       )}
-      {visitState === "payment_issue" && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="outline" disabled={busy} onClick={() => void act({ action: "approve" })}>
-            {busy ? "Working…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
-          </Button>
-        </div>
-      )}
       <p className="mt-4 text-xs text-muted-foreground">
         Prefer the standalone page? <Link to={`/report?bt=${encodeURIComponent(bt)}`} className="underline">Open the full report page</Link>.
       </p>
@@ -284,6 +294,12 @@ const Visit = () => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // G6: a failed refetch must not wipe a loaded visit, and a network
+  // failure must never be labeled an invalid link.
+  const dataRef = useRef<VisitData | null>(null);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const [proposed, setProposed] = useState("");
   const [cancelScope, setCancelScope] = useState<"once" | "stop">("once");
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -297,14 +313,38 @@ const Visit = () => {
       setLoading(false);
       return;
     }
+    // G6: loading, transient error, and invalid link are three distinct
+    // states. A bad HTTP status or an unparsable body is a transient
+    // failure (with Retry), never an "invalid link"; a failed refetch
+    // keeps the last loaded visit and only notes the refresh failure.
+    // A refetch never flashes the loading screen over loaded content.
+    if (!dataRef.current) setLoading(true);
     try {
       const r = await fetch(`/api/visit?bt=${encodeURIComponent(bt)}`);
-      const j = (await r.json()) as VisitData;
-      setData(j);
-      setNotes(j.access_notes ?? "");
-      setZones(j.no_photo_zones ?? "");
+      let j: VisitData;
+      try {
+        j = (await r.json()) as VisitData;
+      } catch {
+        throw new Error("unparsable");
+      }
+      if (!r.ok || j.ok === false) {
+        if (j.state === "invalid_link") {
+          setData({ ok: false, state: "invalid_link" });
+        } else {
+          throw new Error("transient");
+        }
+      } else {
+        setData(j);
+        setNotes(j.access_notes ?? "");
+        setZones(j.no_photo_zones ?? "");
+      }
     } catch {
-      setData({ ok: false, state: "invalid_link" });
+      const prev = dataRef.current;
+      if (prev && prev.state !== "invalid_link" && prev.state !== "transient_error") {
+        setError("Couldn't refresh your visit — showing the last loaded version. Try again in a moment.");
+      } else {
+        setData({ ok: false, state: "transient_error" });
+      }
     }
     setLoading(false);
   }, [bt]);
@@ -324,7 +364,9 @@ const Visit = () => {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
 
-  const post = async (payload: Record<string, unknown>) => {
+  // V7: returns whether the write actually landed, so callers never
+  // show a success note after a failed save.
+  const post = async (payload: Record<string, unknown>): Promise<boolean> => {
     setBusy(true);
     setError("");
     try {
@@ -337,13 +379,16 @@ const Visit = () => {
       if (j && j.state && j.state !== "invalid_link") {
         setData(j);
         setConfirmingCancel(false);
-      } else {
-        setError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
+        return true;
       }
+      setError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
+      return false;
     } catch {
       setError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
+      return false;
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const [confirmingCard, setConfirmingCard] = useState(false);
@@ -417,7 +462,20 @@ const Visit = () => {
           </div>
         )}
 
-        {!loading && data && data.state !== "invalid_link" && (
+        {!loading && data?.state === "transient_error" && (
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Couldn&apos;t load your visit</h1>
+            <p className="text-lg text-foreground mb-6">
+              Something went wrong on our side or with your connection. Your link is fine — please try again.
+            </p>
+            <Button variant="hero" size="lg" onClick={() => void load()}>
+              Try again
+            </Button>
+          </div>
+        )}
+
+        {!loading && data && data.state !== "invalid_link" && data.state !== "transient_error" && (
           <div>
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4 text-center">
               {STATE_HEADLINE[data.state] ?? "Your visit"}
@@ -629,7 +687,7 @@ const Visit = () => {
                   disabled={busy}
                   onClick={() => {
                     setAccessSaved(false);
-                    void post({ action: "update_access", notes, no_photo_zones: zones }).then(() => setAccessSaved(true));
+                    void post({ action: "update_access", notes, no_photo_zones: zones }).then((ok) => setAccessSaved(ok));
                   }}
                 >
                   Save instructions
@@ -670,6 +728,12 @@ const Visit = () => {
                   We confirm or offer the closest alternative within one business day. Your old date
                   stays until the new one is confirmed.
                 </p>
+                {data.proposed_pending && data.proposed_date && (
+                  <p className="text-sm mt-3" role="status">
+                    You asked for <strong>{data.proposed_date}</strong> — we&apos;re checking it.
+                    {b.confirmed_date ? <> Your confirmed date {b.confirmed_date} stays until the new one is confirmed.</> : " Your request stays as it is until the new date is confirmed."}
+                  </p>
+                )}
               </div>
             )}
 

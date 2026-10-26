@@ -137,26 +137,53 @@ async function findCustomerByEmail(
     : null;
 }
 // Rebuild the metadata view of THIS booking from its DB row + journal.
-function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: boolean, tokenRecurring?: string): Record<string, string> {
+// G1: the payment-method slot carries the REAL Stripe payment-method ID,
+// never the display flag "1": hydrate writes this view back into the
+// shared customer record, so "1" used to clobber the real card ID for
+// every other booking of the same email.
+function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMethodId: string, tokenRecurring?: string, sharedState?: string): Record<string, string> {
   const confirmEv = latestEvent(events, "visit_confirmed");
   const proposedEv = latestEvent(events, "date_proposed");
   const cancelledEv = latestEvent(events, "visit_cancelled");
-  const approvedEv = latestEvent(events, "report_approved");
+  // An operator approval is not client consent (G3): it must not surface
+  // as an approved report here either.
+  const approvedEv = events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve") ?? null;
   const issueOpen = issueOpenFrom(events);
+  // A decline lives only in the journal (date_proposed carrying
+  // alt_dates, no row flag): without this mapping the row override
+  // would hide the offered dates and the client could never accept
+  // one. A later confirmation wins over an older decline.
+  const declined = Boolean(proposedEv && typeof proposedEv.detail?.["alt_dates"] === "string"
+    && (!confirmEv || confirmEv.created_at < proposedEv.created_at));
   // M5: surface a failed charge after reload, like api/report.ts.
   const failedEv = latestEvent(events, "payment_failed");
   const succeededEv = latestEvent(events, "payment_succeeded");
   const paymentFailed = Boolean(
     failedEv && (!succeededEv || succeededEv.created_at < failedEv.created_at),
   );
+  // V2: a client proposal is a date_proposed WITHOUT alt_dates, newer
+  // than the latest confirmation. It is pending, not a new agreement:
+  // the old confirmed date stays until the owner confirms the new one.
+  const proposedPending = Boolean(proposedEv
+    && typeof proposedEv.detail?.["alt_dates"] !== "string"
+    && (!confirmEv || confirmEv.created_at < proposedEv.created_at));
+  // V1: card_failed is written only by the Stripe webhook into shared
+  // metadata and has no journal event, so the row override used to
+  // swallow it (the client saw "card needed" instead of "card couldn't
+  // be saved"). Restore it ONLY when nothing stronger applies: any
+  // report, confirmation, or saved card beats it, and reconcileCard
+  // already flips it to card_ready once a card exists.
+  const baseState = row.status === "cancelled" ? "cancelled"
+    : row.status === "paid" ? "paid"
+    : cancelledEv ? "cancelled"
+    : issueOpen ? "issue_open"
+    : paymentFailed ? "payment_failed"
+    : approvedEv ? "approved"
+    : declined ? "date_declined"
+    : row.report_sent_at ? ""
+    : paymentMethodId ? "card_ready" : "";
   return {
-    gh_state: row.status === "paid" ? "paid"
-      : cancelledEv ? "cancelled"
-      : issueOpen ? "issue_open"
-      : paymentFailed ? "payment_failed"
-      : approvedEv ? "approved"
-      : row.report_sent_at ? ""
-      : hasCard ? "card_ready" : "",
+    gh_state: baseState === "" && sharedState === "card_failed" ? "card_failed" : baseState,
     gh_report_sent_at: row.report_sent_at ?? "",
     gh_first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
     gh_recurring_price_cents: tokenRecurring && Number.isFinite(parseFloat(tokenRecurring))
@@ -167,12 +194,15 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], hasCard: bo
     // The row's own profile photo: metadata alone is shared across the
     // customer's bookings and used to be wiped to "" on every hydrate.
     gh_cleaner_photo: rowCleanerPhoto(row),
-    gh_alt_dates: evStr(proposedEv, "alt_dates"),
+    // V1: offered dates exist only while the decline is live — after
+    // the client accepts one, a reload must not resurrect stale offers.
+    gh_alt_dates: declined ? evStr(proposedEv, "alt_dates") : "",
     gh_proposed_date: evStr(proposedEv, "date"),
+    gh_proposed_pending: proposedPending ? "1" : "",
     gh_cancel_scope: evStr(cancelledEv, "scope"),
     gh_access_notes: row.access_notes ?? "",
     gh_no_photo_zones: row.no_photo_zones ?? "",
-    gh_payment_method: hasCard ? "1" : "",
+    gh_payment_method: paymentMethodId,
     gh_issue_open: issueOpen ? "1" : "",
   };
 }
@@ -185,8 +215,15 @@ async function hydrateCustomerMeta(
   row: BookingRow,
   events: BookingEvent[],
 ): Promise<void> {
-  const eff = buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]));
-  if (!eff["gh_state"] && customer.metadata["gh_state"]) eff["gh_state"] = customer.metadata["gh_state"];
+  const eff = buildEffectiveMeta(row, events, customer.metadata["gh_payment_method"] ?? "", undefined, customer.metadata["gh_state"] ?? "");
+  if (!eff["gh_state"] && customer.metadata["gh_state"]) {
+    // G3: a stale operator "approved" must not survive hydration — with
+    // no client approval, the truth for a sent report is "report_sent".
+    const approvedEv = events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve");
+    eff["gh_state"] = customer.metadata["gh_state"] === "approved" && !approvedEv && row.report_sent_at
+      ? "report_sent"
+      : customer.metadata["gh_state"];
+  }
   const params: Record<string, string> = { "metadata[gh_booking_id]": row.booking_id };
   for (const [k, v] of Object.entries(eff)) params[`metadata[${k}]`] = v;
   params["metadata[gh_report_amount_cents]"] = row.amount_cents != null ? String(row.amount_cents) : "";
@@ -551,8 +588,12 @@ export default async function handler(req: Req, res: Res) {
     // With a DB row, the booking-scoped view ALWAYS comes from the row +
     // journal — even when this customer is currently bound to the booking,
     // because a legacy binding can carry another booking's stale fields.
-    const meta = row && req.method === "GET"
-      ? { ...customer.metadata, ...buildEffectiveMeta(row, events, Boolean(customer.metadata["gh_payment_method"]), payload.recurring) }
+    // POST actions used to read state from the shared customer metadata
+    // instead, so one booking's stale "cancelled" blocked another
+    // booking's cancel (409 already_cancelled). Same override for both
+    // methods now: the row + journal are the per-booking truth.
+    const meta = row
+      ? { ...customer.metadata, ...buildEffectiveMeta(row, events, customer.metadata["gh_payment_method"] ?? "", payload.recurring, customer.metadata["gh_state"] ?? "") }
       : customer.metadata;
     const requestedDate = payload.date ?? "";
 
@@ -597,6 +638,15 @@ export default async function handler(req: Req, res: Res) {
           ? { name: meta["gh_cleaner_name"], photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "", phone: rowCleanerPhone(row) }
           : null,
         alt_dates: (meta["gh_alt_dates"] ?? "").split(",").filter(Boolean),
+        // V2: a pending client proposal survives reloads — the old
+        // agreed date stays the agreement until the owner confirms.
+        proposed_date: meta["gh_proposed_date"] ?? "",
+        proposed_pending: meta["gh_proposed_pending"] === "1",
+        // V3: the auto-charge timer's real eligibility, so both client
+        // pages show identical conditions and never warn about a charge
+        // that cannot happen (open issue, bounced report).
+        charge_timer_blocked: issueOpenFrom(events) || (row?.report_bounced ?? false),
+        charge_timer_block_reason: issueOpenFrom(events) ? "issue_open" : (row?.report_bounced ? "bounced" : null),
         cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),
         cancel_fee: money(cancelFeeCents(meta, requestedDate, Date.now())) ?? "$0",
         cancelled_scope: meta["gh_cancel_scope"] ?? "",
@@ -617,9 +667,19 @@ export default async function handler(req: Req, res: Res) {
         // Internal scope-review flag, surfaced to the customer only as a
         // plain explanation (the agreed price never changes silently).
         scope_review_needed: Boolean(latestEvent(events, "scope_review")),
-        // When the visit is not confirmed yet, this is the moment we
-        // promised to confirm by — the same label the emails quote.
-        confirm_by: meta["gh_confirmed_date"] ? "" : confirmDeadlineLabel(),
+        // V8: when the visit is not confirmed yet, this is the moment we
+        // promised to confirm by — pinned to the REQUEST time (the
+        // visit_created event), never recomputed from today on each
+        // GET. Without a request-time record, fall back to today, as
+        // before. After expiry the label still names that past moment;
+        // the UI renders it as overdue instead of shifting it.
+        confirm_by: meta["gh_confirmed_date"] ? "" : (() => {
+          const createdEv = latestEvent(events, "visit_created");
+          const createdAt = createdEv ? new Date(createdEv.created_at) : null;
+          return createdAt && !Number.isNaN(createdAt.getTime())
+            ? confirmDeadlineLabel(createdAt)
+            : confirmDeadlineLabel();
+        })(),
       };
     };
 
@@ -685,13 +745,15 @@ export default async function handler(req: Req, res: Res) {
         res.status(409).json({ requestId, ok: false, error: "cannot_reschedule_now" });
         return;
       }
+      // V2: a proposal does NOT clear the agreed date. The confirmed
+      // date stays the agreement until the owner confirms the new one;
+      // the proposal travels separately (gh_proposed_date + the
+      // date_proposed journal event) and is visible after reload.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "card_ready",
-        "metadata[gh_confirmed_date]": "",
-        "metadata[gh_alt_dates]": "",
         "metadata[gh_proposed_date]": date,
       });
-      Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: "", gh_alt_dates: "", gh_proposed_date: date });
+      Object.assign(meta, { gh_state: "card_ready", gh_proposed_date: date, gh_proposed_pending: "1" });
       if (row) await logEvent(row.id, payload.bid, "client", "date_proposed", { date });
       await notify(`New date proposed — booking ${payload.bid}`, `The client proposed a new date: ${date} (booking ${payload.bid}). Confirm or decline it in the dashboard flow.`, false);
       res.status(200).json({ ...view(), proposed_date: date });

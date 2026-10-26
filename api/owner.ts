@@ -9,6 +9,39 @@
 
 import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
+import { paymentBasis } from "./_payment_basis.js";
+
+// O3: a payment failure is current only if no later success supersedes
+// it and the visit is not paid. Any historical payment_failed event used
+// to light up "Payment failed" forever, even after a successful retry.
+type JournalEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+function currentPaymentFailed(events: JournalEvent[], rowStatus: unknown): boolean {
+  if (rowStatus === "paid") return false;
+  let failedAt = "";
+  let succeededAt = "";
+  for (const e of events) {
+    if (e.event === "payment_failed" && e.created_at > failedAt) failedAt = e.created_at;
+    if (e.event === "payment_succeeded" && e.created_at > succeededAt) succeededAt = e.created_at;
+  }
+  return Boolean(failedAt && (!succeededAt || succeededAt < failedAt));
+}
+
+// O5: the opened signal belongs to the CURRENT link issuance, not to the
+// whole visit history. A new link does not inherit the old link's open;
+// opening is not acceptance of the work. Legacy links carry no issuance,
+// so they keep the old latest-open behavior.
+function openedAtForIssuance(
+  events: { event: string; detail: Record<string, unknown> | null; created_at: string }[],
+  issuance: unknown,
+): string | null {
+  const opens = events
+    .filter((e) => e.event === "cleaner_link_opened")
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  if (typeof issuance === "string" && issuance.length > 0) {
+    return opens.find((e) => e.detail?.["issuance"] === issuance)?.created_at ?? null;
+  }
+  return opens[0]?.created_at ?? null;
+}
 
 type Req = {
   method?: string;
@@ -60,17 +93,10 @@ function annotateVisit(
   };
 }
 
-// Payment failures are journaled by api/report.ts as payment_failed
-// events (the visit row itself carries no payment-failed flag), so the
-// list derives the Needs-attention signal from the journal, the same
-// way it derives the cleaner-link opened state.
-async function hasPaymentFailed(visitId: string): Promise<boolean> {
-  const rows = await dbSelect<{ id: number }>(
-    "gh_events",
-    `visit_id=eq.${visitId}&event=eq.payment_failed&limit=1`,
-  );
-  return rows.length > 0;
-}
+// (Removed: hasPaymentFailed treated any historical payment_failed event
+// as a current failure. Detail and list now compute it from the journal
+// with currentPaymentFailed, which weighs a later payment_succeeded and
+// a paid row status. See O3.)
 
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
@@ -105,7 +131,6 @@ export default async function handler(req: Req, res: Res) {
       const visits = await dbSelect<VisitRow>("gh_visits", `id=eq.${visitId}&limit=1`);
       const visit = visits[0];
       if (!visit) return json(404, { ok: false, error: "visit_not_found" });
-      const paymentFailed = await hasPaymentFailed(visitId);
       const photos = await dbSelect<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
         "gh_photos",
         `visit_id=eq.${visitId}&order=created_at.asc&limit=200`,
@@ -124,11 +149,39 @@ export default async function handler(req: Req, res: Res) {
         "gh_events",
         `visit_id=eq.${visitId}&order=created_at.desc&limit=100`,
       );
-      const openedEv = (events as { event: string; created_at: string }[])
-        .filter((e) => e.event === "cleaner_link_opened")
-        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+      const journalEvents = events as JournalEvent[];
+      // O5: opened binds to the row's current issuance, not to history.
+      const openedAt = openedAtForIssuance(journalEvents, visit["cleaner_link_issuance"]);
+      // O3: current failure only (a later success or a paid row clears it).
+      const paymentFailed = currentPaymentFailed(journalEvents, visit["status"]);
+      // O4: the Charge button's availability comes from the server's own
+      // payment-basis rule — the same rule the charge action enforces —
+      // so the panel never offers a retry the server would refuse.
+      const canCharge = paymentBasis(
+        {
+          reportSentAt: typeof visit["report_sent_at"] === "string" ? (visit["report_sent_at"] as string) : null,
+          events: journalEvents,
+          issueOpenRow: typeof visit["issue_open"] === "boolean" ? (visit["issue_open"] as boolean) : null,
+          issueEverRow: typeof visit["issue_ever"] === "boolean" ? (visit["issue_ever"] as boolean) : null,
+        },
+        Date.now(),
+      ) !== null;
       const visitConfirmed = (events as { event: string }[])
         .some((e) => e.event === "visit_confirmed");
+      // V2: a pending client proposal (date_proposed without alt_dates,
+      // newer than the latest confirmation) is visible in the Schedule
+      // block after reload; the confirmed date stays the agreement.
+      const byTimeDesc = [...journalEvents].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      const latestProposed = byTimeDesc.find((e) => e.event === "date_proposed");
+      const latestConfirm = byTimeDesc.find((e) => e.event === "visit_confirmed");
+      const proposedPending = Boolean(latestProposed
+        && typeof (latestProposed.detail as Record<string, unknown> | null)?.["alt_dates"] !== "string"
+        && (!latestConfirm || latestConfirm.created_at < latestProposed.created_at));
+      const proposedDate = proposedPending
+        ? (typeof (latestProposed?.detail as Record<string, unknown> | null)?.["date"] === "string"
+            ? (latestProposed?.detail as Record<string, unknown>)["date"] as string
+            : "")
+        : "";
       const requestApproved = (events as { event: string }[])
         .some((e) => e.event === "request_approved");
       // Report-email status after the latest publish (manual or
@@ -146,9 +199,12 @@ export default async function handler(req: Req, res: Res) {
       return json(200, {
         ok: true,
         visit: {
-          ...annotateVisit(visit, openedEv?.created_at ?? null),
+          ...annotateVisit(visit, openedAt),
           payment_failed: paymentFailed,
+          can_charge: canCharge,
           visit_confirmed: visitConfirmed,
+          proposed_date: proposedDate,
+          proposed_pending: proposedPending,
           request_approved: requestApproved,
           report_email: reportEmailEvents.length === 0
             ? null
@@ -180,23 +236,45 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const ph of photos) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
     }
+    // O5 (list): opened binds to each row's current issuance. The query
+    // returns desc, so the first matching open per visit is its latest.
     const opened = new Map<string, string>();
     if (ids.length > 0) {
-      const opens = await dbSelect<{ visit_id: string; created_at: string }>(
+      const opens = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
         "gh_events",
         `visit_id=in.(${ids.join(",")})&event=eq.cleaner_link_opened&order=created_at.desc&limit=500`,
       );
+      const issuanceByVisit = new Map(visits.map((v) => [v.id, v["cleaner_link_issuance"]]));
       for (const o of opens) {
-        if (!opened.has(o.visit_id)) opened.set(o.visit_id, o.created_at);
+        if (opened.has(o.visit_id)) continue;
+        const issuance = issuanceByVisit.get(o.visit_id);
+        if (typeof issuance === "string" && issuance.length > 0 && o.detail?.["issuance"] !== issuance) continue;
+        opened.set(o.visit_id, o.created_at);
       }
     }
+    // O3 (list): a failure counts only until a later success or payment.
     const failed = new Set<string>();
     if (ids.length > 0) {
-      const fails = await dbSelect<{ visit_id: string }>(
+      const fails = await dbSelect<{ visit_id: string; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.payment_failed&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.payment_failed&order=created_at.desc&limit=500`,
       );
-      for (const f of fails) failed.add(f.visit_id);
+      const successes = await dbSelect<{ visit_id: string; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.payment_succeeded&order=created_at.desc&limit=500`,
+      );
+      const succeededAt = new Map<string, string>();
+      for (const s of successes) {
+        if (!succeededAt.has(s.visit_id)) succeededAt.set(s.visit_id, s.created_at);
+      }
+      const statusByVisit = new Map(visits.map((v) => [v.id, v["status"]]));
+      for (const f of fails) {
+        if (failed.has(f.visit_id)) continue;
+        const sAt = succeededAt.get(f.visit_id);
+        if (statusByVisit.get(f.visit_id) === "paid") continue;
+        if (sAt && sAt >= f.created_at) continue;
+        failed.add(f.visit_id);
+      }
     }
     // Confirmed visits (batched, like opened/failed): the "Needs review"
     // signal is a submitted report WITHOUT a confirmation event — row

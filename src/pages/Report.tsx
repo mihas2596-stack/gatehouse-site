@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, Camera, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
+import { ReportContent } from "@/components/ReportContent";
 
 type ReportStateName =
   | "invalid_link"
+  | "transient_error"
   | "not_ready"
   | "awaiting"
   | "approved"
@@ -26,9 +28,15 @@ type ReportData = {
   report_sent_at?: string | null;
   deadline?: string | null;
   delivery_failed?: boolean;
+  charge_timer_blocked?: boolean;
+  charge_timer_block_reason?: string | null;
   issue_reason?: string;
   issue_room?: string;
   receipt_sent?: boolean;
+  checklist?: {
+    rooms: Array<{ name: string; items: Array<{ label: string; done: boolean }>; skip_reason?: string }>;
+    problem_note?: string;
+  } | null;
   postpay_issue?: boolean;
   resolution?: { resolved_at: string; reclean_date: string } | null;
   error?: string;
@@ -65,18 +73,45 @@ const Report = () => {
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
 
+  // G6: a failed refetch must not wipe a loaded report, and a network
+  // failure must never be labeled an invalid link.
+  const dataRef = useRef<ReportData | null>(null);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
   const load = useCallback(async () => {
     if (!bt) {
       setData({ ok: false, state: "invalid_link" });
       setLoading(false);
       return;
     }
+    // A refetch never flashes the loading screen over loaded content.
+    if (!dataRef.current) setLoading(true);
     try {
       const r = await fetch(`/api/report?bt=${encodeURIComponent(bt)}`);
-      const j = (await r.json()) as ReportData;
-      setData(j);
+      let j: ReportData;
+      try {
+        j = (await r.json()) as ReportData;
+      } catch {
+        throw new Error("unparsable");
+      }
+      if (!r.ok || j.ok === false) {
+        if (j.state === "invalid_link") {
+          setData({ ok: false, state: "invalid_link" });
+        } else {
+          throw new Error("transient");
+        }
+      } else {
+        setData(j);
+      }
     } catch {
-      setData({ ok: false, state: "invalid_link" });
+      const prev = dataRef.current;
+      if (prev && prev.state !== "invalid_link" && prev.state !== "transient_error") {
+        setActionError("Couldn't refresh your report — showing the last loaded version. Try again in a moment.");
+      } else {
+        setData({ ok: false, state: "transient_error" });
+      }
     }
     setLoading(false);
   }, [bt]);
@@ -175,6 +210,19 @@ const Report = () => {
           </div>
         )}
 
+        {!loading && data?.state === "transient_error" && (
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Couldn&apos;t load your report</h1>
+            <p className="text-lg text-foreground mb-6">
+              Something went wrong on our side or with your connection. Your link is fine — please try again.
+            </p>
+            <Button variant="hero" size="lg" onClick={() => void load()}>
+              Try again
+            </Button>
+          </div>
+        )}
+
         {!loading && data?.state === "not_ready" && (
           <div className="text-center">
             <Camera className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
@@ -207,55 +255,44 @@ const Report = () => {
             </p>
             {summary}
             {data.photo_items && data.photo_items.length > 0 ? (
-              <div className="mb-6 space-y-5">
-                {Object.entries(
-                  data.photo_items.reduce<Record<string, PhotoItem[]>>((acc, p) => {
-                    const key = p.room || "Your home";
-                    (acc[key] ??= []).push(p);
-                    return acc;
-                  }, {}),
-                ).map(([room, items]) => (
-                  <div key={room}>
-                    <h2 className="font-heading text-lg font-bold mb-2">{room}</h2>
-                    <div className="grid grid-cols-2 gap-3">
-                      {[...items]
-                        .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
-                        .map((p, i) => (
-                          <figure key={i}>
-                            {failedPhotos.has(p.url) ? (
-                              <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
-                                <p className="text-xs text-muted-foreground">
-                                  This photo couldn&apos;t load. Check your connection, or email
-                                  hello@gatehousehomecleaning.com and we&apos;ll resend it.
-                                </p>
-                                <button
-                                  type="button"
-                                  className="text-xs underline"
-                                  onClick={() => void load()}
-                                >
-                                  Try again
-                                </button>
-                              </div>
-                            ) : (
-                              <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${room} photo`}>
-                                <img
-                                  src={p.url}
-                                  alt={`${room} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
-                                  loading="lazy"
-                                  onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
-                                  className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
-                                />
-                              </button>
-                            )}
-                            <figcaption className="text-xs text-muted-foreground mt-1">
-                              <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
-                              {p.note ? <> — {p.note}</> : null}
-                            </figcaption>
-                          </figure>
-                        ))}
-                    </div>
-                  </div>
-                ))}
+              <div className="mb-6">
+                <ReportContent
+                  photoItems={data.photo_items}
+                  checklist={data.checklist}
+                  renderPhoto={(p) => (
+                    <figure>
+                      {failedPhotos.has(p.url) ? (
+                        <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
+                          <p className="text-xs text-muted-foreground">
+                            This photo couldn&apos;t load. Check your connection, or email
+                            hello@gatehousehomecleaning.com and we&apos;ll resend it.
+                          </p>
+                          <button
+                            type="button"
+                            className="text-xs underline"
+                            onClick={() => void load()}
+                          >
+                            Try again
+                          </button>
+                        </div>
+                      ) : (
+                        <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${p.room ?? "Your home"} photo`}>
+                          <img
+                            src={p.url}
+                            alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                            loading="lazy"
+                            onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
+                            className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                          />
+                        </button>
+                      )}
+                      <figcaption className="text-xs text-muted-foreground mt-1">
+                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                        {p.note ? <> — {p.note}</> : null}
+                      </figcaption>
+                    </figure>
+                  )}
+                />
               </div>
             ) : data.photos && data.photos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 mb-6">
@@ -274,23 +311,6 @@ const Report = () => {
                 The photos for this visit are attached to the email we sent you.
               </p>
             )}
-            {zoom && (
-              <div
-                className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-                role="dialog"
-                aria-label="Enlarged photo"
-                onClick={() => setZoom(null)}
-              >
-                <img src={zoom} alt="Enlarged cleaning photo" className="max-w-full max-h-full object-contain rounded-lg" />
-                <button
-                  type="button"
-                  className="absolute top-4 right-4 text-white text-sm bg-white/10 rounded-lg px-3 py-2"
-                  onClick={() => setZoom(null)}
-                >
-                  Close
-                </button>
-              </div>
-            )}
             <p className="text-xs text-muted-foreground mb-6 text-left">
               About these photos: they exist only for your private report. We photograph rooms, not
               people — faces, documents and screens are avoided. Only you and the Gatehouse team can
@@ -303,7 +323,7 @@ const Report = () => {
                 {data.amount ? <> — your card is then charged {data.amount}</> : null}.
                 If something isn&apos;t right, report an issue and the charge stays paused while we
                 make it right.
-                {data.deadline ? (
+                {data.deadline && !data.charge_timer_blocked ? (
                   <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
                   your saved card is charged automatically unless you report an issue.</>
                 ) : null}
@@ -419,8 +439,12 @@ const Report = () => {
             {actionError && (
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
             )}
-            <Button variant="outline" size="lg" disabled={busy} onClick={() => void act("approve")}>
-              {busy ? "Working…" : "Everything is fine now — approve"}
+            <p className="text-base text-foreground mb-6">
+              If the fix looks good, resolving the issue approves the report and charges your saved
+              card{data.amount ? <> {data.amount}</> : null} right away.
+            </p>
+            <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
+              {busy ? "Working…" : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
             </Button>
           </div>
         )}
@@ -435,6 +459,9 @@ const Report = () => {
               card and we&apos;ll complete it.
             </p>
             {summary}
+            {actionError && (
+              <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
+            )}
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Working…" : data.amount ? `Try charging ${data.amount} again` : "Try the charge again"}
@@ -455,6 +482,31 @@ const Report = () => {
                 ? "This visit is paid. Your receipt was emailed to you."
                 : "This visit is paid. Your receipt is on its way to your email."}
             </p>
+            {summary}
+            {(data.photo_items && data.photo_items.length > 0) || (data.checklist && data.checklist.rooms.length > 0) ? (
+              <div className="mb-6 text-left">
+                <ReportContent
+                  photoItems={data.photo_items ?? []}
+                  checklist={data.checklist}
+                  renderPhoto={(p) => (
+                    <figure>
+                      <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${p.room ?? "Your home"} photo`}>
+                        <img
+                          src={p.url}
+                          alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                          loading="lazy"
+                          className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                        />
+                      </button>
+                      <figcaption className="text-xs text-muted-foreground mt-1">
+                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                        {p.note ? <> — {p.note}</> : null}
+                      </figcaption>
+                    </figure>
+                  )}
+                />
+              </div>
+            ) : null}
             {data.postpay_issue ? (
               <p className="text-base text-foreground mb-6">
                 Your issue has been received. We&apos;ll review it and reply by email
@@ -515,6 +567,23 @@ const Report = () => {
                 <Link to="/">Back to Home</Link>
               </Button>
             </div>
+          </div>
+        )}
+        {zoom && (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+            role="dialog"
+            aria-label="Enlarged photo"
+            onClick={() => setZoom(null)}
+          >
+            <img src={zoom} alt="Enlarged cleaning photo" className="max-w-full max-h-full object-contain rounded-lg" />
+            <button
+              type="button"
+              className="absolute top-4 right-4 text-white text-sm bg-white/10 rounded-lg px-3 py-2"
+              onClick={() => setZoom(null)}
+            >
+              Close
+            </button>
           </div>
         )}
       </div>

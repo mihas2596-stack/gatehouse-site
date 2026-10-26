@@ -59,6 +59,7 @@ type VisitRow = {
   no_photo_zones: string | null;
   checklist: Checklist;
   report_status: string;
+  report_bounced?: boolean | null;
   issue_open?: boolean | null;
   amount_cents?: number | null;
   client_email?: string | null;
@@ -232,7 +233,14 @@ async function view(visit: VisitRow) {
     checklist: visit.checklist ?? { rooms: [] },
     photos: withUrls,
     report_status: visit.report_status,
-    editable: EDITABLE.has(visit.report_status),
+    // A "sent" row whose client email bounced must not render as
+    // "published" to the cleaner: the client never got the report.
+    report_bounced: visit.report_bounced ?? false,
+    // C2: a client-cancelled visit must not look editable. The POST gate
+    // already rejects it (409 visit_not_confirmed); the GET now uses the
+    // same rule so the form and the server can never disagree.
+    cancelled: visit.status === "cancelled",
+    editable: EDITABLE.has(visit.report_status) && visit.status !== "cancelled",
     owner_note: events[0]?.detail?.note ?? null,
   };
 }
@@ -464,17 +472,24 @@ export default async function handler(req: Req, res: Res) {
       const resolved = await resolveVisit(ct);
       if ("error" in resolved) return json(resolved.status, { ok: false, error: resolved.error });
       // Link-open tracking for the owner panel ("did the cleaner open
-      // it?"). Throttled to one event per 6 hours per visit; the owner's
-      // own preview carries pv=1 and never counts.
+      // it?"). O5: throttled to one event per 6 hours per LINK ISSUANCE,
+      // and the event carries the issuance — a new link does not inherit
+      // the old link's open, and an open is never called acceptance of
+      // the work. The owner's own preview carries pv=1 and never counts.
+      // Legacy links carry no issuance and keep the per-visit throttle.
       if (req.query?.["pv"] !== "1") {
         try {
+          const issuance = resolved.visit.cleaner_link_issuance ?? null;
+          const issuanceFilter = issuance
+            ? `&detail->>issuance=eq.${encodeURIComponent(issuance)}`
+            : "";
           const prior = await dbSelect<{ created_at: string }>(
             "gh_events",
-            `visit_id=eq.${resolved.visit.id}&event=eq.cleaner_link_opened&order=created_at.desc&limit=1`,
+            `visit_id=eq.${resolved.visit.id}&event=eq.cleaner_link_opened${issuanceFilter}&order=created_at.desc&limit=1`,
           );
           const last = prior[0] ? Date.parse(prior[0].created_at) : 0;
           if (!last || Date.now() - last > 6 * 3600 * 1000) {
-            await logEvent(resolved.visit.id, resolved.visit.booking_id, "cleaner", "cleaner_link_opened", {});
+            await logEvent(resolved.visit.id, resolved.visit.booking_id, "cleaner", "cleaner_link_opened", issuance ? { issuance } : {});
           }
         } catch { /* tracking is best-effort */ }
       }
