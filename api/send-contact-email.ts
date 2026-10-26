@@ -84,7 +84,8 @@ export const TEST_PRICE_SCALE = 0.01;
 // GLOBAL_TEST_CUT_UNTIL_MS in src/config/calculator.ts). While active,
 // every booking prices at TEST_PRICE_SCALE — no token needed. Auto-expires.
 // Extended by owner order 2026-10-26 by 24h: now ends 2026-10-27T10:33:00Z.
-const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-27T10:33:00Z");
+// Extended again by owner order 2026-10-26 by 48h: now ends 2026-10-29T10:33:00Z.
+const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-29T10:33:00Z");
 const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;
