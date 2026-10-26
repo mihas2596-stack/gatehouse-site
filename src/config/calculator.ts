@@ -157,8 +157,9 @@ export const scaleTestPrice = (n: number): number =>
  * every visitor sees test prices (x0.01, cap $1.50) with no token needed.
  * The window auto-expires at GLOBAL_TEST_CUT_UNTIL_MS — ordinary prices
  * return with no code change. Mirrored server-side in api/send-contact-email.ts.
+ * Extended by owner order 2026-10-26 by 24h: now ends 2026-10-27T10:33:00Z.
  */
-export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-26T10:33:00Z");
+export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-27T10:33:00Z");
 export const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 

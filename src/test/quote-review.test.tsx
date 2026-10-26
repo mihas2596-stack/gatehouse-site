@@ -3,10 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-// Owner order 2026-10-24 runs a 48h GLOBAL test-price window (until
-// 2026-10-26T10:33Z). Pin the clock past the window so these regular-price
-// assertions stay deterministic; token test mode has its own cases below.
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-27T00:00:00Z"));
+// Owner order 2026-10-24 runs a GLOBAL test-price window (until
+// 2026-10-27T10:33Z after the 24h extension of 2026-10-26). Pin the clock
+// past the window so these regular-price assertions stay deterministic;
+// token test mode has its own cases below.
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-28T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);

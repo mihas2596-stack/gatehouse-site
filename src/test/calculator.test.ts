@@ -118,12 +118,12 @@ describe("fmtPrice never scales; scaling is explicit", () => {
   });
 });
 
-describe("global test-price window (owner order 2026-10-24, 48h)", () => {
+describe("global test-price window (owner order 2026-10-24, 48h, extended 2026-10-26 by 24h)", () => {
   it("is active before the cutoff and inactive at and after it", () => {
-    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-10-26T10:33:00Z"));
+    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-10-27T10:33:00Z"));
     expect(globalTestCutActive(Date.parse("2026-10-24T13:33:00Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-10-26T10:32:59Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-10-26T10:33:00Z"))).toBe(false);
-    expect(globalTestCutActive(Date.parse("2026-10-27T00:00:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-10-27T10:32:59Z"))).toBe(true);
+    expect(globalTestCutActive(Date.parse("2026-10-27T10:33:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-10-28T00:00:00Z"))).toBe(false);
   });
 });
