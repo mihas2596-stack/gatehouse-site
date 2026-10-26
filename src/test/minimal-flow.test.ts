@@ -72,7 +72,7 @@ describe("minimal flow", () => {
   });
 
   const installFetch = () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown; headers?: Record<string, string> }) => {
       const u = String(url);
       const method = init?.method ?? "GET";
       if (u.includes("api.stripe.com")) {
@@ -129,8 +129,14 @@ describe("minimal flow", () => {
           const patch = JSON.parse(String(init?.body ?? "{}")) as Row;
           const m = /id=eq\.([^&]+)/.exec(u) ?? /booking_id=eq\.([^&]+)/.exec(u);
           const key = m ? decodeURIComponent(m[1]) : "";
-          for (const r of rows) if (r["id"] === key || r["booking_id"] === key) Object.assign(r, patch);
-          return supRes(null);
+          // PostgREST in.(...) filter, used by compare-and-swap updates:
+          // only rows in an expected pre-state are actually updated.
+          const inM = /report_status=in\.\(([^)]+)\)/.exec(u);
+          const allowed = inM ? new Set(decodeURIComponent(inM[1]).split(",")) : null;
+          const matched = rows.filter((r) => (r["id"] === key || r["booking_id"] === key) && (!allowed || allowed.has(String(r["report_status"] ?? ""))));
+          for (const r of matched) Object.assign(r, patch);
+          const prefer = init?.headers?.["Prefer"] ?? init?.headers?.["prefer"] ?? "";
+          return supRes(prefer.includes("return=representation") ? matched : null);
         }
         if (method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}")) as Row;

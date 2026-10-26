@@ -198,6 +198,9 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
               {rep.deadline && !rep.charge_timer_blocked && (
                 <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
               )}
+              {rep.charge_timer_block_reason === "issue_ever" && (
+                <p className="text-sm mb-3">Automatic payment is disabled for this visit because an issue was reported.</p>
+              )}
               <div className="flex flex-wrap gap-2">
                 <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
                   {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}

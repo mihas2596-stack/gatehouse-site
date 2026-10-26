@@ -20,6 +20,7 @@
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
+import { issueStateFrom, timerBlockReason } from "./_payment_basis.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -31,6 +32,8 @@ type BookingRow = {
   report_sent_at: string | null; report_bounced: boolean | null;
   access_notes: string | null; no_photo_zones: string | null;
   report_status?: string | null;
+  issue_open?: boolean | null; issue_ever?: boolean | null;
+  visit_date?: string | null; window?: string | null;
   cleaner_profile?: unknown;
 };
 
@@ -454,7 +457,22 @@ export function deriveVisitState(meta: Record<string, string>): VisitState {
 export function visitMomentMs(meta: Record<string, string>, requestedDate: string): number {
   const d = meta["gh_confirmed_date"] || requestedDate || "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
-  return Date.parse(`${d}T12:00:00-04:00`);
+  // P12: midday in America/New_York for THIS date. A fixed -04:00
+  // offset is wrong in winter (EST is -05:00) and shifts the 48h
+  // cancel threshold by an hour, charging $25 too early. Convert the
+  // noon wall-clock reading via Intl: the offset between a UTC guess
+  // and its New York wall-clock reading is the zone offset that day.
+  const [y, m, day] = d.split("-").map(Number);
+  const noonGuess = Date.UTC(y, m - 1, day, 12, 0, 0);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(noonGuess));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
+  const wallAsUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  if (!Number.isFinite(wallAsUTC)) return NaN;
+  return noonGuess + (noonGuess - wallAsUTC);
 }
 
 export function cancelFeeCents(meta: Record<string, string>, requestedDate: string, nowMs: number): number {
@@ -642,11 +660,12 @@ export default async function handler(req: Req, res: Res) {
         // agreed date stays the agreement until the owner confirms.
         proposed_date: meta["gh_proposed_date"] ?? "",
         proposed_pending: meta["gh_proposed_pending"] === "1",
-        // V3: the auto-charge timer's real eligibility, so both client
-        // pages show identical conditions and never warn about a charge
-        // that cannot happen (open issue, bounced report).
-        charge_timer_blocked: issueOpenFrom(events) || (row?.report_bounced ?? false),
-        charge_timer_block_reason: issueOpenFrom(events) ? "issue_open" : (row?.report_bounced ? "bounced" : null),
+        // V3/U02: the auto-charge timer's real eligibility, identical
+        // on /visit and /report — a resolved dispute (issue_ever) or a
+        // bounced report blocks the countdown too, never just an open
+        // issue. The timer predicate here must match the charge gate.
+        charge_timer_blocked: timerBlockReason({ ...issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null), bounced: row?.report_bounced ?? false }) !== null,
+        charge_timer_block_reason: timerBlockReason({ ...issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null), bounced: row?.report_bounced ?? false }),
         cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),
         cancel_fee: money(cancelFeeCents(meta, requestedDate, Date.now())) ?? "$0",
         cancelled_scope: meta["gh_cancel_scope"] ?? "",
@@ -729,7 +748,15 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_alt_dates]": "",
       });
       Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: date, gh_alt_dates: "" });
-      if (row) await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
+      if (row) {
+        await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
+        // S01: the accepted date IS the agreement — the row must carry
+        // it too, or the cleaner (and owner) views keep showing the
+        // old day while the client sees the new one.
+        const datePatch: Record<string, unknown> = { visit_date: date };
+        if (meta["gh_confirmed_window"]) datePatch.window = meta["gh_confirmed_window"];
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, datePatch);
+      }
       await notify(`Date accepted — booking ${payload.bid}`, `The client accepted the alternative date ${date} for booking ${payload.bid}.`, false);
       res.status(200).json(view());
       return;

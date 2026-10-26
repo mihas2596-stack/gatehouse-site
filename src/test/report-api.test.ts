@@ -58,6 +58,11 @@ beforeEach(() => {
     if (u.includes("/customers/search")) {
       return { ok: true, status: 200, json: async () => ({ data: [{ id: CUSTOMER.id, metadata: currentMeta }] }) };
     }
+    if (u.includes("/payment_intents/search")) {
+      // Stripe search returns { data: [...] } — an empty list here
+      // means no prior intent for this booking, not a succeeded one.
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    }
     if (u.includes("/payment_intents")) {
       piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: undefined });
       return { ok: true, status: 200, json: async () => ({ id: "pi_test_1", status: "succeeded" }) };

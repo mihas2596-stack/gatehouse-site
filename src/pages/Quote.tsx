@@ -921,7 +921,7 @@ const Quote = () => {
                     placeholder="How should the cleaner get in? Gate code, where the key is, alarm, parking…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
-                  <p className="text-xs text-muted-foreground mt-1">Only your cleaner sees this — it goes straight to their job page.</p>
+                  <p className="text-xs text-muted-foreground mt-1">Shared with Gatehouse and your assigned cleaner to arrange access.</p>
                 </div>
               </div>
 

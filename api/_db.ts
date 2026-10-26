@@ -95,6 +95,31 @@ export async function dbUpdate(
   return r.ok;
 }
 
+/**
+ * Conditional update with a row count (compare-and-swap for status
+ * transitions, R01). PATCHes only rows matching `match` and returns
+ * how many changed: 0 means another request already moved the row out
+ * of the expected state, so the caller must return the existing result
+ * instead of publishing twice. Returns -1 when the DB is not
+ * configured or unreachable — callers then fall back to the legacy
+ * non-atomic path rather than failing the request.
+ */
+export async function dbUpdateCount(
+  table: string,
+  match: string,
+  patch: Record<string, unknown>,
+): Promise<number> {
+  const cfg = dbConfig();
+  if (!cfg) return -1;
+  const r = await rest(cfg, `${table}?${match}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+    prefer: "return=representation",
+  });
+  if (!r.ok || !Array.isArray(r.data)) return -1;
+  return r.data.length;
+}
+
 /** Upsert on a unique constraint (e.g. booking_id,visit_no). */
 export async function dbUpsert<T = Record<string, unknown>>(
   table: string,

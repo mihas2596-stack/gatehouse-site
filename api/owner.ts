@@ -163,6 +163,9 @@ export default async function handler(req: Req, res: Res) {
           events: journalEvents,
           issueOpenRow: typeof visit["issue_open"] === "boolean" ? (visit["issue_open"] as boolean) : null,
           issueEverRow: typeof visit["issue_ever"] === "boolean" ? (visit["issue_ever"] as boolean) : null,
+          // P02: same bounced input as the charge action — the panel
+          // must not offer a timer charge the server would refuse.
+          bounced: typeof visit["report_bounced"] === "boolean" ? (visit["report_bounced"] as boolean) : null,
         },
         Date.now(),
       ) !== null;

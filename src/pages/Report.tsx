@@ -327,6 +327,9 @@ const Report = () => {
                   <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
                   your saved card is charged automatically unless you report an issue.</>
                 ) : null}
+                {data.charge_timer_block_reason === "issue_ever" ? (
+                  <> Automatic payment is disabled for this visit because an issue was reported.</>
+                ) : null}
               </p>
             </div>
             {actionError && (

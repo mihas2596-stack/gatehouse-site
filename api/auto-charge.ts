@@ -36,6 +36,7 @@ type BookingRow = {
   amount_cents: number | null; cleaner_name: string | null;
   client_email: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
+  issue_open: boolean | null; issue_ever: boolean | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
@@ -71,7 +72,12 @@ async function hydrateCustomerMeta(
   const confirmEv = latestEvent(events, "visit_confirmed");
   const opened = latestEvent(events, "issue_opened");
   const resolved = latestEvent(events, "issue_resolved");
-  const issueOpen = Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
+  // P03: the journal window is only 60 events — an old dispute can
+  // fall outside it. The row flags are the durable truth and must
+  // survive hydration: never clear issue_ever because the window
+  // lacks the event. OR, never overwrite, on both flags.
+  const issueOpen = row.issue_open === true || Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
+  const issueEver = row.issue_ever === true || Boolean(opened);
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
   const remindedEv = latestEvent(events, "reminder_sent");
@@ -95,7 +101,7 @@ async function hydrateCustomerMeta(
     gh_confirmed_window: evStr(confirmEv, "window"),
     gh_cleaner_name: row.cleaner_name ?? "",
     gh_issue_open: issueOpen ? "1" : "",
-    gh_issue_ever: opened ? "1" : "",
+    gh_issue_ever: issueEver ? "1" : "",
     gh_reminded_at: remindedEv ? remindedEv.created_at : "",
     gh_card_email_sent: cardEmailEv ? "1" : "",
   };
@@ -452,16 +458,22 @@ export default async function handler(req: Req, res: Res) {
         // path — pre-pipeline bookings have no row.
         if (dbConfigured()) {
           try {
-            const vrows = await dbSelect<{ id: string; client_email: string | null; amount_cents: number | null; status: string | null; report_status: string | null }>(
+            const vrows = await dbSelect<{ id: string; client_email: string | null; amount_cents: number | null; status: string | null; report_status: string | null; issue_open: boolean | null; issue_ever: boolean | null; report_bounced: boolean | null }>(
               "gh_visits",
               `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
             );
             const vrow = vrows[0];
             if (vrow) {
               const custEmail = typeof freshRes.data["email"] === "string" ? (freshRes.data["email"] as string) : "";
+              // P03: the row's durable dispute/bounce flags are
+              // re-checked at the atomic charge gate — a dispute that
+              // fell out of the 60-event journal window, or a bounced
+              // report, must still block the timer here.
               const mismatch = vrow.amount_cents !== item.amountCents
                 || vrow.status === "paid" || vrow.status === "cancelled"
                 || vrow.report_status !== "sent"
+                || vrow.issue_open === true || vrow.issue_ever === true
+                || vrow.report_bounced === true
                 || (custEmail !== "" && vrow.client_email !== null && vrow.client_email !== custEmail);
               if (mismatch) {
                 skipped++;

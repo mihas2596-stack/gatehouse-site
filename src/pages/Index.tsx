@@ -91,6 +91,14 @@ const sectionClass = "border-b border-border/60 py-8 md:py-10";
 
 const Index = () => (
   <div className="bg-background pb-12 md:pb-0">
+    {/* U01: while the owner-ordered global test window is active, the
+        homepage prices below are scaled — say so, like /quote does.
+        Self-expires with the window; no deploy needed to remove it. */}
+    {globalTestCutActive() && (
+      <p className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm">
+        Test pricing is active. The prices shown are reduced for payment testing.
+      </p>
+    )}
     <SEO
       title="Every-Other-Week House Cleaning in North Atlanta | Gatehouse"
       description="Every-other-week cleaning in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online."

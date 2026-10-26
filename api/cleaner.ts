@@ -16,6 +16,7 @@ import {
   dbSelect,
   dbInsert,
   dbUpdate,
+  dbUpdateCount,
   dbDelete,
   logEvent,
   storageSignUpload,
@@ -603,12 +604,22 @@ export default async function handler(req: Req, res: Res) {
         return json(400, { ok: false, error: "rooms_incomplete", missing });
       }
       checklist.submitted_at = new Date().toISOString();
-      const ok = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
-        checklist,
-        report_status: "submitted",
-        status: "report_submitted",
-      });
-      if (!ok) return json(502, { ok: false, error: "db_error" });
+      // R01: the submitted-transition is a compare-and-swap on the
+      // expected pre-states. Two concurrent Finish clicks both pass
+      // the read check above; only the CAS winner publishes — the
+      // loser returns the existing result instead of a second
+      // publication and a second client email.
+      const changed = await dbUpdateCount(
+        "gh_visits",
+        `id=eq.${visit.id}&report_status=in.(none,draft,returned)`,
+        {
+          checklist,
+          report_status: "submitted",
+          status: "report_submitted",
+        },
+      );
+      if (changed === 0) return json(200, { ok: true, already: true });
+      if (changed < 0) return json(502, { ok: false, error: "db_error" });
       await logEvent(visit.id, visit.booking_id, "cleaner", "report_submitted", {
         photos: photos.length,
         problem_note: checklist.problem_note ?? null,

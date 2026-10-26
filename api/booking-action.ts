@@ -27,12 +27,13 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
-  dbConfigured, dbSelect, dbInsert, dbDelete, dbUpdate, dbUpsert, logEvent,
+  dbConfigured, dbSelect, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent,
   newCleanerToken, hashToken, tokenHashEquals, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
-import { paymentBasis, issueStateFrom } from "./_payment_basis.js";
+import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
+import { findSucceededCleaningIntent, findLiveIntent, confirmIntent } from "./_payment_intent.js";
 import {
   cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
   cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
@@ -331,7 +332,18 @@ export async function sendReceiptEmailOnce(
   meta: Record<string, string>,
   bookingId: string,
 ): Promise<boolean> {
-  if (meta["gh_receipt_email_id"]) return true;
+  // P10: the sent flag is per-booking, never shared customer metadata —
+  // another booking's receipt id must not suppress this booking's
+  // receipt. The row carries receipt_email_id (written below on send).
+  if (dbConfigured()) {
+    const rows = await dbSelect<{ receipt_email_id?: string | null }>(
+      "gh_visits",
+      `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+    );
+    if (rows[0]?.receipt_email_id) return true;
+  } else if (meta["gh_receipt_email_id"]) {
+    return true;
+  }
   const key = process.env["RESEND_API_KEY"];
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
   if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
@@ -615,7 +627,9 @@ async function hydrateCustomerMeta(
   const cancelledEv = latestEvent(events, "visit_cancelled");
   // An operator approval is not client consent: a stale operator event
   // must not re-arm "approved" when this booking is hydrated (G3).
-  const approvedEv = events.find((e) => e.event === "report_approved" && e.detail?.["via"] !== "operator_approve") ?? null;
+  // P01: an approval superseded by a later republication is not consent
+  // for the new report either.
+  const approvedEv = clientApprovedEvent(events);
   const remindedEv = latestEvent(events, "reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
@@ -1376,7 +1390,18 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "charge") {
       const amountCents = parsed.data.amount_cents;
-      const reportVersion = parsed.data.report_version ?? 1;
+      // P04: the idempotency version comes from the booking's own journal
+      // (latest report_sent event), NEVER from the request — a caller
+      // passing a different version must not mint a second payment
+      // obligation for the same visit.
+      let latestSent: (typeof events)[number] | undefined;
+      for (const e of events) {
+        if (e.event !== "report_sent") continue;
+        if (!latestSent || e.created_at > latestSent.created_at) latestSent = e;
+      }
+      const reportVersion = typeof latestSent?.detail?.["version"] === "number"
+        ? (latestSent.detail["version"] as number)
+        : 1;
       if (!amountCents) {
         return json(400, { ok: false, error: "amount_required" });
       }
@@ -1403,7 +1428,7 @@ export default async function handler(req: Req, res: Res) {
           return json(409, { ok: false, error: "issue_open" });
         }
         const basis = paymentBasis(
-          { reportSentAt: row.report_sent_at, events, issueOpenRow: row.issue_open ?? null, issueEverRow: row.issue_ever ?? null },
+          { reportSentAt: row.report_sent_at, events, issueOpenRow: row.issue_open ?? null, issueEverRow: row.issue_ever ?? null, bounced: row.report_bounced ?? (meta["gh_report_bounced"] === "1") },
           Date.now(),
         );
         if (!basis) {
@@ -1425,35 +1450,33 @@ export default async function handler(req: Req, res: Res) {
         logErr("charge", "blocked: no saved payment method");
         return json(409, { ok: false, error: "no_payment_method" });
       }
-      // Server-side amount check: the charge must equal the amount pinned
-      // to THIS visit's report by send_report (gh_report_amount_cents).
-      // Bookings without a pinned report amount fall back to the
-      // first-visit price stored at card-save time. The request amount is
-      // never trusted on its own (fail-closed).
-      const rawQuoted = meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"];
-      const quotedCents = parseInt(rawQuoted ?? "", 10);
+      // Server-side amount check (P07/G2): for a row-backed booking the
+      // amount MUST be the row's pinned amount_cents. Shared metadata
+      // (gh_report_amount_cents / gh_first_price_cents) may describe
+      // another booking of this email and is never a fallback when a row
+      // exists — a row without a pinned amount cannot be charged at all,
+      // even if metadata carries a number. Legacy bookings without a row
+      // keep the metadata gates. The request amount is never trusted on
+      // its own (fail-closed).
+      const quotedCents = row
+        ? (typeof row.amount_cents === "number" && row.amount_cents > 0 ? row.amount_cents : NaN)
+        : parseInt(meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "", 10);
       if (!Number.isFinite(quotedCents) || quotedCents <= 0) {
         logErr("charge", "blocked: no quoted price on record");
         return json(409, { ok: false, error: "quote_missing" });
       }
       if (amountCents !== quotedCents) {
-        logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
-        return json(409, { ok: false, error: "amount_mismatch" });
-      }
-      // Agreed-price invariant: the amount must be THIS booking's pinned
-      // price (gh_visits.amount_cents, fixed server-side at submission).
-      // No recurring fallback: a recurring price belongs to the NEXT
-      // visit, never to this one (G2). Anything else means the surfaces
-      // disagree: flag the booking for a price review and stop the
-      // payment instead of picking a number.
-      if (row?.amount_cents) {
-        if (amountCents !== row.amount_cents) {
+        if (row) {
           await logEvent(row.id, bookingId, "system", "price_review_flagged", {
             amount_cents: amountCents, pinned_cents: row.amount_cents,
           });
-          logErr("charge", `blocked: price review — amount ${amountCents} vs pinned ${row.amount_cents}`);
+          // Row-backed: a request amount that differs from the pin is
+          // a human-review stop, not a silent re-price — the operator
+          // asked for one number, the visit pins another.
           return json(409, { ok: false, error: "price_review_required", pinned_cents: row.amount_cents });
         }
+        logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
+        return json(409, { ok: false, error: "amount_mismatch" });
       }
       // Idempotency: one payment per booking+report version, no matter how
       // many times this is called or how often Stripe redelivers webhooks.
@@ -1501,11 +1524,65 @@ export default async function handler(req: Req, res: Res) {
           return json(409, { ok: false, error: "not_approved" });
         }
       }
+      // P04/P11 adoption: if a successful cleaning intent for THIS booking
+      // and amount already exists (a previous charge succeeded at Stripe
+      // but the paid state never landed, or the version moved), adopt it
+      // instead of creating a second one. Cancellation-fee intents are a
+      // different obligation and are never adopted here.
+      const adoptedPi = await findSucceededCleaningIntent(STRIPE_SECRET_KEY, bookingId, amountCents);
+      if (adoptedPi) {
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_state]": "paid",
+          "metadata[gh_paid_at]": new Date().toISOString(),
+          "metadata[gh_last_payment]": adoptedPi,
+        });
+        const adoptedVisit = await latestVisit(bookingId);
+        if (adoptedVisit) {
+          // P11: a lost paid write must surface, not silently succeed —
+          // the next attempt adopts the same intent again (no new charge).
+          let adoptedWrote = false;
+          for (let attempt = 0; attempt < 2 && !adoptedWrote; attempt++) {
+            adoptedWrote = await dbUpdate("gh_visits", `id=eq.${adoptedVisit.id}`, {
+              status: "paid",
+              paid_at: new Date().toISOString(),
+              payment_intent_id: adoptedPi,
+            });
+          }
+          if (!adoptedWrote) {
+            await logEvent(adoptedVisit.id, bookingId, "system", "payment_unconfirmed", {
+              payment_intent: adoptedPi,
+            });
+            return json(502, { ok: false, error: "payment_unconfirmed", payment_intent: adoptedPi });
+          }
+          await logEvent(adoptedVisit.id, bookingId, "system", "payment_succeeded", {
+            payment_intent: adoptedPi,
+            via: "adopted",
+          });
+        }
+        const adoptedReceipt = await sendReceiptEmailOnce(
+          STRIPE_SECRET_KEY, customer.id,
+          { ...meta, gh_report_amount_cents: String(amountCents) },
+          bookingId,
+        );
+        log("charge", { booking: bookingId, status: "adopted", payment_intent: adoptedPi });
+        return json(200, { ok: true, state: "paid", payment_intent: adoptedPi, receipt_sent: adoptedReceipt, adopted: true });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "payment_pending",
         "metadata[gh_report_version]": String(reportVersion),
       });
-      const pi = await stripePost(
+      // P05: a live intent for this version (e.g. declined, then the card
+      // was changed) must be confirmed with the current card — creating
+      // anew under the same idempotency key with a different payment
+      // method fails Stripe's parameter check and leaves the retry stuck.
+      // A processing intent is left alone: the next attempt reconciles it.
+      const livePi = await findLiveIntent(STRIPE_SECRET_KEY, bookingId, reportVersion);
+      if (livePi?.status === "processing") {
+        return json(409, { ok: false, error: "payment_processing" });
+      }
+      const pi = livePi
+        ? await confirmIntent(STRIPE_SECRET_KEY, livePi.id, paymentMethod, `${idemKey}_confirm`)
+        : await stripePost(
         STRIPE_SECRET_KEY,
         "/payment_intents",
         {
@@ -1545,11 +1622,22 @@ export default async function handler(req: Req, res: Res) {
         );
         const paidVisit = await latestVisit(bookingId);
         if (paidVisit) {
-          await dbUpdate("gh_visits", `id=eq.${paidVisit.id}`, {
-            status: "paid",
-            paid_at: new Date().toISOString(),
-            payment_intent_id: String(pi.data["id"] ?? ""),
-          });
+          // P11: a lost paid write must surface, not silently succeed —
+          // the next attempt adopts the same intent (no second charge).
+          let wrote = false;
+          for (let attempt = 0; attempt < 2 && !wrote; attempt++) {
+            wrote = await dbUpdate("gh_visits", `id=eq.${paidVisit.id}`, {
+              status: "paid",
+              paid_at: new Date().toISOString(),
+              payment_intent_id: String(pi.data["id"] ?? ""),
+            });
+          }
+          if (!wrote) {
+            await logEvent(paidVisit.id, bookingId, "system", "payment_unconfirmed", {
+              payment_intent: String(pi.data["id"] ?? ""),
+            });
+            return json(502, { ok: false, error: "payment_unconfirmed", payment_intent: pi.data["id"] });
+          }
           await logEvent(paidVisit.id, bookingId, "system", "payment_succeeded", {
             payment_intent: String(pi.data["id"] ?? ""),
             receipt_sent: receiptSent,
@@ -1696,6 +1784,34 @@ export default async function handler(req: Req, res: Res) {
       }
       const version = (parseInt(meta["gh_report_version"] ?? "0", 10) || 0) + 1;
       const sentAt = new Date().toISOString();
+      // R01: claim the publication BEFORE sending the email. Two
+      // concurrent (re-)sends both pass the sequential 10-minute guard
+      // above (same old metadata read); only the CAS winner sends.
+      // First publish: submitted→sent. Resend: the row's current
+      // report_sent_at is the expected value — only send_report writes
+      // it, so a changed value means another send already claimed this
+      // slot. The loser returns the existing result, no second email,
+      // no second report_sent event. Legacy (no row) keeps the guard.
+      if (visitRow) {
+        const casMatch = visitRow.report_status === "submitted"
+          ? `id=eq.${visitRow.id}&report_status=eq.submitted`
+          : visitRow.report_sent_at
+            ? `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at)}`
+            : `id=eq.${visitRow.id}&report_status=eq.sent`;
+        const claimed = await dbUpdateCount("gh_visits", casMatch, {
+          report_status: "sent",
+          report_sent_at: sentAt,
+          status: "report_sent",
+          // Publishing a fresh report supersedes any earlier issue
+          // (matches the metadata, which send_report clears below).
+          issue_open: false,
+        });
+        if (claimed === 0) {
+          return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
+        }
+        // claimed === -1 (DB unreachable): fall through to the legacy
+        // behavior — the guard above is the only dedupe then.
+      }
       const params: Record<string, string> = {
         "metadata[gh_state]": "report_sent",
         "metadata[gh_issue_open]": "",
@@ -1796,15 +1912,11 @@ export default async function handler(req: Req, res: Res) {
         logErr("send_report", "email not sent — auto-charge clock blocked");
       }
       if (visitRow) {
+        // The publication itself was already claimed by the CAS above;
+        // this only records the email outcome of the winning send.
         await dbUpdate("gh_visits", `id=eq.${visitRow.id}`, {
-          report_status: "sent",
-          report_sent_at: sentAt,
           report_email_id: reportEmailId || null,
           report_bounced: !emailSent,
-          status: "report_sent",
-          // Publishing a fresh report supersedes any earlier issue
-          // (matches the metadata, which send_report clears).
-          issue_open: false,
         });
         await logEvent(visitRow.id, bookingId, "owner", "report_sent", {
           version, email_sent: emailSent, photos: finalPhotos.length,
@@ -2044,16 +2156,29 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "charge_fee") {
       // Collect the late-cancellation fee recorded by the client cancel
-      // flow (api/visit). Amount comes ONLY from server metadata — the
-      // operator cannot invent a figure here.
-      if (state !== "cancelled") {
+      // flow (api/visit). P08: the amount and the charged flag come from
+      // THIS booking's own journal, never from shared customer metadata —
+      // another booking's fee or flag must not leak into this one.
+      const cancelled = row ? row.status === "cancelled" : state === "cancelled";
+      if (!cancelled) {
         return json(409, { ok: false, error: "not_cancelled" });
       }
-      const feeCents = parseInt(meta["gh_cancel_fee_cents"] ?? "", 10);
+      const cancelEv = events.find((e) => e.event === "visit_cancelled");
+      let feeCents = typeof cancelEv?.detail?.["fee_cents"] === "number"
+        ? (cancelEv.detail["fee_cents"] as number)
+        : NaN;
+      if (!Number.isFinite(feeCents) && !row) {
+        // Legacy no-row booking: no journal exists, so the shared
+        // metadata fee is the only record. Row-backed bookings never
+        // fall back — a missing event there means no recorded fee
+        // (fail closed), which is exactly what blocks the B13 leak.
+        const metaFee = parseInt(meta["gh_cancel_fee_cents"] ?? "", 10);
+        feeCents = Number.isFinite(metaFee) ? metaFee : NaN;
+      }
       if (!Number.isFinite(feeCents) || feeCents <= 0) {
         return json(409, { ok: false, error: "no_fee_due" });
       }
-      if (meta["gh_fee_charged"] === "1") {
+      if (events.some((e) => e.event === "fee_charged") || (!row && meta["gh_fee_charged"] === "1")) {
         return json(200, { ok: true, already: true, fee_cents: feeCents });
       }
       const pm = meta["gh_payment_method"] ?? "";
@@ -2079,6 +2204,11 @@ export default async function handler(req: Req, res: Res) {
           "metadata[gh_fee_charged]": "1",
           "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
         });
+        if (row) {
+          await logEvent(row.id, bookingId, "system", "fee_charged", {
+            fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? ""),
+          });
+        }
         log("charge_fee", { booking: bookingId, feeCents });
         return json(200, { ok: true, fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? "") });
       }
