@@ -26,6 +26,7 @@ type CleanerView = {
     window: string | null;
     address: string | null;
     access_notes: string | null;
+    entry?: { method: string | null; note: string; secret: string | null } | null;
     client_notes?: string | null;
     no_photo_zones: string | null;
     client_first_name: string;
@@ -316,8 +317,12 @@ const Cleaner = () => {
               </a>
             </div>
           )}
-          {v.access_notes && (
-            <p className="text-sm"><span className="font-semibold">Access:</span> {v.access_notes}</p>
+          {v.entry && (
+            <div className="text-sm space-y-1">
+              <p><span className="font-semibold">Entry:</span> {v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}</p>
+              {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
+              {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
+            </div>
           )}
           {v.client_notes && (
             <p className="text-sm"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>

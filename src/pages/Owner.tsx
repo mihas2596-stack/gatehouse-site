@@ -35,6 +35,7 @@ type Visit = {
   payment_failed?: boolean;
   can_charge?: boolean;
   visit_confirmed?: boolean;
+  entry_agreed?: boolean;
   proposed_date?: string;
   proposed_pending?: boolean;
   confirmation_email?: string | null;
@@ -796,6 +797,14 @@ const Owner = () => {
     if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
     if (v.issue_open) items.push({ label: "Resolve the customer issue", focus: "report" });
     if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
+    // Entry signal (spec A §5): a confirmed visit within 2 days whose
+    // entry method is not agreed yet — the owner sees it here, and the
+    // cron sends the client one reminder (deduped by journal event).
+    if (v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid" && !v.entry_agreed && v.visit_date) {
+      const d = new Date(`${v.visit_date}T12:00:00Z`).getTime();
+      const days = Number.isNaN(d) ? 99 : (d - Date.now()) / (24 * 3600 * 1000);
+      if (days >= -1 && days <= 2) items.push({ label: "Entry not agreed", focus: "summary" });
+    }
     return items;
   };
 

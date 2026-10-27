@@ -112,7 +112,7 @@ beforeEach(() => {
     if (u.pathname.includes("/rest/v1/gh_visits")) {
       if (method === "PATCH") {
         Object.assign(row, JSON.parse(String(init?.body ?? "{}")) as Row);
-        return okRes(null);
+        return okRes([row]);
       }
       const qBid = u.searchParams.get("booking_id");
       if (qBid && qBid.startsWith("eq.")) {

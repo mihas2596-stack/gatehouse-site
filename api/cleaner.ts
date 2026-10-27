@@ -29,13 +29,14 @@ import {
   tokenHashEquals,
 } from "./_db.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
+import { cleanerEntryView, deleteAccess, loadAccess } from "./_visit_access.js";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 
 type Req = {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
   query?: Record<string, string | string[] | undefined>;
-  body: unknown;
+  body?: unknown;
 };
 type Res = {
   status(code: number): Res;
@@ -64,6 +65,7 @@ type VisitRow = {
   issue_open?: boolean | null;
   amount_cents?: number | null;
   client_email?: string | null;
+  cleaner_id?: string | null;
   cleaner_token_hash: string | null;
   cleaner_token_expires: string | null;
   cleaner_link_version?: string | null;
@@ -226,7 +228,11 @@ async function view(visit: VisitRow) {
       date: visit.visit_date,
       window: visit.window,
       address: visit.address,
-      access_notes: visit.access_notes,
+      access_notes: null,
+      entry: cleanerEntryView(await loadAccess(visit.id), {
+        status: visit.status, report_status: visit.report_status,
+        cleaner_id: (visit as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
+      }, await visitConfirmed(visit.id)),
       client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,
       client_first_name: firstName,
@@ -336,20 +342,47 @@ const escHtml = (s: string): string =>
 async function publishReportToClient(
   visit: VisitRow,
   photos: PhotoRow[],
-): Promise<{ ok: true; email_sent: boolean; version: number; sent_at: string } | { ok: false; error: string }> {
+): Promise<{ status: "published"; email_sent: boolean; version: number; sent_at: string } | { status: "already_published" } | { status: "failed"; error: string }> {
   const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
-  if (!STRIPE_SECRET_KEY) return { ok: false, error: "stripe_not_configured" };
+  if (!STRIPE_SECRET_KEY) return { status: "failed", error: "stripe_not_configured" };
   const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, visit.booking_id);
-  if (!customer) return { ok: false, error: "customer_not_found" };
+  if (!customer) return { status: "failed", error: "customer_not_found" };
   const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
   const meta = (custRes.data["metadata"] ?? {}) as Record<string, string>;
-  if (meta["gh_issue_open"] === "1") return { ok: false, error: "issue_open" };
+  if (meta["gh_issue_open"] === "1") return { status: "failed", error: "issue_open" };
   const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
   const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
   const amountCents = visit.amount_cents ?? parseInt(meta["gh_first_price_cents"] ?? "", 10);
-  if (!Number.isFinite(amountCents) || amountCents <= 0) return { ok: false, error: "quote_missing" };
+  if (!Number.isFinite(amountCents) || amountCents <= 0) return { status: "failed", error: "quote_missing" };
   const version = (parseInt(meta["gh_report_version"] ?? "0", 10) || 0) + 1;
   const sentAt = new Date().toISOString();
+  // RA14: claim the publication BEFORE any email or metadata write.
+  // The submit CAS above moved this row to submitted; only the
+  // submitted→sent transition publishes. If the owner already
+  // published from the review queue (or the visit was cancelled),
+  // this claim loses and nothing is sent twice. The claim sets
+  // report_bounced pessimistically: if the email step then fails,
+  // the clock stays blocked instead of running on an undelivered
+  // report; the success write below clears it.
+  const claimed = await dbUpdateCount(
+    "gh_visits",
+    `id=eq.${visit.id}&report_status=eq.submitted&status=eq.report_submitted`,
+    {
+      report_status: "sent",
+      report_sent_at: sentAt,
+      report_bounced: true,
+      status: "report_sent",
+    },
+  );
+  if (claimed === 0) {
+    const fresh = await dbSelect<{ status: string | null }>(
+      "gh_visits",
+      `id=eq.${visit.id}`,
+    );
+    if (fresh[0]?.status === "cancelled") return { status: "failed", error: "visit_cancelled" };
+    return { status: "already_published" };
+  }
+  if (claimed < 0) return { status: "failed", error: "db_error" };
   const photoHash = createHash("sha256").update(photos.map((p) => p.storage_path).join("|")).digest("hex").slice(0, 16);
   const params: Record<string, string> = {
     "metadata[gh_state]": "report_sent",
@@ -444,7 +477,7 @@ async function publishReportToClient(
   await logEvent(visit.id, visit.booking_id, "cleaner", "report_sent", {
     version, email_sent: emailSent, photos: photos.length, auto: true,
   });
-  return { ok: true, email_sent: emailSent, version, sent_at: sentAt };
+  return { status: "published", email_sent: emailSent, version, sent_at: sentAt };
 }
 
 async function sendOwnerEmail(subject: string, text: string): Promise<boolean> {
@@ -624,6 +657,10 @@ export default async function handler(req: Req, res: Res) {
         photos: photos.length,
         problem_note: checklist.problem_note ?? null,
       });
+      // Finish closes entry access: the finished cleaner no longer sees
+      // the client's entry details, even if the report is held.
+      await deleteAccess(visit.id);
+      await logEvent(visit.id, visit.booking_id, "system", "entry_revoked");
       // Auto-publish: the finished report goes straight to the client —
       // no mandatory owner step between the cleaner's finish and the
       // client's report. Exceptions stay with the owner: an open issue
@@ -643,7 +680,16 @@ export default async function handler(req: Req, res: Res) {
         return json(200, { ok: true, published: false, held: true });
       }
       const published = await publishReportToClient(visit, photos);
-      if (!published.ok) {
+      if (published.status === "already_published") {
+        // RA14: the owner published from the review queue while this
+        // Finish was in flight. One publication exists — this call
+        // sends nothing more, and the cleaner sees the shared result.
+        return json(200, { ok: true, already: true, published: false });
+      }
+      if (published.status === "failed" && published.error === "visit_cancelled") {
+        return json(409, { ok: false, error: "visit_not_confirmed" });
+      }
+      if (published.status === "failed") {
         await logEvent(visit.id, visit.booking_id, "system", "report_publish_failed", {
           error: published.error,
         });

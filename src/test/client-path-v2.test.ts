@@ -174,12 +174,14 @@ describe("/api/visit", () => {
     expect(store[0].metadata["gh_confirmed_date"]).toBe(future(5));
   });
 
-  it("stores access notes and no-photo zones", async () => {
+  it("stores no-photo zones, but never entry notes in Stripe metadata", async () => {
+    // Spec A §6: legacy update_access notes are re-routed to
+    // gh_visit_access; Stripe metadata must never carry them again.
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await visitHandler(post(btFor("bid-v"), { action: "update_access", notes: "Lockbox 1234", no_photo_zones: "Office" }) as any, res as any);
     expect(res.code).toBe(200);
-    expect(store[0].metadata["gh_access_notes"]).toBe("Lockbox 1234");
+    expect(store[0].metadata["gh_access_notes"]).toBeUndefined();
     expect(store[0].metadata["gh_no_photo_zones"]).toBe("Office");
   });
 });

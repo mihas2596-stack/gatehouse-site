@@ -27,13 +27,15 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
-  dbConfigured, dbSelect, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent,
+  dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent,
   newCleanerToken, hashToken, tokenHashEquals, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
-import { findSucceededCleaningIntent, findLiveIntent, confirmIntent } from "./_payment_intent.js";
+import { reconcileIntent, confirmIntent } from "./_payment_intent.js";
+import { chargeVisit } from "./_payment_obligation.js";
+import { deleteAccess, revokeAccessForCleanerChange, saveAccessNote } from "./_visit_access.js";
 import {
   cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
   cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
@@ -209,21 +211,21 @@ async function stripePost(
 async function findCustomerByBooking(
   secretKey: string,
   bookingId: string,
-): Promise<{ id: string; metadata: Record<string, string> } | null> {
+): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const q = `metadata['gh_booking_id']:'${bookingId.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query: q, limit: "1" })}`);
   if (res.ok) {
-    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {} };
+    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
+    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name };
     return null;
   }
   // Fallback: list recent customers and filter client-side (restricted keys
   // may not allow /customers/search).
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
   if (!listRes.ok) return null;
-  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
+  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
-  return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
+  return found ? { id: found.id, metadata: found.metadata ?? {}, email: found.email, name: found.name } : null;
 }
 
 // Receipt email — sent ONCE per paid visit (guarded by gh_receipt_email_id).
@@ -335,15 +337,92 @@ export async function sendReceiptEmailOnce(
   // P10: the sent flag is per-booking, never shared customer metadata —
   // another booking's receipt id must not suppress this booking's
   // receipt. The row carries receipt_email_id (written below on send).
+  //
+  // RA18: the old check-then-send raced — two concurrent calls both
+  // saw an empty marker and both emailed. The row is now claimed
+  // BEFORE sending, with a leased placeholder:
+  //   * claim: receipt_email_id null -> "claim:<ms>" (atomic CAS on
+  //     the row id; only the winner sends);
+  //   * a loser whose re-read shows a real id returns true (sent);
+  //   * a loser seeing a FRESH placeholder returns false (the winner
+  //     is in flight; a later call sees the real id and returns true);
+  //   * a STALE placeholder (>5 min, longer than any Resend call plus
+  //     a serverless timeout) means the winner died mid-send: the
+  //     lease is stolen and the send retried — with the SAME Resend
+  //     idempotency key, so a retry after an ambiguous Resend outcome
+  //     returns the original message instead of a second receipt.
+  //   * a DB error anywhere in the claim fails closed (no send).
+  // Legacy bookings with no row, and the no-DB path, keep the old
+  // meta check-then-send: there is nothing atomic to claim on.
+  const CLAIM_TTL_MS = 5 * 60 * 1000;
+  const claimValue = () => `claim:${Date.now()}`;
+  const isClaim = (v: string | null | undefined) => typeof v === "string" && v.startsWith("claim:");
+  const claimAgeMs = (v: string) => Date.now() - (parseInt(v.slice("claim:".length), 10) || 0);
   if (dbConfigured()) {
-    const rows = await dbSelect<{ receipt_email_id?: string | null }>(
+    const rows = await dbSelect<{ id: string; receipt_email_id?: string | null }>(
       "gh_visits",
       `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
     );
-    if (rows[0]?.receipt_email_id) return true;
+    const row = rows[0];
+    if (row) {
+      const current = row.receipt_email_id ?? null;
+      if (current && !isClaim(current)) return true;
+      let won = false;
+      if (current === null) {
+        const claimed = await dbUpdateCount(
+          "gh_visits",
+          `id=eq.${row.id}&receipt_email_id=is.null`,
+          { receipt_email_id: claimValue() },
+        );
+        if (claimed === 1) won = true;
+        else if (claimed < 0) return false;
+      }
+      if (!won) {
+        // Re-read: the winner may have finished, or hold a lease.
+        const fresh = await dbSelect<{ id: string; receipt_email_id?: string | null }>(
+          "gh_visits",
+          `id=eq.${row.id}`,
+        );
+        const now = fresh[0]?.receipt_email_id ?? null;
+        if (now && !isClaim(now)) return true;
+        if (now && isClaim(now) && claimAgeMs(now) > CLAIM_TTL_MS) {
+          const stolen = await dbUpdateCount(
+            "gh_visits",
+            `id=eq.${row.id}&receipt_email_id=eq.${encodeURIComponent(now)}`,
+            { receipt_email_id: claimValue() },
+          );
+          if (stolen === 1) won = true;
+          else if (stolen < 0) return false;
+        } else if (now === "") {
+          // Defensive: no code writes "", but an empty marker is not
+          // a sent receipt — claim it rather than blocking forever.
+          const claimedEmpty = await dbUpdateCount(
+            "gh_visits",
+            `id=eq.${row.id}&receipt_email_id=eq.`,
+            { receipt_email_id: claimValue() },
+          );
+          if (claimedEmpty === 1) won = true;
+          else if (claimedEmpty < 0) return false;
+        }
+      }
+      if (!won) return false;
+      // Winner continues below; the row id is remembered for the
+      // final write so the placeholder is replaced precisely.
+      return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, row.id);
+    }
   } else if (meta["gh_receipt_email_id"]) {
     return true;
   }
+  return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, null);
+}
+
+async function sendReceiptAfterClaim(
+  secretKey: string,
+  customerId: string,
+  meta: Record<string, string>,
+  bookingId: string,
+  rowId: string | null,
+): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
   if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
@@ -359,7 +438,14 @@ export async function sendReceiptEmailOnce(
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        // Stable per booking: a retry after an ambiguous outcome
+        // (request sent, response lost) replays the original message
+        // instead of emailing a second receipt.
+        "Idempotency-Key": `gh-receipt-${bookingId}`,
+      },
       body: JSON.stringify({
         from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
         to: [custEmail],
@@ -381,8 +467,92 @@ export async function sendReceiptEmailOnce(
         "metadata[gh_receipt_email_id]": j.id,
       });
       if (dbConfigured()) {
-        await dbUpdate("gh_visits", `booking_id=eq.${bookingId}`, { receipt_email_id: j.id });
+        // Replace the placeholder with the real id. Retried a few
+        // times: if this write never lands, the lease ages out and a
+        // later call re-sends — with the same idempotency key, so
+        // Resend still delivers only one receipt.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const ok = rowId
+            ? await dbUpdate("gh_visits", `id=eq.${rowId}`, { receipt_email_id: j.id })
+            : await dbUpdate("gh_visits", `booking_id=eq.${bookingId}`, { receipt_email_id: j.id });
+          if (ok) break;
+        }
       }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// RA10: receipt for a late-cancellation FEE — a separate obligation
+// from the cleaning. The amount is the fee intent's own amount, the
+// wording names the fee, and dedupe is per booking + intent (journal
+// event), never the cleaning receipt marker. The shared-meta marker
+// is only the legacy fallback when no DB is configured.
+export async function sendFeeReceiptEmailOnce(
+  secretKey: string,
+  customerId: string,
+  bookingId: string,
+  piId: string,
+  amountCents: number,
+): Promise<boolean> {
+  if (!Number.isFinite(amountCents) || amountCents <= 0 || !piId) return false;
+  const key = process.env["RESEND_API_KEY"];
+  if (!key) return false;
+  const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
+  const custEmail = typeof custRes.data["email"] === "string" ? custRes.data["email"] : "";
+  const custName = typeof custRes.data["name"] === "string" ? custRes.data["name"] : "";
+  if (!custEmail) return false;
+  if (dbConfigured()) {
+    const prior = await dbSelect<{ event?: string; detail?: Record<string, unknown> | null }>(
+      "gh_events",
+      `booking_id=eq.${encodeURIComponent(bookingId)}&event=eq.cancellation_fee_receipt_sent&limit=60`,
+    );
+    // Check the event name too, not just the intent: the query is the
+    // primary filter, but the dedupe must not mistake the fee-paid
+    // event itself (same intent) for the receipt event.
+    if (prior.some((e) => e.event === "cancellation_fee_receipt_sent" && e.detail?.["payment_intent"] === piId)) return true;
+  } else if ((custRes.data["metadata"] as Record<string, string> | undefined)?.["gh_fee_receipt_email_id"]) {
+    return true;
+  }
+  const firstName = custName.trim().split(/\s+/)[0] || "there";
+  const dollars = (amountCents / 100).toFixed(2).replace(/\.00$/, "");
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [custEmail],
+        reply_to: "hello@gatehousehomecleaning.com",
+        subject: `Your Gatehouse receipt — late-cancellation fee $${dollars}`,
+        text:
+          `Hi ${firstName},\n\nThank you — your late-cancellation fee is paid.\n\n` +
+          `Amount paid: $${dollars}\nBooking: ${bookingId.slice(0, 8)}\n\n` +
+          `This fee applies because the visit was cancelled within 48 hours, as agreed. ` +
+          `It is separate from the cleaning itself — no cleaning charge was made for this booking.\n\n` +
+          `If anything looks wrong, just reply to this email — we'll review it.\n\n` +
+          `Gatehouse Home Cleaning\n`,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) return false;
+    const j = (await resp.json()) as { id?: string };
+    if (dbConfigured()) {
+      const rows = await dbSelect<{ id: string }>(
+        "gh_visits",
+        `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+      );
+      if (rows[0]) {
+        await logEvent(rows[0].id, bookingId, "system", "cancellation_fee_receipt_sent", {
+          payment_intent: piId, amount_cents: amountCents, email_id: j.id ?? "",
+        });
+      }
+    } else if (typeof j.id === "string" && j.id) {
+      await stripePost(secretKey, `/customers/${customerId}`, {
+        "metadata[gh_fee_receipt_email_id]": j.id,
+      });
     }
     return true;
   } catch {
@@ -392,7 +562,9 @@ export async function sendReceiptEmailOnce(
 
 type VisitRowLite = {
   id: string;
+  status: string;
   report_status: string;
+  report_sent_at: string | null;
   checklist: unknown;
   visit_date: string | null;
 };
@@ -576,26 +748,33 @@ type BookingRow = {
   client_email: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
   visit_date: string | null; window: string | null;
+  service?: string | null;
   // Synced on every issue transition (client issue, dispute, resolve,
   // resend, client approval); PostgREST returns them even though the
   // lite type used to omit them.
   issue_open?: boolean | null; issue_ever?: boolean | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
-async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
-  if (!dbConfigured()) return null;
-  const rows = await dbSelect<BookingRow>(
+// RA04: strict loaders that tell "no row" apart from "the DB could
+// not be read". A state-changing action must fail closed on a read
+// error, never silently fall back to shared customer metadata.
+async function latestBookingRowStrict(bookingId: string): Promise<{ ok: boolean; row: BookingRow | null }> {
+  if (!dbConfigured()) return { ok: true, row: null };
+  const r = await dbSelectStrict<BookingRow>(
     "gh_visits",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
   );
-  return rows[0] ?? null;
+  if (!r.ok) return { ok: false, row: null };
+  return { ok: true, row: r.rows[0] ?? null };
 }
-async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
-  if (!dbConfigured()) return [];
-  return dbSelect<BookingEvent>(
+async function bookingEventsStrict(bookingId: string): Promise<{ ok: boolean; events: BookingEvent[] }> {
+  if (!dbConfigured()) return { ok: true, events: [] };
+  const r = await dbSelectStrict<BookingEvent>(
     "gh_events",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
   );
+  if (!r.ok) return { ok: false, events: [] };
+  return { ok: true, events: r.rows };
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
@@ -777,6 +956,7 @@ async function sendConfirmationEmail(args: {
         text:
           `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\nDate: ${args.date}\nArrival window: ${args.win}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
           `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
+          `Arrange entry for your visit: on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.\n\n` +
           `Your visit page — status, your cleaner, reschedule or cancel:\n${args.visitLink}\n\n` +
           "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
         html:
@@ -787,6 +967,7 @@ async function sendConfirmationEmail(args: {
           `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
           emailButton(args.visitLink, "View my visit") +
           `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
+          `<p><strong>Arrange entry for your visit:</strong> on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.</p>` +
           `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
           `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
       }),
@@ -910,8 +1091,21 @@ export default async function handler(req: Req, res: Res) {
     if (!bookingId) return json(400, { ok: false, error: "invalid_request" });
 
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
-    const row = await latestBookingRow(bookingId);
-    const events = row ? await bookingEvents(bookingId) : [];
+    const rowRes = await latestBookingRowStrict(bookingId);
+    if (!rowRes.ok) {
+      logErr("lookup", "visit row unreadable");
+      return json(502, { ok: false, error: "db_unreadable" });
+    }
+    const row = rowRes.row;
+    let events: BookingEvent[] = [];
+    if (row) {
+      const evRes = await bookingEventsStrict(bookingId);
+      if (!evRes.ok) {
+        logErr("lookup", "visit journal unreadable");
+        return json(502, { ok: false, error: "db_unreadable" });
+      }
+      events = evRes.events;
+    }
     let customer = boundCustomer;
     if (!customer && row?.client_email) {
       customer = await findCustomerByEmail(STRIPE_SECRET_KEY, row.client_email);
@@ -1181,6 +1375,10 @@ export default async function handler(req: Req, res: Res) {
         logErr("assign_confirm", "visit row update failed");
         return json(502, { ok: false, error: "db_error" });
       }
+      if (changed) {
+        await revokeAccessForCleanerChange(row.id, cleanerId);
+        await logEvent(row.id, bookingId, "owner", "entry_revoked");
+      }
       // Link: a new or changed person gets a fresh v2 link (old one
       // dies); the same person keeps the current link.
       let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
@@ -1390,30 +1588,15 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "charge") {
       const amountCents = parsed.data.amount_cents;
-      // P04: the idempotency version comes from the booking's own journal
-      // (latest report_sent event), NEVER from the request — a caller
-      // passing a different version must not mint a second payment
-      // obligation for the same visit.
-      let latestSent: (typeof events)[number] | undefined;
-      for (const e of events) {
-        if (e.event !== "report_sent") continue;
-        if (!latestSent || e.created_at > latestSent.created_at) latestSent = e;
-      }
-      const reportVersion = typeof latestSent?.detail?.["version"] === "number"
-        ? (latestSent.detail["version"] as number)
-        : 1;
       if (!amountCents) {
         return json(400, { ok: false, error: "amount_required" });
       }
-      // Payment basis (G3): for a row-backed booking the charge needs a
-      // saved basis — the CLIENT's own report approval, or the agreed
-      // 24h timer rule (report sent 24h+ ago, no issue ever). Shared
-      // customer metadata is not a basis: it describes whichever booking
-      // this customer was last bound to, and an operator approval never
-      // manufactures client consent. A payment_failed retry passes on
-      // the same saved basis (O4) — the basis lives in the journal, not
-      // in the transient state string. Legacy bookings without a row
-      // keep the previous shared-metadata gates.
+      // Row-backed bookings charge through the single shared flow
+      // (RA01-RA13): the row's pinned amount, the journal's publication,
+      // an atomic claim, reconcile-before-create, a verified paid write.
+      // An operator charge never pays a draft, submitted or returned
+      // report (RA05) and never reuses consent voided by a later
+      // dispute (RA09).
       if (row) {
         if (row.status === "paid") {
           logErr("charge", "blocked: already paid");
@@ -1423,165 +1606,126 @@ export default async function handler(req: Req, res: Res) {
           logErr("charge", "blocked: already cancelled");
           return json(409, { ok: false, error: "already_cancelled" });
         }
-        if (issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open) {
-          logErr("charge", "blocked: issue open");
-          return json(409, { ok: false, error: "issue_open" });
+        const paymentMethod = meta["gh_payment_method"];
+        if (!paymentMethod) {
+          logErr("charge", "blocked: no saved payment method");
+          return json(409, { ok: false, error: "no_payment_method" });
         }
-        const basis = paymentBasis(
-          { reportSentAt: row.report_sent_at, events, issueOpenRow: row.issue_open ?? null, issueEverRow: row.issue_ever ?? null, bounced: row.report_bounced ?? (meta["gh_report_bounced"] === "1") },
-          Date.now(),
-        );
-        if (!basis) {
-          logErr("charge", "blocked: no payment basis (needs client approval or the 24h rule)");
-          return json(409, { ok: false, error: "payment_basis_missing" });
+        const outcome = await chargeVisit({
+          secretKey: STRIPE_SECRET_KEY,
+          bookingId,
+          customerId: customer.id,
+          customerEmail: customer.email ?? null,
+          paymentMethod,
+          source: "owner_charge",
+          allowedBases: ["client_approved", "timer_rule"],
+          requestedAmountCents: amountCents,
+          nowMs: Date.now(),
+          deps: {
+            setCustomerMeta: async (patch) => {
+              const params: Record<string, string> = {};
+              for (const [k, v] of Object.entries(patch)) params[`metadata[${k}]`] = v;
+              await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+            },
+            sendReceipt: (cents) => sendReceiptEmailOnce(
+              STRIPE_SECRET_KEY, customer.id,
+              { ...meta, gh_report_amount_cents: String(cents) },
+              bookingId,
+            ),
+            sendPaymentFailedEmail: async (visitId) => {
+              await sendPaymentFailedEmailOnce(
+                STRIPE_SECRET_KEY, customer.id, bookingId, visitId,
+              );
+            },
+          },
+        });
+        if (outcome.outcome === "paid") {
+          log("charge", { booking: bookingId, status: outcome.adopted ? "adopted" : "succeeded", payment_intent: outcome.payment_intent });
+          return json(200, { ok: true, state: "paid", payment_intent: outcome.payment_intent, receipt_sent: outcome.receipt_sent, ...(outcome.adopted ? { adopted: true } : {}) });
         }
-      } else {
-        if (issueOpen) {
-          logErr("charge", "blocked: issue open");
-          return json(409, { ok: false, error: "issue_open" });
+        if (outcome.outcome === "blocked") {
+          if (outcome.error === "visit_not_chargeable") return json(409, { ok: false, error: "already_cancelled" });
+          if (outcome.error === "price_review_required") return json(409, { ok: false, error: "price_review_required", pinned_cents: outcome.pinned_cents });
+          return json(409, { ok: false, error: outcome.error });
         }
-        if (state !== "approved") {
-          logErr("charge", `blocked: state=${state}, need approved`);
-          return json(409, { ok: false, error: "not_approved" });
+        if (outcome.outcome === "processing") return json(409, { ok: false, error: "payment_processing" });
+        if (outcome.outcome === "mismatch") return json(409, { ok: false, error: "payment_intent_mismatch" });
+        if (outcome.outcome === "failed") {
+          return json(402, { ok: false, error: outcome.error === "payment_requires_action" ? "payment_requires_action" : "payment_failed", detail: outcome.detail });
         }
+        return json(502, { ok: false, error: outcome.error });
+      }
+      // Legacy path (no visit row): metadata gates, with RA03/RA02
+      // hardening — a failed search never means "no payment", and a
+      // found intent is verified before it is confirmed.
+      if (issueOpen) {
+        logErr("charge", "blocked: issue open");
+        return json(409, { ok: false, error: "issue_open" });
+      }
+      if (state !== "approved") {
+        logErr("charge", `blocked: state=${state}, need approved`);
+        return json(409, { ok: false, error: "not_approved" });
       }
       const paymentMethod = meta["gh_payment_method"];
       if (!paymentMethod) {
         logErr("charge", "blocked: no saved payment method");
         return json(409, { ok: false, error: "no_payment_method" });
       }
-      // Server-side amount check (P07/G2): for a row-backed booking the
-      // amount MUST be the row's pinned amount_cents. Shared metadata
-      // (gh_report_amount_cents / gh_first_price_cents) may describe
-      // another booking of this email and is never a fallback when a row
-      // exists — a row without a pinned amount cannot be charged at all,
-      // even if metadata carries a number. Legacy bookings without a row
-      // keep the metadata gates. The request amount is never trusted on
-      // its own (fail-closed).
-      const quotedCents = row
-        ? (typeof row.amount_cents === "number" && row.amount_cents > 0 ? row.amount_cents : NaN)
-        : parseInt(meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "", 10);
+      const quotedCents = parseInt(meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "", 10);
       if (!Number.isFinite(quotedCents) || quotedCents <= 0) {
         logErr("charge", "blocked: no quoted price on record");
         return json(409, { ok: false, error: "quote_missing" });
       }
       if (amountCents !== quotedCents) {
-        if (row) {
-          await logEvent(row.id, bookingId, "system", "price_review_flagged", {
-            amount_cents: amountCents, pinned_cents: row.amount_cents,
-          });
-          // Row-backed: a request amount that differs from the pin is
-          // a human-review stop, not a silent re-price — the operator
-          // asked for one number, the visit pins another.
-          return json(409, { ok: false, error: "price_review_required", pinned_cents: row.amount_cents });
-        }
         logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
         return json(409, { ok: false, error: "amount_mismatch" });
       }
-      // Idempotency: one payment per booking+report version, no matter how
-      // many times this is called or how often Stripe redelivers webhooks.
-      const idemKey = `charge_${bookingId}_v${reportVersion}`;
-      // Fresh re-read immediately before creating the PaymentIntent: a
-      // dispute (or another charge) landing concurrently must win over
-      // this charge. For row-backed bookings the re-read is booking-
-      // scoped (row + journal), because shared customer metadata may
-      // describe another booking of this email. A concurrent charge on
-      // THIS booking is caught by the payment_pending flip plus the
-      // shared booking_id match; a concurrent resend cannot bump the
-      // version mid-charge because send_report refuses payment_pending
-      // state — so concurrent charges always share one idempotency key
-      // and Stripe dedupes them. (The basis itself lives in the journal:
-      // a concurrent client approval only strengthens it.)
-      if (row) {
-        const freshRow = await latestBookingRow(bookingId);
-        const freshEvents = freshRow ? await bookingEvents(bookingId) : [];
-        if (freshRow?.status === "paid" || freshEvents.some((e) => e.event === "payment_succeeded")) {
-          logErr("charge", "blocked on re-read: already paid");
-          return json(409, { ok: false, error: "already_paid" });
-        }
-        if (freshRow?.status === "cancelled") {
-          logErr("charge", "blocked on re-read: already cancelled");
-          return json(409, { ok: false, error: "already_cancelled" });
-        }
-        if (issueStateFrom(freshEvents, freshRow?.issue_open ?? null, freshRow?.issue_ever ?? null).open) {
-          logErr("charge", "blocked on re-read: issue open");
-          return json(409, { ok: false, error: "issue_open" });
-        }
-        const freshMeta = ((await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`)).data["metadata"] as Record<string, string> | undefined) ?? {};
-        if (freshMeta["gh_state"] === "payment_pending" && freshMeta["gh_booking_id"] === bookingId) {
-          logErr("charge", "blocked on re-read: concurrent charge in flight");
-          return json(409, { ok: false, error: "charge_in_flight" });
-        }
-      } else {
-        const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
-        if (freshMeta["gh_issue_open"] === "1") {
-          logErr("charge", "blocked on re-read: issue open");
-          return json(409, { ok: false, error: "issue_open" });
-        }
-        if ((freshMeta["gh_state"] ?? "") !== "approved") {
-          logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
-          return json(409, { ok: false, error: "not_approved" });
-        }
+      const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
+      const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
+      if (freshMeta["gh_issue_open"] === "1") {
+        logErr("charge", "blocked on re-read: issue open");
+        return json(409, { ok: false, error: "issue_open" });
       }
-      // P04/P11 adoption: if a successful cleaning intent for THIS booking
-      // and amount already exists (a previous charge succeeded at Stripe
-      // but the paid state never landed, or the version moved), adopt it
-      // instead of creating a second one. Cancellation-fee intents are a
-      // different obligation and are never adopted here.
-      const adoptedPi = await findSucceededCleaningIntent(STRIPE_SECRET_KEY, bookingId, amountCents);
-      if (adoptedPi) {
+      if ((freshMeta["gh_state"] ?? "") !== "approved") {
+        logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
+        return json(409, { ok: false, error: "not_approved" });
+      }
+      const reportVersion = parseInt(meta["gh_report_version"] ?? "1", 10) || 1;
+      const idemKey = `charge_${bookingId}_v${reportVersion}`;
+      const rec = await reconcileIntent(STRIPE_SECRET_KEY, bookingId, [], {
+        amountCents, currency: "usd", customerId: customer.id,
+      });
+      if (rec.state === "unknown") return json(502, { ok: false, error: "payment_unknown" });
+      if (rec.state === "mismatch") return json(409, { ok: false, error: "payment_intent_mismatch" });
+      if (rec.state === "succeeded") {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "paid",
           "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": adoptedPi,
+          "metadata[gh_last_payment]": rec.intent.id,
         });
-        const adoptedVisit = await latestVisit(bookingId);
-        if (adoptedVisit) {
-          // P11: a lost paid write must surface, not silently succeed —
-          // the next attempt adopts the same intent again (no new charge).
-          let adoptedWrote = false;
-          for (let attempt = 0; attempt < 2 && !adoptedWrote; attempt++) {
-            adoptedWrote = await dbUpdate("gh_visits", `id=eq.${adoptedVisit.id}`, {
-              status: "paid",
-              paid_at: new Date().toISOString(),
-              payment_intent_id: adoptedPi,
-            });
-          }
-          if (!adoptedWrote) {
-            await logEvent(adoptedVisit.id, bookingId, "system", "payment_unconfirmed", {
-              payment_intent: adoptedPi,
-            });
-            return json(502, { ok: false, error: "payment_unconfirmed", payment_intent: adoptedPi });
-          }
-          await logEvent(adoptedVisit.id, bookingId, "system", "payment_succeeded", {
-            payment_intent: adoptedPi,
-            via: "adopted",
-          });
-        }
         const adoptedReceipt = await sendReceiptEmailOnce(
           STRIPE_SECRET_KEY, customer.id,
           { ...meta, gh_report_amount_cents: String(amountCents) },
           bookingId,
         );
-        log("charge", { booking: bookingId, status: "adopted", payment_intent: adoptedPi });
-        return json(200, { ok: true, state: "paid", payment_intent: adoptedPi, receipt_sent: adoptedReceipt, adopted: true });
+        log("charge", { booking: bookingId, status: "adopted", payment_intent: rec.intent.id });
+        return json(200, { ok: true, state: "paid", payment_intent: rec.intent.id, receipt_sent: adoptedReceipt, adopted: true });
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "payment_pending",
         "metadata[gh_report_version]": String(reportVersion),
       });
-      // P05: a live intent for this version (e.g. declined, then the card
-      // was changed) must be confirmed with the current card — creating
-      // anew under the same idempotency key with a different payment
-      // method fails Stripe's parameter check and leaves the retry stuck.
-      // A processing intent is left alone: the next attempt reconciles it.
-      const livePi = await findLiveIntent(STRIPE_SECRET_KEY, bookingId, reportVersion);
-      if (livePi?.status === "processing") {
+      if (rec.state === "live" && rec.intent.status === "processing") {
         return json(409, { ok: false, error: "payment_processing" });
       }
-      const pi = livePi
-        ? await confirmIntent(STRIPE_SECRET_KEY, livePi.id, paymentMethod, `${idemKey}_confirm`)
+      // Legacy confirm key: no journal exists to number attempts, so
+      // the key is derived from the payment method itself — a new card
+      // gets a new key (no idempotency clash), the same card replays.
+      const legacyConfirmKey = rec.state === "live"
+        ? `${idemKey}_confirm_${createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12)}`
+        : idemKey;
+      const pi = rec.state === "live"
+        ? await confirmIntent(STRIPE_SECRET_KEY, rec.intent.id, paymentMethod, legacyConfirmKey)
         : await stripePost(
         STRIPE_SECRET_KEY,
         "/payment_intents",
@@ -1599,13 +1743,11 @@ export default async function handler(req: Req, res: Res) {
         idemKey,
       );
       if (!pi.ok) {
-        const errMsg =
-          ((pi.data["error"] as { message?: string } | undefined)?.message ?? "charge failed");
+        const errMsg = ((pi.data["error"] as { message?: string } | undefined)?.message ?? "charge failed");
         logErr("charge", `stripe ${pi.status}: ${errMsg}`);
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "payment_failed",
         });
-        // requires_action / declined: the client must complete or update the card.
         return json(402, { ok: false, error: "payment_failed", detail: errMsg });
       }
       const piStatus = pi.data["status"];
@@ -1620,33 +1762,9 @@ export default async function handler(req: Req, res: Res) {
           { ...meta, gh_report_amount_cents: String(amountCents) },
           bookingId,
         );
-        const paidVisit = await latestVisit(bookingId);
-        if (paidVisit) {
-          // P11: a lost paid write must surface, not silently succeed —
-          // the next attempt adopts the same intent (no second charge).
-          let wrote = false;
-          for (let attempt = 0; attempt < 2 && !wrote; attempt++) {
-            wrote = await dbUpdate("gh_visits", `id=eq.${paidVisit.id}`, {
-              status: "paid",
-              paid_at: new Date().toISOString(),
-              payment_intent_id: String(pi.data["id"] ?? ""),
-            });
-          }
-          if (!wrote) {
-            await logEvent(paidVisit.id, bookingId, "system", "payment_unconfirmed", {
-              payment_intent: String(pi.data["id"] ?? ""),
-            });
-            return json(502, { ok: false, error: "payment_unconfirmed", payment_intent: pi.data["id"] });
-          }
-          await logEvent(paidVisit.id, bookingId, "system", "payment_succeeded", {
-            payment_intent: String(pi.data["id"] ?? ""),
-            receipt_sent: receiptSent,
-          });
-        }
         log("charge", { booking: bookingId, status: "succeeded", receiptSent });
         return json(200, { ok: true, state: "paid", payment_intent: pi.data["id"], receipt_sent: receiptSent });
       }
-      // requires_action etc.: not a success, not a duplicate — client must act.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "payment_failed",
       });
@@ -1681,6 +1799,17 @@ export default async function handler(req: Req, res: Res) {
       let finalPhotos = photos;
       const visitRow = await latestVisit(bookingId);
       if (visitRow) {
+        // A re-send must not land while a charge is in flight: its CAS
+        // would overwrite the claim's payment_pending status back to
+        // report_sent, orphaning a succeeded intent (payment_unconfirmed
+        // with money moved, unadoptable until the timer). The window is
+        // seconds wide; the owner retries after the charge settles.
+        if (visitRow.status === "payment_pending") {
+          return json(409, {
+            ok: false, error: "payment_in_flight",
+            hint: "A payment for this visit is in progress. Wait for it to settle, then re-send if still needed.",
+          });
+        }
         if (visitRow.report_status !== "submitted" && visitRow.report_status !== "sent") {
           return json(409, { ok: false, error: "report_not_ready", report_status: visitRow.report_status });
         }
@@ -1809,8 +1938,16 @@ export default async function handler(req: Req, res: Res) {
         if (claimed === 0) {
           return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
         }
-        // claimed === -1 (DB unreachable): fall through to the legacy
-        // behavior — the guard above is the only dedupe then.
+        // RA15: claimed === -1 means the DB could not be read for the
+        // claim. Fail closed: no email, no metadata write, no
+        // report_sent event. The row stays submitted, so a retry
+        // after recovery completes the same publication exactly once.
+        // (Falling through to the legacy path here used to send the
+        // email and mark the report sent while the row stayed
+        // submitted — a phantom publication.)
+        if (claimed < 0) {
+          return json(502, { ok: false, error: "db_error" });
+        }
       }
       const params: Record<string, string> = {
         "metadata[gh_state]": "report_sent",
@@ -1926,6 +2063,10 @@ export default async function handler(req: Req, res: Res) {
             via: "report_resend", note: "Resolved by owner decision together with the re-sent report.",
           });
         }
+      }
+      if (visitRow) {
+        await deleteAccess(visitRow.id);
+        await logEvent(visitRow.id, bookingId, "system", "entry_revoked");
       }
       log("send_report", { booking: bookingId, version, photos: finalPhotos.length, emailSent });
       return json(200, {
@@ -2110,6 +2251,10 @@ export default async function handler(req: Req, res: Res) {
       // client (a first assignment before confirmation is covered by the
       // confirmation email itself).
       let cleanerEmailSent = false;
+      if (row && changed) {
+        await revokeAccessForCleanerChange(row.id, rosterId || null);
+        await logEvent(row.id, bookingId, "owner", "entry_revoked");
+      }
       if (row && (changed || (!prevCleaner && wasConfirmed))) {
         await logEvent(row.id, bookingId, "owner", "cleaner_changed", { from: prevCleaner || null, to: name });
         cleanerEmailSent = await sendShortClientEmail({
@@ -2137,18 +2282,14 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "set_access_notes") {
-      // Correct the entry instructions the assigned cleaner will see. The
-      // Stripe customer metadata mirror is updated too, so a later
-      // hydration cannot resurrect stale text from the shared customer.
+      // Owner correction of the visit's entry note. Stored ONLY in
+      // gh_visit_access — never in Stripe metadata or the visit row —
+      // so a later hydration cannot resurrect stale text, and secrets
+      // never enter the shared customer record.
       if (!row) return json(404, { ok: false, error: "visit_not_found" });
       const value = (parsed.data.access_notes ?? "").trim().slice(0, 1000);
-      const okUpd = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-        access_notes: value || null,
-      });
+      const okUpd = await saveAccessNote(row.id, bookingId, value);
       if (!okUpd) return json(500, { ok: false, error: "update_failed" });
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_access_notes]": value,
-      }).catch(() => undefined);
       await logEvent(row.id, bookingId, "owner", "access_notes_updated", { length: value.length });
       log("set_access_notes", { booking: bookingId });
       return json(200, { ok: true, access_notes: value });
@@ -2178,7 +2319,7 @@ export default async function handler(req: Req, res: Res) {
       if (!Number.isFinite(feeCents) || feeCents <= 0) {
         return json(409, { ok: false, error: "no_fee_due" });
       }
-      if (events.some((e) => e.event === "fee_charged") || (!row && meta["gh_fee_charged"] === "1")) {
+      if (events.some((e) => e.event === "fee_charged" || e.event === "cancellation_fee_paid") || (!row && meta["gh_fee_charged"] === "1")) {
         return json(200, { ok: true, already: true, fee_cents: feeCents });
       }
       const pm = meta["gh_payment_method"] ?? "";
@@ -2209,6 +2350,13 @@ export default async function handler(req: Req, res: Res) {
             fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? ""),
           });
         }
+        // RA10: the fee gets its own receipt (best-effort — a receipt
+        // failure never fails the fee charge itself).
+        try {
+          await sendFeeReceiptEmailOnce(
+            STRIPE_SECRET_KEY, customer.id, bookingId, String(pi.data["id"] ?? ""), feeCents,
+          );
+        } catch { /* best-effort */ }
         log("charge_fee", { booking: bookingId, feeCents });
         return json(200, { ok: true, fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? "") });
       }

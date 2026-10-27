@@ -42,7 +42,7 @@ function response() {
 type FetchCall = [string, { method?: string; body?: string } | undefined];
 let calls: FetchCall[];
 let customerMetadata: Record<string, string>;
-let stripePmList: Array<{ id: string }>;
+let stripePmList: Array<{ id: string; card?: { brand?: string; last4?: string } }>;
 
 function installFetch() {
   calls = [];

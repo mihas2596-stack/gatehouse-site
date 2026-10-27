@@ -26,6 +26,7 @@ type ReportData = {
   amount?: string | null;
   amount_cents?: number | null;
   report_sent_at?: string | null;
+  publication_id?: string | null;
   deadline?: string | null;
   delivery_failed?: boolean;
   charge_timer_blocked?: boolean;
@@ -144,6 +145,10 @@ const Report = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bt, action,
+          // RA08: pay only for the publication this tab actually
+          // showed. The server rejects a stale tab with report_changed
+          // instead of charging for a newer report.
+          seen_publication_id: action === "approve" ? (data?.publication_id ?? undefined) : undefined,
           reason: action === "issue" ? issueText : undefined,
           room: action === "issue" ? issueRoom : undefined,
           photo: action === "issue" && issuePhoto ? issuePhoto : undefined,
@@ -153,6 +158,9 @@ const Report = () => {
       if (j && j.state && j.state !== "invalid_link") {
         setData(j);
         setIssueOpen(false);
+        if (j.error === "report_changed") {
+          setActionError("This report was updated since you opened it — please review the latest version before approving. No charge was made.");
+        }
       } else {
         setActionError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
       }

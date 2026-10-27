@@ -127,10 +127,24 @@ describe("minimal flow (part 2)", () => {
       if (u.includes("/rest/v1/gh_visits")) {
         if (method === "PATCH") {
           const patch = JSON.parse(String(init?.body ?? "{}")) as Row;
-          const m = /id=eq\.([^&]+)/.exec(u) ?? /booking_id=eq\.([^&]+)/.exec(u);
-          const key = m ? decodeURIComponent(m[1]) : "";
-          for (const r of rows) if (r["id"] === key || r["booking_id"] === key) Object.assign(r, patch);
-          return supRes(null);
+          const qs = new URLSearchParams(u.split("?")[1] ?? "");
+          // Proof-grade CAS: every eq/in filter in the query must
+          // match, and the matched rows are returned (dbUpdateCount
+          // counts them). Returning null here used to be masked by
+          // the send_report legacy fall-through; RA15 fails closed.
+          const matched = rows.filter((r) => {
+            for (const [k, v] of qs.entries()) {
+              if (v.startsWith("eq.")) {
+                if (String(r[k] ?? "") !== decodeURIComponent(v.slice(3))) return false;
+              } else if (v.startsWith("in.(") && v.endsWith(")")) {
+                const set = new Set(v.slice(4, -1).split(",").map((s) => decodeURIComponent(s)));
+                if (!set.has(String(r[k] ?? ""))) return false;
+              }
+            }
+            return true;
+          });
+          for (const r of matched) Object.assign(r, patch);
+          return supRes(matched);
         }
         if (method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}")) as Row;

@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { campaignAttribution, trackFunnel } from "@/lib/measurement";
-import { Calculator, Sparkles, Send } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
@@ -185,7 +185,6 @@ const Quote = () => {
     date: "",
     time: "",
     notes: "",
-    entryInstructions: "",
     website: "",
     termsConsent: false,
     photoConsent: false,
@@ -194,12 +193,10 @@ const Quote = () => {
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [reviewReady, setReviewReady] = useState(false);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const requestRef = useRef<{ id: string; time: string } | null>(null);
-  const reviewRef = useRef<HTMLDivElement>(null);
   // Any quote change must be reviewed again before the request is sent.
   useEffect(() => {
-    setReviewReady(false);
     requestRef.current = null;
     setSubmitError("");
   }, [sizeBand, bedrooms, fullBaths, halfBaths, recentlyCleaned, frequency, service, zip, addons, extraZones]);
@@ -226,7 +223,6 @@ const Quote = () => {
       setBooking((p) => ({ ...p, [t.name]: t.value }));
     }
     setBookingErrors((p) => ({ ...p, [t.name]: "" }));
-    setReviewReady(false);
   };
 
   const fieldError = (field: "name" | "email" | "phone" | "address" | "date", value: string) => {
@@ -248,17 +244,58 @@ const Quote = () => {
     setBookingErrors((p) => ({ ...p, [name]: fieldError(name, e.target.value) }));
   };
 
-  const validateBooking = () => {
+  // Step 2 -> 3 checks only the visit fields; the Terms/photo consents
+  // live on step 3 and are checked on the final submit, not on Review.
+  const validateBooking = (requireConsents = true) => {
     const errs: Record<string, string> = {};
     (["name", "email", "phone", "address", "date"] as const).forEach((f) => {
       const msg = fieldError(f, booking[f]);
       if (msg) errs[f] = msg;
     });
-    if (!booking.termsConsent) errs.termsConsent = "Please agree to the Terms of Service and Privacy Policy.";
-    if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
+    if (requireConsents) {
+      if (!booking.termsConsent) errs.termsConsent = "Please agree to the Terms of Service and Privacy Policy.";
+      if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
+    }
     return errs;
   };
 
+  const goToStep2 = () => {
+    if (needsCleaningHistory) {
+      document.getElementById("q-recent-yes")?.focus();
+      return;
+    }
+    if (!canProceed) {
+      toast({
+        title: "Enter a ZIP in our service area",
+        description: "We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setStep(2);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const goToStep3 = () => {
+    const errs = validateBooking(false);
+    setBookingErrors(errs);
+    if (Object.keys(errs).length) {
+      trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
+      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "date", "termsConsent", "photoConsent"];
+      for (const f of order) if (errs[f]) { refs[f].current?.focus(); break; }
+      return;
+    }
+    setStep(3);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const priceSummaryText = isLargeHome
+    ? "Custom quote — we confirm your price with you before confirming your visit, and before anything is charged"
+    : service === "standard" && breakdown
+      ? isRecurring
+        ? `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+        : `One-time: ${fmt$(breakdown.first_total)}`
+      : mainPrice !== null
+        ? `${fmt$(mainPrice)} one-time`
+        : "";
   const canSubmit = canProceed && !needsCleaningHistory && !isSubmitting;
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
@@ -282,12 +319,6 @@ const Quote = () => {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "date", "termsConsent", "photoConsent"];
       for (const f of order) if (errs[f]) { refs[f].current?.focus(); break; }
-      return;
-    }
-    if (!reviewReady) {
-      setReviewReady(true);
-      trackFunnel("gh_quote_review", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
-      requestAnimationFrame(() => { reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); reviewRef.current?.focus({ preventScroll: true }); });
       return;
     }
     setIsSubmitting(true);
@@ -361,7 +392,6 @@ const Quote = () => {
         extra_zones: extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", "),
         scope_review: scopeReview,
         scope_reasons: scopeReasons.join("; "),
-        entry_instructions: booking.entryInstructions.trim(),
         notes: booking.notes.trim(),
         consent_record: consentRecord,
         bedrooms: String(bedrooms),
@@ -391,7 +421,7 @@ const Quote = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string> } | null = null;
+      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string>; bt?: string } | null = null;
       try {
         data = await res.json();
       } catch {
@@ -409,8 +439,7 @@ const Quote = () => {
           if (other.length) setSubmitError(other.join(" "));
           const first = (Object.keys(refs) as Array<keyof typeof refs>).find((f) => fieldErrs[f]);
           if (first) refs[first].current?.focus();
-          setReviewReady(false);
-          return;
+                return;
         }
         throw new Error("Booking request failed");
       }
@@ -486,33 +515,29 @@ const Quote = () => {
         description="Enter your home size, bedrooms and bathrooms to see your cleaning price online, then pick a day."
         url="https://gatehousehomecleaning.com/quote"
       />
-      <section className="py-6 md:py-8 bg-warm-gradient">
+      <section className="py-4 md:py-6 bg-warm-gradient">
         <div className="container max-w-3xl text-center">
-          <p className="font-script text-xl text-golden mb-2">See Price</p>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-3">
-            See Your <span className="text-gradient-gold">Price</span>
+            A clear <span className="text-gradient-gold">price</span> for your home
           </h1>
           <p className="text-muted-foreground text-lg">
             No email needed to see your price.
           </p>
           <ol className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
-            <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">1 · Your price</li>
+            <li aria-current={step === 1 ? "step" : undefined} className={step === 1 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>1 · Your home &amp; price</li>
             <li aria-hidden="true" className="text-muted-foreground">→</li>
-            <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
+            <li aria-current={step === 2 ? "step" : undefined} className={step === 2 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>2 · Your visit</li>
             <li aria-hidden="true" className="text-muted-foreground">→</li>
-            <li className="rounded-full border border-border bg-card px-3 py-1.5">3 · Save your card — $0 today</li>
+            <li aria-current={step === 3 ? "step" : undefined} className={step === 3 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>3 · Review &amp; save card</li>
           </ol>
         </div>
       </section>
 
-      <section className="pt-4 pb-12 md:pt-6 md:pb-16">
+      <section className="pt-2 pb-12 md:pt-4 md:pb-16">
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
-            <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3 — See your price</p>
-            <div className="flex items-center gap-2 mb-6">
-              <Calculator className="w-5 h-5 text-primary" />
-              <h2 className="font-heading text-2xl font-bold">Quote Calculator</h2>
-            </div>
+            <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
+            <h2 className="font-heading text-2xl font-bold mb-6">Your home &amp; price</h2>
 
             {testMode && (
               <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
@@ -525,6 +550,7 @@ const Quote = () => {
               </p>
             )}
 
+            {step === 1 && (<>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <label htmlFor="q-bed" className="block text-sm font-medium mb-1.5">Bedrooms</label>
@@ -626,7 +652,7 @@ const Quote = () => {
 
             {/* Add-ons */}
             <div className="mt-6">
-              <p className="block text-sm font-medium mb-2">Add-ons</p>
+              <p className="block text-sm font-medium mb-2">Add extras (optional)</p>
               <div className="flex flex-col gap-3">
                 {!includedAddons.includes("insideOven") && (
                   <label htmlFor="q-addon-oven" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
@@ -684,6 +710,17 @@ const Quote = () => {
                 </div>
               </fieldset>
             )}
+
+            <div className="mt-6 rounded-lg border border-border bg-background p-4">
+              <h3 className="font-heading text-base font-bold">What&apos;s included</h3>
+              <p className="mt-2 text-sm text-foreground">
+                Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas —
+                with professional supplies and equipment included. <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Add-ons above are the only extras. Nothing is pre-selected for you.
+              </p>
+            </div>
 
             {/* Result */}
             <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
@@ -791,40 +828,60 @@ const Quote = () => {
                 </fieldset>
                 {scopeReview && (
                   <p className="mt-3 text-sm font-medium text-foreground">
-                    We&apos;ll review the cleaning scope before confirming your visit. Any price change needs your approval.
+                    We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request — it does not change if we resend a message, publish a new report version, or change the date or cleaner. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
                   </p>
                 )}
               </div>
 
-              <p className="text-sm text-muted-foreground mt-3">{EXTRA_TIME_NOTE}</p>
+              <p className="text-sm text-muted-foreground mt-3">Your visit price is fixed when you send your request (see step 3). {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
 
-              <a
-                href="#booking-request"
-                className="inline-flex items-center justify-center gap-2 rounded-full px-8 py-4 mt-5 min-h-[52px] font-bold tracking-wide shadow-warm-lg hover:scale-[1.03] transition-all bg-primary text-primary-foreground"
+              <Button
+                type="button"
+                variant="hero"
+                size="xl"
+                onClick={goToStep2}
+                className="mt-5"
               >
-                Request this booking
-              </a>
+                Continue to visit details
+              </Button>
               <p className="mt-3 text-sm text-muted-foreground">
-                Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. $0 to book.
+                Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.
               </p>
             </div>
+            </>)}
 
              {/* BOOKING REQUEST STEP */}
              <form
               id="booking-request"
               onSubmit={handleBookingSubmit}
               noValidate
-               className="mt-10 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
+               className="mt-2 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
             >
-              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3 — Plan your visit</p>
-              <div className="flex items-center gap-2 mb-2">
-                <h2 className="font-heading text-2xl font-bold">Request your booking</h2>
-              </div>
+              {step === 2 && (<>
+              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
+              <h2 className="font-heading text-2xl font-bold mb-2">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
-                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it's sent if you haven't reported an issue.
+                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
               </p>
+              <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
+                <p><strong>Price so far:</strong> {priceSummaryText}</p>
+                <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
+              </div>
+              </>)}
+              {step === 3 && (<>
+              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 3 of 3</p>
+              <h2 className="font-heading text-2xl font-bold mb-2">Review &amp; save card</h2>
+              <p className="text-sm text-foreground mb-6">
+                Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
+              </p>
+              <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
+                <p><strong>Price:</strong> {priceSummaryText}</p>
+                {isLargeHome && <p className="text-muted-foreground mt-1">This is not a fixed price yet: homes with 6+ bedrooms or 6+ full bathrooms get an individual quote, and we confirm the price with you before confirming the visit and before any charge.</p>}
+              </div>
+              </>)}
 
+              {step === 2 && (<>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div>
                   <label htmlFor="b-name" className="block text-sm font-medium mb-1.5">Your name *</label>
@@ -864,7 +921,7 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.phone && <p id="b-phone-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.phone}</p>}
-                  <p className="mt-1.5 text-xs text-muted-foreground">For arrival updates and access details on the day of your visit.</p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">For arrival updates on the day of your visit.</p>
                 </div>
                 <div>
                   <label htmlFor="b-address" className="block text-sm font-medium mb-1.5">Street address *</label>
@@ -908,23 +965,19 @@ const Quote = () => {
                   <textarea
                     id="b-notes" name="notes" rows={3}
                     value={booking.notes} onChange={handleBookingChange}
-                    placeholder="Anything we should know? Pets, access, focus areas…"
+                    placeholder="Pets, focus areas, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
-                </div>
-                <div className="md:col-span-2">
-                  <label htmlFor="b-entry" className="block text-sm font-medium mb-1.5">Entry instructions (optional)</label>
-                  <p className="mb-1.5 text-sm text-muted-foreground">You can provide access details after your visit is confirmed — nothing secret is needed now.</p>
-                  <textarea
-                    id="b-entry" name="entryInstructions" rows={2}
-                    value={booking.entryInstructions} onChange={handleBookingChange}
-                    placeholder="How should the cleaner get in? Gate code, where the key is, alarm, parking…"
-                    className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">Shared with Gatehouse and your assigned cleaner to arrange access.</p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. You will arrange entry after your visit is confirmed.</p>
                 </div>
               </div>
+              <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
+                <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
+              </div>
+              </>)}
 
+              {step === 3 && (<>
               <div className="mt-5 flex items-start gap-3">
                 <input
                   id="b-terms" name="termsConsent" type="checkbox" required ref={refs.termsConsent}
@@ -968,11 +1021,11 @@ const Quote = () => {
               </div>
 
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
-              {reviewReady && (
-                 <div ref={reviewRef} tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
+              <div tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-heading text-lg font-bold">Check your request</h3>
-                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => { setReviewReady(false); document.getElementById("q-bed")?.focus(); }}>Edit</Button>
+                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Edit details</Button>
+                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Edit price</Button>
                   </div>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
@@ -982,66 +1035,40 @@ const Quote = () => {
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>
                   {scopeReview && (
-                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Any price change needs your approval.</p>
+                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request — it does not change if we resend a message, publish a new report version, or change the date or cleaner. If the scope review shows different work is needed, we agree any change with you before confirming, never after.</p>
                   )}
                 </div>
-              )}
 
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
-              {reviewReady && (
-                <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
-                  <h3 className="font-heading text-lg font-bold mb-2">Why save a card now?</h3>
-                  <p className="mb-2">Save your card now so you won&apos;t need to enter it again after your cleaning.</p>
-                  <p className="mb-2"><strong>$0 charged today.</strong></p>
-                  <p className="mb-2">After your cleaning, you&apos;ll get a photo report of the work. Your card is charged when you approve the report.</p>
-                  <p className="mb-2">If you don&apos;t report a problem, your card is charged automatically 24 hours after we send the report.</p>
-                  <p className="mb-2">If you report a problem in time, the charge stays paused while we review it with you.</p>
-                  <p className="text-muted-foreground">Your card details are stored securely by Stripe, our payment processor. We never see or store your full card number.</p>
+              <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
+                  <h3 className="font-heading text-lg font-bold mb-2">Payment and confirmation</h3>
+                  <p className="mb-2"><strong>Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</strong></p>
+                  <p className="mb-2">If you report a problem in time, the charge stays paused while we review it with you. A report email that bounces blocks the automatic 24-hour charge.</p>
+                  <p className="mb-2">Saving a card is not a confirmed date, and it is not a confirmed booking. We confirm your date within one business day, and only then is the visit confirmed.</p>
+                  <p className="mb-2">After your visit we send a status update and a reply deadline. We confirm your date within one business day.</p>
+                  <p className="text-muted-foreground">Your card details are stored by Stripe, our payment processor. We never see or store your full card number.</p>
                   <p className="mt-2 text-muted-foreground">Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
                 </div>
-              )}
-              <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="w-full mt-6 min-h-[48px]">
-                {isSubmitting
-                  ? "Sending..."
-                  : !canProceed
-                    ? "Enter a ZIP in our service area"
-                    : needsCleaningHistory ? "Answer the cleaning-history question above"
-                    : reviewReady
-                      ? <>Send request &amp; continue to card setup <Send className="w-5 h-5" /></>
-                      : isLargeHome ? "Request a custom quote" : "Review my details"}
-              </Button>
-              {reviewReady && (
-                <p className="text-base text-foreground text-center mt-3">
-                  <strong>$0 charged today</strong> — next step: save your card (about a minute).
-                </p>
-              )}
+              <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
+                <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="flex-1 min-h-[48px]">
+                  {isSubmitting
+                    ? "Sending..."
+                    : !canProceed
+                      ? "Enter a ZIP in our service area"
+                      : needsCleaningHistory ? "Answer the cleaning-history question above"
+                      : "Save card — $0 today"}
+                </Button>
+              </div>
+              <p className="text-base text-foreground text-center mt-3">
+                <strong>$0 charged today</strong> — after sending, you will save your card (about a minute). Saving a card does not confirm your date.
+              </p>
+              </>)}
             </form>
           </div>
         </div>
       </section>
 
-      {/* Mobile price bar — hidden until a price is available */}
-      {showPrice && !needsCleaningHistory && (
-        <div className="quote-price-bar fixed inset-x-0 z-40 border-t border-border bg-card px-4 py-2 shadow-warm-lg md:hidden">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-foreground">
-              <span className="block text-xs font-normal text-muted-foreground">Your price</span>
-              {service === "standard" && breakdown && isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
-                <>{fmt$(breakdown.recurring_total)} per visit<span className="block text-xs">Every other week</span></>
-              ) : (
-                <>{fmt$(mainPrice ?? 0)} {service === "standard" && breakdown?.first_service === "deep" ? "first visit (deep clean)" : "first visit"}
-                {service === "standard" && breakdown && isRecurring && <span className="block text-xs">Then {fmt$(breakdown.recurring_total)} every other week</span>}</>
-              )}
-            </p>
-            <a
-              href="#booking-request"
-              className="inline-flex min-h-[44px] items-center justify-center rounded-full bg-primary px-5 text-sm font-bold text-primary-foreground"
-            >
-              Request this booking
-            </a>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

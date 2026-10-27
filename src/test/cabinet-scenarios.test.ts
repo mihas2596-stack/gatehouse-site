@@ -127,6 +127,20 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       pi.ok = true;
       return res(200, { id: pi.id, status: "succeeded" });
     }
+    const piGetM = u.pathname.match(/^\/v1\/payment_intents\/(pi_[^/]+)$/);
+    if (piGetM && method === "GET") {
+      const pi = piCalls.find((p) => p.id === piGetM[1]);
+      if (!pi) return res(404, { error: { message: "not found" } });
+      const cust = customers.find((c) => c.metadata["gh_booking_id"] === pi.booking);
+      return res(200, {
+        id: pi.id,
+        status: pi.ok ? "succeeded" : "requires_payment_method",
+        amount: Number(pi.amount),
+        currency: "usd",
+        customer: cust?.id ?? null,
+        metadata: { gh_booking_id: pi.booking, gh_report_version: pi.version },
+      });
+    }
     if (u.pathname === "/v1/payment_intents" && method === "POST") {
       const params = parseForm(init?.body);
       const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -355,7 +369,7 @@ describe("full cabinet chain", () => {
     const visBefore = await VSGET();
     expect(visBefore.body.state).toBe("report_sent");
 
-    const paid = await RP({ action: "approve" });
+    const paid = await RP({ action: "approve", seen_publication_id: repBefore.body.publication_id });
     expect(paid.code).toBe(200);
     expect(paid.body.state).toBe("paid");
     expect(paid.body.receipt_sent).toBe(true);
@@ -399,7 +413,7 @@ describe("full cabinet chain", () => {
     expect(rep.body.state).toBe("awaiting");
     expect(rep.body.amount_cents).toBe(20000);
 
-    const paid = await RP({ action: "approve" });
+    const paid = await RP({ action: "approve", seen_publication_id: rep.body.publication_id });
     expect(paid.code).toBe(200);
     expect(paid.body.state).toBe("paid");
     expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
@@ -410,14 +424,15 @@ describe("full cabinet chain", () => {
     sentWorld();
     piFailNext = true;
 
-    const failed = await RP({ action: "approve" });
+    const repBefore = await RPGET();
+    const failed = await RP({ action: "approve", seen_publication_id: repBefore.body.publication_id });
     expect(failed.code).toBe(402);
     expect(failed.body.error).toBe("payment_failed");
 
     const rep = await RPGET();
     expect(rep.body.state).toBe("payment_issue");
 
-    const paid = await RP({ action: "approve" });
+    const paid = await RP({ action: "approve", seen_publication_id: rep.body.publication_id });
     expect(paid.code).toBe(200);
     expect(paid.body.state).toBe("paid");
     expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
@@ -428,7 +443,8 @@ describe("full cabinet chain", () => {
     sentWorld();
     piFailNext = true;
 
-    const failed = await RP({ action: "approve" });
+    const repBefore = await RPGET();
+    const failed = await RP({ action: "approve", seen_publication_id: repBefore.body.publication_id });
     expect(failed.code).toBe(402);
     expect(piCalls).toHaveLength(1);
     expect(piCalls[0].ok).toBe(false);
@@ -438,7 +454,7 @@ describe("full cabinet chain", () => {
     // payment method would fail Stripe's parameter check — the retry
     // must confirm the live intent with the new card instead.
     customers[0].metadata["gh_payment_method"] = "pm_scenario_2";
-    const paid = await RP({ action: "approve" });
+    const paid = await RP({ action: "approve", seen_publication_id: repBefore.body.publication_id });
     expect(paid.code).toBe(200);
     expect(paid.body.state).toBe("paid");
     expect(piCalls).toHaveLength(1);

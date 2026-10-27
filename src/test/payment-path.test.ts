@@ -23,6 +23,7 @@ type StoreCust = { id: string; email: string; name: string; metadata: Record<str
 
 let store: StoreCust[];
 let piCalls: Array<{ body: URLSearchParams; idem: string | undefined }>;
+let intents: Array<{ id: string; status: string; amount: number; currency: string; customer: string | null; metadata: Record<string, string> }>;
 let piBehavior: "succeeded" | "failed";
 let resendCalls: unknown[];
 
@@ -67,6 +68,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   store = [cust("cus_due", "bid-due")];
   piCalls = [];
+  intents = [];
   piBehavior = "succeeded";
   resendCalls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: unknown; headers?: Record<string, string> }) => {
@@ -88,10 +90,31 @@ beforeEach(() => {
     }
     if (u.pathname.endsWith("/payment_intents")) {
       piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: init?.headers?.["Idempotency-Key"] });
+      const params = new URLSearchParams(String(init?.body));
+      intents.push({
+        id: "pi_1",
+        status: piBehavior === "succeeded" ? "succeeded" : "requires_payment_method",
+        amount: Number(params.get("amount") ?? 0),
+        currency: "usd",
+        customer: params.get("customer"),
+        metadata: { gh_booking_id: params.get("metadata[gh_booking_id]") ?? "" },
+      });
       if (piBehavior === "succeeded") {
         return { ok: true, status: 200, json: async () => ({ id: "pi_1", status: "succeeded" }) };
       }
       return { ok: false, status: 402, json: async () => ({ error: { message: "card declined" } }) };
+    }
+    if (u.pathname.endsWith("/payment_intents/search")) {
+      const query = u.searchParams.get("query") ?? "";
+      const bidM = /gh_booking_id'\]:'([^']+)'/.exec(query);
+      const found = bidM ? intents.filter((p) => p.metadata.gh_booking_id === bidM[1]) : intents;
+      return { ok: true, status: 200, json: async () => ({ data: found }) };
+    }
+    const piM = /\/payment_intents\/(pi_[A-Za-z0-9_]+)$/.exec(u.pathname);
+    if (piM) {
+      const found = intents.find((p) => p.id === piM[1]);
+      if (!found) return { ok: false, status: 404, json: async () => ({ error: { message: "not found" } }) };
+      return { ok: true, status: 200, json: async () => ({ ...found }) };
     }
     const custMatch = /\/customers\/(cus_[A-Za-z0-9_]+)$/.exec(u.pathname);
     if (custMatch) {

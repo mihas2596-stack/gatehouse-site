@@ -74,6 +74,9 @@ beforeEach(() => {
           : [];
         return okRes({ data: found });
       }
+      if (u.pathname.endsWith("/payment_intents/search")) {
+        return okRes({ data: [] });
+      }
       if (u.pathname.endsWith("/payment_intents")) {
         piCalls++;
         return okRes(piResult.status === "succeeded"
@@ -99,7 +102,7 @@ beforeEach(() => {
       if (method === "PATCH") {
         const patch = JSON.parse(String(init?.body ?? "{}")) as Row;
         Object.assign(row, patch);
-        return okRes(null);
+        return okRes([row]);
       }
       const qBid = u.searchParams.get("booking_id");
       if (qBid && qBid.startsWith("eq.")) {

@@ -18,19 +18,21 @@ describe("booking price confirmation", () => {
   it("requires cleaning history for standard cleans but not deep cleans", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
-    expect(screen.getByRole("button", { name: "Answer the cleaning-history question above" })).toBeDisabled();
+    // Step 1 cannot continue while the cleaning-history question is unanswered.
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    expect(screen.queryByRole("heading", { name: "Your visit" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /Deep Detailed/ }));
-    expect(screen.getByRole("button", { name: "Review my details" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
     expect(screen.queryByText(/Has a professional cleaner/)).not.toBeInTheDocument();
   });
 
-  it("shows the deep first visit in the result and mobile price bar", () => {
+  it("shows the deep first visit in the result", () => {
     openQuote();
     fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
     // Unified breakdown: one first-visit total, explicitly labeled as a deep clean.
     expect(screen.getByText("First visit: $329", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("— deep clean")).toBeInTheDocument();
-    expect(screen.getByText("$329 first visit (deep clean)", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("Then $189 per visit, every other week")).toBeInTheDocument();
   });
 
@@ -73,15 +75,22 @@ describe("booking price confirmation", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
+    fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     fireEvent.click(document.getElementById("b-terms")!);
     fireEvent.click(document.getElementById("b-photo")!);
-    fireEvent.click(screen.getByRole("button", { name: "Review my details" }));
-    expect(screen.getByRole("button", { name: /Send request & continue to card setup/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save card — $0 today" })).toBeInTheDocument();
+    // Editing the price leaves step 3: the save button is gone until the
+    // request is reviewed again, with answers preserved.
+    fireEvent.click(screen.getByRole("button", { name: "Edit price" }));
+    expect(screen.queryByRole("button", { name: "Save card — $0 today" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
-    expect(screen.queryByRole("button", { name: /Send request & continue to card setup/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review my details" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    expect(screen.getByLabelText("Your name *")).toHaveValue("Test Person");
+    fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
+    expect(screen.getByRole("button", { name: "Save card — $0 today" })).toBeInTheDocument();
   });
 });

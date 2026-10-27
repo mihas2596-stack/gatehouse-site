@@ -35,7 +35,18 @@ export function clientApprovedEvent(events: BasisEvent[]): BasisEvent | null {
   const superseded = events.some(
     (e) => e.event === "report_sent" && e.created_at > approved.created_at,
   );
-  return superseded ? null : approved;
+  if (superseded) return null;
+  // RA09: a dispute opened AFTER the approval voids it for any payment
+  // not yet made. The client approved one state of the visit; a later
+  // complaint means that consent no longer covers the charge — only a
+  // NEW explicit approval of the current report (which is newer than
+  // the dispute) re-arms payment. Approving WHILE a dispute is open
+  // (the "Resolve issue & pay" flow) is newer than the dispute and
+  // stays valid.
+  const voidedByDispute = events.some(
+    (e) => e.event === "issue_opened" && e.created_at > approved.created_at,
+  );
+  return voidedByDispute ? null : approved;
 }
 
 export function issueStateFrom(

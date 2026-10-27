@@ -95,43 +95,43 @@ function decryptBookingPayload(secret: string, token: string): BookingPayload | 
 function verifyBooking(
   secret: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   let payload: BookingPayload | null = null;
   let ttl = TOKEN_TTL_SECONDS;
   if (token.startsWith("v2.")) {
     payload = decryptBookingPayload(secret, token);
-    if (!payload) return { ok: false, reason: "bad_token" };
+    if (!payload) return { ok: false, payload: null, reason: "bad_token" };
     ttl = TOKEN_TTL_V2_SECONDS;
   } else {
     // Legacy v1: HMAC-signed readable payload.
     const parts = token.split(".");
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      return { ok: false, reason: "bad_format" };
+      return { ok: false, payload: null, reason: "bad_format" };
     }
     const [payloadB64, sig] = parts;
     let expected: string;
     try {
       expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
     } catch {
-      return { ok: false, reason: "sign_error" };
+      return { ok: false, payload: null, reason: "sign_error" };
     }
     const a = Buffer.from(sig, "utf8");
     const b = Buffer.from(expected, "utf8");
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      return { ok: false, reason: "bad_signature" };
+      return { ok: false, payload: null, reason: "bad_signature" };
     }
     try {
       payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
     } catch {
-      return { ok: false, reason: "bad_payload" };
+      return { ok: false, payload: null, reason: "bad_payload" };
     }
   }
   if (!payload.bid || !payload.email || !payload.ts) {
-    return { ok: false, reason: "missing_fields" };
+    return { ok: false, payload: null, reason: "missing_fields" };
   }
   const age = Math.floor(Date.now() / 1000) - payload.ts;
   if (age < 0 || age > ttl) {
-    return { ok: false, reason: "expired" };
+    return { ok: false, payload: null, reason: "expired" };
   }
   return { ok: true, payload };
 }
@@ -148,7 +148,7 @@ const bookingLinkSecret = (stripeKey: string): string =>
 function verifyBookingLink(
   stripeKey: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   const dedicated = process.env["BOOKING_LINK_SECRET"];
   if (dedicated) {
     const r = verifyBooking(dedicated, token);

@@ -198,9 +198,12 @@ describe("report portal", () => {
     expect(currentMeta["gh_issue_reason"]).toBe("Missed the oven");
 
     // Terms 5.2: approving charges the pinned amount immediately.
+    const viewBeforeApprove = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, viewBeforeApprove as any);
     const approve = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await reportHandler(postReq({ bt, action: "approve" }) as any, approve as any);
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBeforeApprove.body["publication_id"] }) as any, approve as any);
     expect(approve.body["state"]).toBe("paid");
     expect(currentMeta["gh_state"]).toBe("paid");
     expect(currentMeta["gh_issue_open"]).toBe("");

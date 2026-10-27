@@ -8,7 +8,7 @@ import { formatDateLong } from "@/lib/utils";
 type SubmitStatus = "idle" | "sending" | "error";
 type VerifyState =
   | { kind: "none" }
-  | { kind: "verifying" }
+  | { kind: "verifying"; booking: BookingSummary | null }
   | { kind: "saved"; booking: BookingSummary | null }
   | { kind: "pending"; booking: BookingSummary | null }
   | { kind: "failed"; booking: BookingSummary | null }

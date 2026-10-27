@@ -20,10 +20,11 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom } from "./_payment_basis.js";
-import { findSucceededCleaningIntent, findLiveIntent, confirmIntent } from "./_payment_intent.js";
+import { reconcileIntent, confirmIntent, confirmAttemptKey } from "./_payment_intent.js";
+import { chargeVisit } from "./_payment_obligation.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -37,23 +38,30 @@ type BookingRow = {
   amount_cents: number | null; report_sent_at: string | null;
   report_status: string | null; receipt_email_id?: string | null;
   report_bounced: boolean | null; cleaner_name: string | null;
+  issue_open?: boolean | null; issue_ever?: boolean | null;
   checklist?: Checklist | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
-async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
-  if (!dbConfigured()) return null;
-  const rows = await dbSelect<BookingRow>(
+// RA04: strict loaders that tell "no row" apart from "the DB could
+// not be read". A state-changing POST must fail closed on a read
+// error, never silently fall back to shared customer metadata.
+async function latestBookingRowStrict(bookingId: string): Promise<{ ok: boolean; row: BookingRow | null }> {
+  if (!dbConfigured()) return { ok: true, row: null };
+  const r = await dbSelectStrict<BookingRow>(
     "gh_visits",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
   );
-  return rows[0] ?? null;
+  if (!r.ok) return { ok: false, row: null };
+  return { ok: true, row: r.rows[0] ?? null };
 }
-async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
-  if (!dbConfigured()) return [];
-  return dbSelect<BookingEvent>(
+async function bookingEventsStrict(bookingId: string): Promise<{ ok: boolean; events: BookingEvent[] }> {
+  if (!dbConfigured()) return { ok: true, events: [] };
+  const r = await dbSelectStrict<BookingEvent>(
     "gh_events",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
   );
+  if (!r.ok) return { ok: false, events: [] };
+  return { ok: true, events: r.rows };
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
@@ -170,42 +178,42 @@ function decryptBookingPayload(secret: string, token: string): BookingPayload | 
 function verifyBooking(
   secret: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   let payload: BookingPayload | null = null;
   let ttl = TOKEN_TTL_SECONDS;
   if (token.startsWith("v2.")) {
     payload = decryptBookingPayload(secret, token);
-    if (!payload) return { ok: false, reason: "bad_token" };
+    if (!payload) return { ok: false, payload: null, reason: "bad_token" };
     ttl = TOKEN_TTL_V2_SECONDS;
   } else {
     const parts = token.split(".");
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      return { ok: false, reason: "bad_format" };
+      return { ok: false, payload: null, reason: "bad_format" };
     }
     const [payloadB64, sig] = parts;
     let expected: string;
     try {
       expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
     } catch {
-      return { ok: false, reason: "sign_error" };
+      return { ok: false, payload: null, reason: "sign_error" };
     }
     const a = Buffer.from(sig, "utf8");
     const b = Buffer.from(expected, "utf8");
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      return { ok: false, reason: "bad_signature" };
+      return { ok: false, payload: null, reason: "bad_signature" };
     }
     try {
       payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
     } catch {
-      return { ok: false, reason: "bad_payload" };
+      return { ok: false, payload: null, reason: "bad_payload" };
     }
   }
   if (!payload.bid || !payload.email || !payload.ts) {
-    return { ok: false, reason: "missing_fields" };
+    return { ok: false, payload: null, reason: "missing_fields" };
   }
   const age = Math.floor(Date.now() / 1000) - payload.ts;
   if (age < 0 || age > ttl) {
-    return { ok: false, reason: "expired" };
+    return { ok: false, payload: null, reason: "expired" };
   }
   return { ok: true, payload };
 }
@@ -213,7 +221,7 @@ function verifyBooking(
 function verifyBookingLink(
   stripeKey: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   const dedicated = process.env["BOOKING_LINK_SECRET"];
   if (dedicated) {
     const r = verifyBooking(dedicated, token);
@@ -445,6 +453,7 @@ export default async function handler(req: Req, res: Res) {
     let reason = "";
     let room = "";
     let photoB64 = "";
+    let seenPublicationId = "";
     if (req.method === "GET") {
       bt = q((req.query ?? {})["bt"]);
     } else {
@@ -453,6 +462,7 @@ export default async function handler(req: Req, res: Res) {
       action = typeof body["action"] === "string" ? body["action"] : "";
       reason = typeof body["reason"] === "string" ? body["reason"].slice(0, 500) : "";
       room = typeof body["room"] === "string" ? body["room"].slice(0, 60) : "";
+      seenPublicationId = typeof body["seen_publication_id"] === "string" ? body["seen_publication_id"] : "";
       // Optional photo from the client (data URL or raw base64, ~1MB cap).
       // A failed or oversized photo NEVER blocks the issue itself.
       if (typeof body["photo"] === "string" && body["photo"].length <= 1_400_000) {
@@ -472,11 +482,32 @@ export default async function handler(req: Req, res: Res) {
     }
     const payload = verified.payload;
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
-    const row = await latestBookingRow(payload.bid);
-    const events = row ? await bookingEvents(payload.bid) : [];
+    const rowRes = await latestBookingRowStrict(payload.bid);
+    if (!rowRes.ok && req.method === "POST") {
+      res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
+      return;
+    }
+    const row = rowRes.row;
+    let events: BookingEvent[] = [];
+    if (row) {
+      const evRes = await bookingEventsStrict(payload.bid);
+      if (!evRes.ok && req.method === "POST") {
+        res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
+        return;
+      }
+      events = evRes.events;
+    }
     let customer = boundCustomer;
     if (!customer && payload.email) {
-      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      // Normalize: the token's own email/name are the verified fallback
+      // for a customer record without them.
+      if (found) {
+        customer = {
+          id: found.id, metadata: found.metadata,
+          email: found.email ?? payload.email, name: found.name ?? payload.name ?? "",
+        };
+      }
     }
     const bound = Boolean(boundCustomer);
 
@@ -593,10 +624,27 @@ export default async function handler(req: Req, res: Res) {
         // never means delivered or read.
         charge_timer_blocked: timerIssue.open || timerIssue.ever || timerBounced,
         charge_timer_block_reason: timerIssue.open ? "issue_open" : (timerBounced ? "bounced" : (timerIssue.ever ? "issue_ever" : null)),
-        // P10: the receipt flag is per-visit (row), never another
-        // booking's shared customer metadata.
-        receipt_sent: Boolean(row?.receipt_email_id ?? meta["gh_receipt_email_id"]),
-        postpay_issue: meta["gh_postpay_issue"] === "1",
+        // RA19: with a visit row, receipt and post-payment-issue flags
+        // come ONLY from this visit (row + its journal). Shared
+        // customer metadata may carry another booking's flags — a null
+        // row marker must never fall back to another visit's marker.
+        receipt_sent: row ? Boolean(row.receipt_email_id) : Boolean(meta["gh_receipt_email_id"]),
+        postpay_issue: row
+          ? events.some((e) => e.event === "postpay_issue")
+          : meta["gh_postpay_issue"] === "1",
+        // RA08: the publication the client is looking at. Approve must
+        // send this id back; a stale tab (older publication) never pays
+        // for a newer report.
+        publication_id: row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null,
+        report_version: (() => {
+          const sentEv = events.find((e) => e.event === "report_sent");
+          return typeof sentEv?.detail?.["version"] === "number"
+            ? (sentEv.detail["version"] as number)
+            : (parseInt(meta["gh_report_version"] ?? "", 10) || 1);
+        })(),
+        // A paid visit with an open issue shows both facts: the money
+        // moved AND the complaint is still open (RA07 honest state).
+        paid: row?.status === "paid" || meta["gh_state"] === "paid",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
         // §10/§11: the cleaner's completed checklist travels with the
@@ -707,13 +755,24 @@ export default async function handler(req: Req, res: Res) {
         res.status(409).json({ requestId, ok: false, error: "report_not_current" });
         return;
       }
+      // RA08: the client pays for the publication they actually saw.
+      // A stale tab (older publication id, or none at all) gets the
+      // fresh report and must approve again — it never pays for a
+      // report published after the tab loaded.
+      const currentPublication = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
+      if (currentPublication) {
+        if (!seenPublicationId || seenPublicationId !== currentPublication) {
+          res.status(409).json({ ...view(), error: "report_changed" });
+          return;
+        }
+      }
       // Terms 5.2: the card is charged WHEN the client approves the
       // report. Approval is recorded first (it is a fact even if the
       // payment then fails), then the pinned amount is charged at once.
       // An operator approval does not count as the client's: a client
       // press after one must still log a genuine client approval (G3).
-      // P01: an approval superseded by a newer publication is not
-      // consent for the new report (clientApprovedEvent).
+      // P01/RA09: an approval superseded by a newer publication, or
+      // voided by a later dispute, is not consent for this charge.
       const approvalLogged = Boolean(clientApprovedEvent(events));
       if (!approvalLogged) {
         const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -736,17 +795,6 @@ export default async function handler(req: Req, res: Res) {
           await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
         }
       }
-      // P07: a row-backed booking pays ONLY its pinned row amount.
-      // Shared metadata never substitutes for a missing row amount;
-      // legacy no-row bookings keep the metadata pin.
-      const amountCents = row
-        ? (typeof row.amount_cents === "number" && row.amount_cents > 0 ? row.amount_cents : NaN)
-        : (parseInt(meta["gh_report_amount_cents"] ?? "", 10) || parseInt(meta["gh_first_price_cents"] ?? "", 10) || NaN);
-      if (!Number.isFinite(amountCents) || amountCents <= 0) {
-        logErr("approve_charge", "blocked: no pinned amount");
-        res.status(409).json({ requestId, ok: false, error: "quote_missing" });
-        return;
-      }
       const paymentMethod = await reconcilePaymentMethod(STRIPE_SECRET_KEY, customer, meta);
       if (!paymentMethod) {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -758,51 +806,108 @@ export default async function handler(req: Req, res: Res) {
         res.status(402).json({ ...view(), error: "no_payment_method" });
         return;
       }
-      // P04: the version comes from the journal's latest publication,
-      // NEVER from the request or shared metadata — a caller-supplied
-      // version must not mint a second payment obligation.
+      // Row-backed bookings charge through the single shared flow
+      // (RA01-RA13): pinned amount, journal version, atomic claim,
+      // reconcile-before-create, verified paid write.
+      if (row) {
+        const outcome = await chargeVisit({
+          secretKey: STRIPE_SECRET_KEY,
+          bookingId: payload.bid,
+          customerId: customer.id,
+          customerEmail: customer.email || null,
+          paymentMethod,
+          source: "client_approve",
+          allowedBases: ["client_approved"],
+          seenPublicationId: seenPublicationId || null,
+          nowMs: Date.now(),
+          deps: {
+            setCustomerMeta: async (patch) => {
+              const params: Record<string, string> = {};
+              for (const [k, v] of Object.entries(patch)) params[`metadata[${k}]`] = v;
+              await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+              Object.assign(meta, patch);
+            },
+            sendReceipt: (amountCents) => sendReceiptEmailOnce(
+              STRIPE_SECRET_KEY, customer.id,
+              { ...meta, gh_report_amount_cents: String(amountCents) },
+              payload.bid,
+            ),
+            sendPaymentFailedEmail: async (visitId) => {
+              await sendPaymentFailedEmailOnce(
+                STRIPE_SECRET_KEY, customer.id, payload.bid, visitId,
+              );
+            },
+          },
+        });
+        if (outcome.outcome === "paid") {
+          Object.assign(meta, { gh_state: "paid", gh_last_payment: outcome.payment_intent });
+          if (outcome.receipt_sent) {
+            meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
+            row.receipt_email_id = row.receipt_email_id ?? "sent";
+          }
+          res.status(200).json(view());
+          return;
+        }
+        if (outcome.outcome === "blocked") {
+          res.status(409).json({ ...view(), error: outcome.error });
+          return;
+        }
+        if (outcome.outcome === "processing") {
+          res.status(409).json({ ...view(), error: "payment_processing" });
+          return;
+        }
+        if (outcome.outcome === "mismatch") {
+          res.status(409).json({ ...view(), error: "payment_intent_mismatch" });
+          return;
+        }
+        if (outcome.outcome === "failed") {
+          meta["gh_state"] = "payment_failed";
+          res.status(402).json({
+            ...view(),
+            error: outcome.error === "payment_requires_action" ? "payment_requires_action" : "payment_failed",
+          });
+          return;
+        }
+        res.status(502).json({ ...view(), error: outcome.error });
+        return;
+      }
+      // Legacy path (no visit row): the old metadata-gated charge, with
+      // RA03/RA02 hardening — a failed search never means "no payment",
+      // and a found intent is verified before it is confirmed.
+      const amountCents = (parseInt(meta["gh_report_amount_cents"] ?? "", 10) || parseInt(meta["gh_first_price_cents"] ?? "", 10) || NaN);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        logErr("approve_charge", "blocked: no pinned amount");
+        res.status(409).json({ requestId, ok: false, error: "quote_missing" });
+        return;
+      }
       const reportVersion = sentIdx >= 0 && typeof events[sentIdx]?.detail?.["version"] === "number"
         ? String(events[sentIdx].detail["version"] as number)
         : (meta["gh_report_version"] ?? "1");
       const idemKey = `charge_${payload.bid}_v${reportVersion}`;
-      // P04/P11 adoption: a succeeded cleaning intent for THIS booking
-      // and amount may already exist (an earlier charge succeeded at
-      // Stripe but the paid write never landed). Adopt it — never
-      // create a second charge for the same visit.
-      const adopted = await findSucceededCleaningIntent(STRIPE_SECRET_KEY, payload.bid, amountCents);
-      if (adopted) {
-        if (row) {
-          let adoptedWrote = false;
-          for (let attempt = 0; attempt < 2 && !adoptedWrote; attempt++) {
-            adoptedWrote = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-              status: "paid",
-              paid_at: new Date().toISOString(),
-              payment_intent_id: adopted,
-            });
-          }
-          if (!adoptedWrote && dbConfigured()) {
-            await logEvent(row.id, payload.bid, "system", "payment_unconfirmed", { payment_intent: adopted, via: "client_approve_adopt" });
-            res.status(502).json({ ...view(), error: "payment_unconfirmed" });
-            return;
-          }
-        }
+      const rec = await reconcileIntent(STRIPE_SECRET_KEY, payload.bid, [], {
+        amountCents, currency: "usd", customerId: customer.id,
+      });
+      if (rec.state === "unknown") {
+        res.status(502).json({ ...view(), error: "payment_unknown" });
+        return;
+      }
+      if (rec.state === "mismatch") {
+        res.status(409).json({ ...view(), error: "payment_intent_mismatch" });
+        return;
+      }
+      if (rec.state === "succeeded") {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "paid",
           "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": adopted,
+          "metadata[gh_last_payment]": rec.intent.id,
         });
-        Object.assign(meta, { gh_state: "paid", gh_last_payment: adopted });
+        Object.assign(meta, { gh_state: "paid", gh_last_payment: rec.intent.id });
         const adoptedReceipt = await sendReceiptEmailOnce(
           STRIPE_SECRET_KEY, customer.id,
           { ...meta, gh_report_amount_cents: String(amountCents) },
           payload.bid,
         );
         if (adoptedReceipt) meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
-        if (row) {
-          await logEvent(row.id, payload.bid, "system", "payment_succeeded", {
-            payment_intent: adopted, via: "client_approve_adopt", receipt_sent: adoptedReceipt,
-          });
-        }
         res.status(200).json(view());
         return;
       }
@@ -811,20 +916,18 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_report_version]": reportVersion,
       });
       meta["gh_state"] = "payment_pending";
-      // P05: a live intent for this version (declined, then the card was
-      // changed) is confirmed with the CURRENT card — creating anew
-      // under the same idempotency key with a different payment method
-      // fails Stripe's parameter check and leaves the retry stuck. A
-      // processing intent is left alone: the next attempt reconciles it.
-      const livePi = await findLiveIntent(STRIPE_SECRET_KEY, payload.bid, reportVersion);
-      if (livePi?.status === "processing") {
+      if (rec.state === "live" && rec.intent.status === "processing") {
         res.status(409).json({ ...view(), error: "payment_processing" });
         return;
       }
-      // One payment per booking + report version: retries and double
-      // clicks resolve to the same PaymentIntent instead of charging twice.
-      const pi = livePi
-        ? await confirmIntent(STRIPE_SECRET_KEY, livePi.id, paymentMethod, `${idemKey}_confirm`)
+      // Legacy confirm key: no journal exists to number attempts, so
+      // the key is derived from the payment method itself — a new card
+      // gets a new key (no idempotency clash), the same card replays.
+      const legacyConfirmKey = rec.state === "live"
+        ? `${idemKey}_confirm_${createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12)}`
+        : idemKey;
+      const pi = rec.state === "live"
+        ? await confirmIntent(STRIPE_SECRET_KEY, rec.intent.id, paymentMethod, legacyConfirmKey)
         : await stripePost(
         STRIPE_SECRET_KEY,
         "/payment_intents",
@@ -843,24 +946,6 @@ export default async function handler(req: Req, res: Res) {
       );
       if (pi.ok && pi.data["status"] === "succeeded") {
         const piId = String(pi.data["id"] ?? "");
-        // P11: the paid write is verified — a success that never lands
-        // must surface as payment_unconfirmed, never as a silent
-        // success the next attempt re-charges.
-        if (row) {
-          let paidWrote = false;
-          for (let attempt = 0; attempt < 2 && !paidWrote; attempt++) {
-            paidWrote = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-              status: "paid",
-              paid_at: new Date().toISOString(),
-              payment_intent_id: piId,
-            });
-          }
-          if (!paidWrote && dbConfigured()) {
-            await logEvent(row.id, payload.bid, "system", "payment_unconfirmed", { payment_intent: piId, via: "client_approve" });
-            res.status(502).json({ ...view(), error: "payment_unconfirmed" });
-            return;
-          }
-        }
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "paid",
           "metadata[gh_paid_at]": new Date().toISOString(),
@@ -873,11 +958,6 @@ export default async function handler(req: Req, res: Res) {
           payload.bid,
         );
         if (receiptSent) meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
-        if (row) {
-          await logEvent(row.id, payload.bid, "system", "payment_succeeded", {
-            payment_intent: piId, via: "client_approve", receipt_sent: receiptSent,
-          });
-        }
         res.status(200).json(view());
         return;
       }
@@ -888,11 +968,6 @@ export default async function handler(req: Req, res: Res) {
         "metadata[gh_state]": "payment_failed",
       });
       meta["gh_state"] = "payment_failed";
-      if (row) {
-        await logEvent(row.id, payload.bid, "system", "payment_failed", {
-          via: "client_approve", status: piStatus, detail: errMsg.slice(0, 200),
-        });
-      }
       await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, customer.id, payload.bid, row?.id ?? null);
       logErr("approve_charge", `${payload.bid}: ${errMsg}`);
       res.status(402).json({
@@ -907,6 +982,12 @@ export default async function handler(req: Req, res: Res) {
       res.status(200).json({ ...view(), already: true });
       return;
     }
+    // RA07: if a charge is already in flight, the issue is still
+    // recorded (it blocks every FUTURE charge and stays open), but the
+    // client must not be promised a pause of a payment that may
+    // already complete. The response and emails say so honestly.
+    const paymentInFlight =
+      meta["gh_state"] === "payment_pending" || row?.status === "payment_pending";
     const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
       "metadata[gh_state]": "issue_open",
       "metadata[gh_issue_open]": "1",
@@ -962,7 +1043,9 @@ export default async function handler(req: Req, res: Res) {
 
     // Best-effort notifications — the issue is already recorded on the
     // server at this point; an email failure changes nothing for the
-    // client (the charge stays paused either way).
+    // client. The subject must not promise a pause when a payment was
+    // already in flight: that charge may still complete, and the
+    // issue then becomes a re-clean-or-refund case, not a block.
     const RESEND_API_KEY = process.env["RESEND_API_KEY"];
     if (RESEND_API_KEY) {
       const firstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
@@ -988,7 +1071,7 @@ export default async function handler(req: Req, res: Res) {
         reply_to: "hello@gatehousehomecleaning.com",
         subject: `Issue reported — booking ${payload.bid}`,
         text:
-          `A client reported an issue from the photo report. The charge is PAUSED.\n\n` +
+          `A client reported an issue from the photo report.${paymentInFlight ? " A payment was already in progress when the issue arrived, so it may still complete — the issue stays open either way; review it for a re-clean or a refund." : " The charge is PAUSED."}\n\n` +
           `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
           `Room: ${room || "(not specified)"}\nWhat they said: ${reason || "(no description)"}\n` +
           (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`),
@@ -1002,9 +1085,11 @@ export default async function handler(req: Req, res: Res) {
           from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
           to: [customer.email],
           reply_to: "hello@gatehousehomecleaning.com",
-          subject: "We received your report — the charge is paused",
+          subject: paymentInFlight
+            ? "We received your report — a payment was already in progress"
+            : "We received your report — the charge is paused",
           text:
-            `Hi ${firstName},\n\nIssue received. The charge is paused — nothing will be charged while we look into it.\n` +
+            `Hi ${firstName},\n\nIssue received.${paymentInFlight ? " A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right." : " The charge is paused — nothing will be charged while we look into it."}\n` +
             `We'll reply within one business day.\n\n` +
             (room ? `Room: ${room}\n` : "") +
             (reason ? `What you told us: ${reason}\n\n` : "\n") +
@@ -1012,7 +1097,7 @@ export default async function handler(req: Req, res: Res) {
         });
       }
     }
-    res.status(200).json(view());
+    res.status(200).json(paymentInFlight ? { ...view(), payment_in_flight: true } : view());
   } catch (error: unknown) {
     console.error(JSON.stringify({
       requestId, step: "unexpected",

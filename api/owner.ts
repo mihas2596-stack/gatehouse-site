@@ -10,6 +10,7 @@
 import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
+import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
 
 // O3: a payment failure is current only if no later success supersedes
 // it and the visit is not paid. Any historical payment_failed event used
@@ -199,10 +200,24 @@ export default async function handler(req: Req, res: Res) {
       const confirmEmailEvents = (events as { event: string; created_at: string }[])
         .filter((e) => e.event === "confirmation_email_sent" || e.event === "confirmation_email_failed")
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      const entryRow = await loadAccess(visitId);
+      const entryReminderSent = journalEvents.some((e) => e.event === "entry_reminder_sent");
       return json(200, {
         ok: true,
         visit: {
           ...annotateVisit(visit, openedAt),
+          entry: entryRow ? {
+            method: entryRow.entry_method,
+            note: entryRow.entry_note ?? "",
+            has_secret: Boolean(entryRow.entry_secret),
+            // Owner-only detail view: the operator may need the secret
+            // to coordinate when the cleaner cannot see it. Never in
+            // the list view, never in emails, never in events.
+            secret: decryptEntrySecret(entryRow.entry_secret),
+            assigned_cleaner_id: entryRow.assigned_cleaner_id,
+            expires_at: entryRow.expires_at,
+            reminder_sent: entryReminderSent,
+          } : null,
           payment_failed: paymentFailed,
           can_charge: canCharge,
           visit_confirmed: visitConfirmed,
@@ -290,6 +305,14 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const c of confs) confirmed.add(c.visit_id);
     }
+    const entryAgreed = new Set<string>();
+    if (ids.length > 0) {
+      const accs = await dbSelect<{ visit_id: string; entry_method: string | null }>(
+        "gh_visit_access",
+        `visit_id=in.(${ids.join(",")})&limit=200`,
+      );
+      for (const a of accs) if (a.entry_method) entryAgreed.add(a.visit_id);
+    }
     const approved = new Set<string>();
     if (ids.length > 0) {
       const apprs = await dbSelect<{ visit_id: string }>(
@@ -306,6 +329,7 @@ export default async function handler(req: Req, res: Res) {
         payment_failed: failed.has(v.id),
         visit_confirmed: confirmed.has(v.id),
         request_approved: approved.has(v.id),
+        entry_agreed: entryAgreed.has(v.id),
       })),
     });
   } catch (err) {

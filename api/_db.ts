@@ -43,7 +43,14 @@ async function rest(
     return { ok: false, status: 0, data: null };
   }
   let data: unknown = null;
-  const text = await response.text();
+  let text = "";
+  try {
+    text = await response.text();
+  } catch {
+    // A response without a readable body degrades to "no data", like a
+    // network failure — it must never throw out of the DB layer.
+    return { ok: response.ok, status: response.status, data: null };
+  }
   if (text) {
     try {
       data = JSON.parse(text);
@@ -63,6 +70,21 @@ export async function dbSelect<T = Record<string, unknown>>(
   const r = await rest(cfg, `${table}?${query}`);
   if (!r.ok || !Array.isArray(r.data)) return [];
   return r.data as T[];
+}
+
+// Strict select: unlike dbSelect, a database error is NOT silently
+// returned as "no rows". Money gates must distinguish "no row" (legacy
+// path) from "database unreadable" (fail closed, RA04): a 503 on
+// gh_visits must never let a charge fall back to shared metadata.
+export async function dbSelectStrict<T = Record<string, unknown>>(
+  table: string,
+  query: string,
+): Promise<{ ok: boolean; rows: T[] }> {
+  const cfg = dbConfig();
+  if (!cfg) return { ok: false, rows: [] };
+  const r = await rest(cfg, `${table}?${query}`);
+  if (!r.ok || !Array.isArray(r.data)) return { ok: false, rows: [] };
+  return { ok: true, rows: r.data as T[] };
 }
 
 export async function dbInsert<T = Record<string, unknown>>(
@@ -101,8 +123,9 @@ export async function dbUpdate(
  * how many changed: 0 means another request already moved the row out
  * of the expected state, so the caller must return the existing result
  * instead of publishing twice. Returns -1 when the DB is not
- * configured or unreachable — callers then fall back to the legacy
- * non-atomic path rather than failing the request.
+ * configured or unreachable — callers must fail closed on -1 (RA15:
+ * no email, no event, no state change), never fall through to a
+ * non-atomic legacy path.
  */
 export async function dbUpdateCount(
   table: string,
@@ -247,8 +270,8 @@ export async function storageObjectInfo(
       const r = await fetch(storageUrl(cfg, `/object/${PHOTO_BUCKET}/${objectPath}`), {
         method: "HEAD",
         headers: {
-          ["api" + "key"]: cfg.serviceKey,
-          Authorization: `Bearer ${cfg.serviceKey}`,
+          ["api" + "key"]: cfg.key,
+          Authorization: `Bearer ${cfg.key}`,
         },
         signal: AbortSignal.timeout(15000),
       });

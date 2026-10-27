@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import handler from "../../api/send-contact-email";
+import handler, { paymentExplainer } from "../../api/send-contact-email";
 
 const origin = "https://www.gatehousehomecleaning.com";
 function response() {
@@ -68,16 +68,20 @@ const quoteBody = {
 };
 
 describe("entry instructions separation", () => {
-  it("stores ONLY the customer's entry instructions in access_notes", async () => {
+  it("drops entry instructions from an old page — never stored in the row, email or Stripe", async () => {
+    // Spec A §4/§6: entry is not collected at booking. A value sent by
+    // an old cached page must be dropped, not stored anywhere.
     const res = response();
     await handler({ method: "POST", headers: { origin }, body: quoteBody }, res);
     expect(res.code).toBe(200);
     const upserts = callsTo("gh_visits").filter((c) => c[1]?.body);
     expect(upserts.length).toBeGreaterThan(0);
     const row = JSON.parse(String(upserts[0][1]?.body)) as Record<string, unknown>;
-    expect(row.access_notes).toBe("Gate code 1234, key under the mat");
-    expect(String(row.access_notes)).not.toContain("Professionally cleaned");
-    expect(String(row.access_notes)).not.toContain("Consent record");
+    expect(row.access_notes).toBe(null);
+    const emails = callsTo("api.resend.com").map((c) => String(c[1]?.body ?? ""));
+    expect(emails.join("\n")).not.toContain("Gate code 1234");
+    const stripe = callsTo("api.stripe.com").map((c) => String(c[1]?.body ?? ""));
+    expect(stripe.join("\n")).not.toContain("Gate code 1234");
   });
 
   it("journals customer notes and the scope-review flag as separate events", async () => {
@@ -105,5 +109,13 @@ describe("entry instructions separation", () => {
     expect(String(customer?.text)).toContain("charged automatically after the stated 24-hour review period");
     expect(String(customer?.text)).not.toContain("once you've seen the photo report");
     expect(String(customer?.text)).toContain("at 6:00 PM ET");
+  });
+});
+
+describe("payment explainer", () => {
+  it("never prints a placeholder dash as the amount", () => {
+    expect(paymentExplainer("—")).toContain("approve the agreed payment");
+    expect(paymentExplainer("")).toContain("approve the agreed payment");
+    expect(paymentExplainer("$149")).toContain("approve payment of $149");
   });
 });

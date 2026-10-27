@@ -21,6 +21,10 @@
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
 import { issueStateFrom, timerBlockReason } from "./_payment_basis.js";
+import {
+  ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
+  type ClientEntryView, type EntryMethod,
+} from "./_visit_access.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -34,6 +38,7 @@ type BookingRow = {
   report_status?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
   visit_date?: string | null; window?: string | null;
+  cleaner_id?: string | null;
   cleaner_profile?: unknown;
 };
 
@@ -315,42 +320,42 @@ function decryptBookingPayload(secret: string, token: string): BookingPayload | 
 function verifyBooking(
   secret: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   let payload: BookingPayload | null = null;
   let ttl = TOKEN_TTL_SECONDS;
   if (token.startsWith("v2.")) {
     payload = decryptBookingPayload(secret, token);
-    if (!payload) return { ok: false, reason: "bad_token" };
+    if (!payload) return { ok: false, payload: null, reason: "bad_token" };
     ttl = TOKEN_TTL_V2_SECONDS;
   } else {
     const parts = token.split(".");
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      return { ok: false, reason: "bad_format" };
+      return { ok: false, payload: null, reason: "bad_format" };
     }
     const [payloadB64, sig] = parts;
     let expected: string;
     try {
       expected = createHmac("sha256", secret).update(payloadB64).digest("base64url");
     } catch {
-      return { ok: false, reason: "sign_error" };
+      return { ok: false, payload: null, reason: "sign_error" };
     }
     const a = Buffer.from(sig, "utf8");
     const b = Buffer.from(expected, "utf8");
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      return { ok: false, reason: "bad_signature" };
+      return { ok: false, payload: null, reason: "bad_signature" };
     }
     try {
       payload = JSON.parse(b64urlDecode(payloadB64)) as BookingPayload;
     } catch {
-      return { ok: false, reason: "bad_payload" };
+      return { ok: false, payload: null, reason: "bad_payload" };
     }
   }
   if (!payload.bid || !payload.email || !payload.ts) {
-    return { ok: false, reason: "missing_fields" };
+    return { ok: false, payload: null, reason: "missing_fields" };
   }
   const age = Math.floor(Date.now() / 1000) - payload.ts;
   if (age < 0 || age > ttl) {
-    return { ok: false, reason: "expired" };
+    return { ok: false, payload: null, reason: "expired" };
   }
   return { ok: true, payload };
 }
@@ -358,7 +363,7 @@ function verifyBooking(
 function verifyBookingLink(
   stripeKey: string,
   token: string,
-): { ok: true; payload: BookingPayload } | { ok: false; reason: string } {
+): { ok: boolean; payload: BookingPayload | null; reason?: string } {
   const dedicated = process.env["BOOKING_LINK_SECRET"];
   if (dedicated) {
     const r = verifyBooking(dedicated, token);
@@ -572,7 +577,15 @@ export default async function handler(req: Req, res: Res) {
     const events = row ? await bookingEvents(payload.bid) : [];
     let customer = boundCustomer;
     if (!customer && payload.email) {
-      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      // Normalize: the token's own email/name are the verified fallback
+      // for a customer record without them.
+      if (found) {
+        customer = {
+          id: found.id, metadata: found.metadata,
+          email: found.email ?? payload.email, name: found.name ?? payload.name ?? "",
+        };
+      }
     }
     const bound = Boolean(boundCustomer);
     if (customer) {
@@ -630,6 +643,18 @@ export default async function handler(req: Req, res: Res) {
       } catch { /* best-effort — the choice UI falls back to no details */ }
     }
 
+    // Entry arrangement (spec A §5-6): only once the visit is confirmed
+    // AND a cleaner is assigned, and only while the visit is not done.
+    // The secret itself never enters this view — only has_secret.
+    const entryConfirmed = Boolean(latestEvent(events, "visit_confirmed"));
+    const entryAvailable = Boolean(
+      row && entryConfirmed && (meta["gh_cleaner_name"] ?? "").trim() !== ""
+        && row.status !== "cancelled" && !row.report_sent_at,
+    );
+    let entryView: ClientEntryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
+    if (entryAvailable && row) {
+      entryView = clientEntryView(await loadAccess(row.id), true);
+    }
     const view = () => {
       const firstCents = parseInt(meta["gh_first_price_cents"] ?? "", 10);
       const recCents = parseInt(meta["gh_recurring_price_cents"] ?? "", 10);
@@ -669,7 +694,11 @@ export default async function handler(req: Req, res: Res) {
         cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),
         cancel_fee: money(cancelFeeCents(meta, requestedDate, Date.now())) ?? "$0",
         cancelled_scope: meta["gh_cancel_scope"] ?? "",
-        access_notes: meta["gh_access_notes"] ?? "",
+        // Legacy access_notes are no longer a secret channel: entry
+        // arrangements live in gh_visit_access (see entry below).
+        access_notes: "",
+        entry: entryView,
+        entry_available: entryAvailable,
         no_photo_zones: meta["gh_no_photo_zones"] ?? "",
         has_card: Boolean(meta["gh_payment_method"]),
         card_brand: cardBrand,
@@ -738,26 +767,64 @@ export default async function handler(req: Req, res: Res) {
     if (action === "accept_alt_date") {
       const date = typeof body["date"] === "string" ? body["date"] : "";
       const alts = (meta["gh_alt_dates"] ?? "").split(",").filter(Boolean);
-      if (state !== "date_declined" || !alts.includes(date)) {
-        res.status(409).json({ requestId, ok: false, error: "date_not_offered" });
-        return;
+      // RA16: the row is the agreement's durable record — it is
+      // written FIRST, and a failed write is a 502 with nothing else
+      // changed (no meta, no event, no notification, no success
+      // response). The old order wrote meta + event first and
+      // ignored a failed row write, so the client saw a confirmed
+      // date the cleaner and owner views never received. The meta
+      // write is checked too: a success response must never rest on
+      // unpersisted metadata.
+      //
+      // Idempotent replay: a prior attempt may have written the row
+      // + journal before the meta write failed. The decline is then
+      // consumed (the confirm event is newer), so the state/alts gate
+      // above would 409 a retry for a date that is already agreed.
+      // When the row and the journal already confirm THIS date, skip
+      // straight to healing the shared metadata instead of failing.
+      const priorConfirm = latestEvent(events, "visit_confirmed");
+      const alreadyConfirmed = Boolean(
+        row && row.visit_date === date && priorConfirm?.detail?.["date"] === date,
+      );
+      if (!alreadyConfirmed) {
+        if (state !== "date_declined" || !alts.includes(date)) {
+          res.status(409).json({ requestId, ok: false, error: "date_not_offered" });
+          return;
+        }
       }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      if (row && !alreadyConfirmed) {
+        const datePatch: Record<string, unknown> = { visit_date: date };
+        if (meta["gh_confirmed_window"]) datePatch.window = meta["gh_confirmed_window"];
+        const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, datePatch);
+        if (!rowOk) {
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
+        }
+        // S01: the accepted date IS the agreement — the row must carry
+        // it too, or the cleaner (and owner) views keep showing the
+        // old day while the client sees the new one.
+        await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
+      }
+      // Retries are safe: on the row-failure path nothing was written,
+      // so meta still offers the alternatives; on the meta-failure
+      // path the replay branch above skips the consumed decline and
+      // heals the shared metadata here.
+      const sharedHadConfirmation = customer.metadata["gh_confirmed_date"] === date;
+      const metaRes = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "card_ready",
         "metadata[gh_confirmed_date]": date,
         "metadata[gh_alt_dates]": "",
       });
-      Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: date, gh_alt_dates: "" });
-      if (row) {
-        await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
-        // S01: the accepted date IS the agreement — the row must carry
-        // it too, or the cleaner (and owner) views keep showing the
-        // old day while the client sees the new one.
-        const datePatch: Record<string, unknown> = { visit_date: date };
-        if (meta["gh_confirmed_window"]) datePatch.window = meta["gh_confirmed_window"];
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, datePatch);
+      if (!metaRes.ok) {
+        res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+        return;
       }
-      await notify(`Date accepted — booking ${payload.bid}`, `The client accepted the alternative date ${date} for booking ${payload.bid}.`, false);
+      Object.assign(meta, { gh_state: "card_ready", gh_confirmed_date: date, gh_alt_dates: "" });
+      // Notify once per agreement: a replay that only heals shared
+      // metadata must not re-notify the owner on every retry click.
+      if (!sharedHadConfirmation) {
+        await notify(`Date accepted — booking ${payload.bid}`, `The client accepted the alternative date ${date} for booking ${payload.bid}.`, false);
+      }
       res.status(200).json(view());
       return;
     }
@@ -804,6 +871,8 @@ export default async function handler(req: Req, res: Res) {
       if (row) {
         await logEvent(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { status: "cancelled" });
+        await deleteAccess(row.id);
+        await logEvent(row.id, payload.bid, "client", "entry_revoked");
       }
       const scopeText = scope === "stop"
         ? "This visit and all future recurring visits are cancelled."
@@ -826,24 +895,71 @@ export default async function handler(req: Req, res: Res) {
       const notes = typeof body["notes"] === "string" ? body["notes"].slice(0, 300) : null;
       const zones = typeof body["no_photo_zones"] === "string" ? body["no_photo_zones"].slice(0, 200) : null;
       const params: Record<string, string> = {};
-      if (notes !== null) params["metadata[gh_access_notes]"] = notes;
       if (zones !== null) params["metadata[gh_no_photo_zones]"] = zones;
-      if (Object.keys(params).length === 0) {
+      if (Object.keys(params).length === 0 && notes === null) {
         res.status(400).json({ requestId, ok: false, error: "nothing_to_update" });
         return;
       }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
-      Object.assign(meta, {
-        ...(notes !== null ? { gh_access_notes: notes } : {}),
-        ...(zones !== null ? { gh_no_photo_zones: zones } : {}),
-      });
+      if (Object.keys(params).length > 0) {
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+        Object.assign(meta, { ...(zones !== null ? { gh_no_photo_zones: zones } : {}) });
+      }
+      // Legacy entry-notes path, re-routed: notes are a general note in
+      // gh_visit_access, never Stripe metadata and never the visit row.
+      if (notes !== null && row) {
+        await saveAccessNote(row.id, payload.bid, notes);
+        if (entryAvailable) entryView = clientEntryView(await loadAccess(row.id), true);
+      }
       if (row) {
         await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-          ...(notes !== null ? { access_notes: notes } : {}),
           ...(zones !== null ? { no_photo_zones: zones } : {}),
         });
       }
       res.status(200).json(view());
+      return;
+    }
+
+    if (action === "save_entry") {
+      if (!entryAvailable || !row) {
+        res.status(409).json({ requestId, ok: false, error: "entry_not_available" });
+        return;
+      }
+      const method = typeof body["method"] === "string" ? body["method"] : "";
+      if (!(ENTRY_METHODS as string[]).includes(method)) {
+        res.status(400).json({ requestId, ok: false, error: "invalid_entry_method" });
+        return;
+      }
+      const note = typeof body["note"] === "string" ? body["note"].slice(0, 500) : "";
+      const secret = typeof body["secret"] === "string" ? body["secret"].slice(0, 1000) : "";
+      if (method !== "arrange" && secret) {
+        res.status(400).json({ requestId, ok: false, error: "secret_not_needed" });
+        return;
+      }
+      const saved = await saveAccess({
+        visitId: row.id, bookingId: payload.bid, method: method as EntryMethod,
+        note, secret: method === "arrange" ? secret : "",
+        cleanerId: (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
+        visitDate: row.visit_date ?? null,
+      });
+      if (!saved.ok) {
+        res.status(502).json({ requestId, ok: false, error: saved.error ?? "db_error" });
+        return;
+      }
+      await logEvent(row.id, payload.bid, "client", "entry_saved");
+      entryView = clientEntryView(await loadAccess(row.id), true);
+      res.status(200).json({ ...view(), entry_saved: true });
+      return;
+    }
+
+    if (action === "delete_entry") {
+      if (!row) {
+        res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
+        return;
+      }
+      await deleteAccess(row.id);
+      await logEvent(row.id, payload.bid, "client", "entry_deleted");
+      entryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
+      res.status(200).json({ ...view(), entry_saved: true });
       return;
     }
 

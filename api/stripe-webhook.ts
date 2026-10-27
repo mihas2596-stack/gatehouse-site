@@ -20,7 +20,7 @@
 // and STRIPE_WEBHOOK_SECRET must be set in Vercel env vars.
 
 import { createHmac, timingSafeEqual } from "crypto";
-import { sendReceiptEmailOnce } from "./booking-action.js";
+import { sendReceiptEmailOnce, sendFeeReceiptEmailOnce } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -213,14 +213,70 @@ export default async function handler(req: Req, res: Res) {
       const meta = (obj["metadata"] as Record<string, string> | undefined) ?? {};
       const bookingId = meta["gh_booking_id"];
       const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
-      if (customerId && bookingId) {
+      const piId = (obj["id"] as string | undefined) ?? "";
+      const feeCents = typeof obj["amount"] === "number" ? obj["amount"] : NaN;
+      if (customerId && bookingId && meta["gh_kind"] === "cancellation_fee") {
+        // RA10: a cancellation fee is a SEPARATE obligation. It never
+        // marks the cleaning paid, never touches the visit row's
+        // cleaning status, and never triggers the cleaning receipt.
+        // Out-of-order and repeat deliveries are deduped on the fee's
+        // own marker, not on the cleaning payment pointer.
+        if (eventType === "payment_intent.succeeded") {
+          const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
+          const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
+          if (piId && curMeta["gh_fee_last_payment"] === piId) {
+            log("fee", { state: "already_recorded", booking: bookingId, pi: piId });
+          } else {
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+              "metadata[gh_fee_charged]": "1",
+              "metadata[gh_fee_last_payment]": piId,
+              "metadata[gh_fee_paid_at]": new Date().toISOString(),
+            });
+            if (dbConfigured()) {
+              try {
+                const rows = await dbSelect<{ id: string }>(
+                  "gh_visits",
+                  `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+                );
+                if (rows[0]) {
+                  await logEvent(rows[0].id, bookingId, "system", "cancellation_fee_paid", {
+                    payment_intent: piId, amount_cents: feeCents,
+                  });
+                }
+              } catch (err) {
+                logErr("db_mirror_fee", err);
+              }
+            }
+            try {
+              await sendFeeReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, bookingId, piId, feeCents);
+            } catch { /* best-effort */ }
+            log("fee", { state: eventType, booking: bookingId, amount_cents: feeCents });
+          }
+        } else {
+          if (dbConfigured()) {
+            try {
+              const rows = await dbSelect<{ id: string }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+              );
+              if (rows[0]) {
+                await logEvent(rows[0].id, bookingId, "system", "cancellation_fee_failed", {
+                  payment_intent: piId, amount_cents: feeCents,
+                });
+              }
+            } catch (err) {
+              logErr("db_mirror_fee", err);
+            }
+          }
+          log("fee", { state: eventType, booking: bookingId });
+        }
+      } else if (customerId && bookingId) {
         // Guard against out-of-order events: never regress a "paid" booking
         // back to an earlier state. Read current state first.
         const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
         const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
         const curState = curMeta["gh_state"] ?? "";
         const newState = eventType === "payment_intent.succeeded" ? "paid" : "payment_failed";
-        const piId = (obj["id"] as string | undefined) ?? "";
         if (curState === "paid" && newState !== "paid") {
           log("payment", { state: "regression_blocked", booking: bookingId, curState, newState });
         } else if (piId && curMeta["gh_last_payment"] === piId && curState === newState) {

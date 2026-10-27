@@ -76,6 +76,9 @@ beforeEach(() => {
           : [{ id: "cus_v", email: "client@example.com", name: "Casey Client", metadata: storeMeta }];
         return okRes({ data: found });
       }
+      if (u.pathname.endsWith("/payment_intents/search")) {
+        return okRes({ data: [] });
+      }
       if (u.pathname.endsWith("/payment_intents")) {
         const params = new URLSearchParams(String(init?.body ?? ""));
         piCalls.push({ amount: params.get("amount") ?? "" });
@@ -102,7 +105,7 @@ beforeEach(() => {
     if (u.pathname.includes("/rest/v1/gh_visits")) {
       if (method === "PATCH") {
         Object.assign(row, JSON.parse(String(init?.body ?? "{}")) as Row);
-        return okRes(null);
+        return okRes([row]);
       }
       const qBid = u.searchParams.get("booking_id");
       if (qBid && qBid.startsWith("eq.")) {

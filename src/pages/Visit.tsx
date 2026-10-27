@@ -43,6 +43,8 @@ type VisitData = {
   cancel_fee?: string;
   cancelled_scope?: string;
   access_notes?: string;
+  entry?: { available: boolean; method: string | null; note: string; has_secret: boolean; expires_at: string | null } | null;
+  entry_available?: boolean;
   no_photo_zones?: string;
   has_card?: boolean;
   card_brand?: string;
@@ -77,6 +79,7 @@ type ReportData = {
   checklist?: ReportChecklist | null;
   amount?: string | null;
   deadline?: string | null;
+  publication_id?: string | null;
   delivery_failed?: boolean;
   charge_timer_blocked?: boolean;
   charge_timer_block_reason?: string | null;
@@ -124,12 +127,21 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
       const r = await fetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bt, ...payload }),
+        body: JSON.stringify({
+          bt,
+          ...payload,
+          // RA08: pay only for the publication this tab actually
+          // showed; a stale tab gets report_changed, not a charge.
+          ...(payload.action === "approve" ? { seen_publication_id: rep?.publication_id ?? undefined } : {}),
+        }),
       });
       const j = (await r.json()) as ReportData & { ok: boolean };
       if (j && j.state && j.state !== "invalid_link") {
         setRep(j);
         onChanged();
+        if (j.error === "report_changed") {
+          setErr("This report was updated since you opened it — please review the latest version before approving. No charge was made.");
+        }
       } else {
         setErr("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
       }
@@ -306,9 +318,12 @@ const Visit = () => {
   const [proposed, setProposed] = useState("");
   const [cancelScope, setCancelScope] = useState<"once" | "stop">("once");
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const [notes, setNotes] = useState("");
   const [zones, setZones] = useState("");
   const [accessSaved, setAccessSaved] = useState(false);
+  const [entryMethod, setEntryMethod] = useState<string | null>(null);
+  const [entryNote, setEntryNote] = useState("");
+  const [entrySecret, setEntrySecret] = useState("");
+  const [entrySaved, setEntrySaved] = useState(false);
 
   const load = useCallback(async () => {
     if (!bt) {
@@ -338,8 +353,11 @@ const Visit = () => {
         }
       } else {
         setData(j);
-        setNotes(j.access_notes ?? "");
         setZones(j.no_photo_zones ?? "");
+        setEntryMethod(j.entry?.method ?? null);
+        setEntryNote(j.entry?.note ?? "");
+        setEntrySecret("");
+        setEntrySaved(false);
       }
     } catch {
       const prev = dataRef.current;
@@ -644,8 +662,8 @@ const Visit = () => {
                 <ul className="list-disc pl-5 space-y-1 text-sm text-foreground">
                   <li>Tidy surfaces so the visit goes to cleaning, not sorting.</li>
                   <li>Secure pets, or tell us below where they&apos;ll be.</li>
-                  <li>Access: add your entry instructions below — they&apos;re visible only to you and the Gatehouse team, never in public links or reports.</li>
-                  <li>You don&apos;t need to be home if your access instructions are complete.</li>
+                  <li>Entry: after confirmation, choose below how your cleaner gets in — you can be home, have someone meet them, or arrange entry.</li>
+                  <li>You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.</li>
                   <li>If anything about the arrival changes, we email you the same day.</li>
                 </ul>
                 <p className="text-sm text-muted-foreground mt-3">
@@ -656,24 +674,102 @@ const Visit = () => {
               </div>
             )}
 
+            {data.state === "confirmed" && data.entry_available && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-3">
+                  How would you like to arrange entry?
+                </h2>
+                <p className="text-sm text-muted-foreground mb-3">
+                  You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.
+                </p>
+                <div role="radiogroup" aria-label="How would you like to arrange entry?" className="space-y-2 mb-4">
+                  {[
+                    { key: "home", label: "I’ll be home to let the cleaner in." },
+                    { key: "someone", label: "Someone else will meet the cleaner." },
+                    { key: "arrange", label: "I’ll arrange entry before the visit." },
+                  ].map((o) => (
+                    <label key={o.key} className="flex min-h-[44px] items-center gap-2 text-sm">
+                      <input type="radio" name="entry-method" value={o.key} checked={entryMethod === o.key} onChange={() => { setEntryMethod(o.key); setEntrySaved(false); }} className="h-5 w-5" />
+                      {o.label}
+                    </label>
+                  ))}
+                </div>
+                {(entryMethod === "home" || entryMethod === "someone") && (
+                  <p className="text-sm text-foreground mb-3">No codes or keys are needed for this choice. An optional note about intercom or parking is welcome below.</p>
+                )}
+                {entryMethod && (
+                  <>
+                    <label htmlFor="v-entry-note" className="block text-sm font-medium mb-1.5">Note about intercom or parking (optional)</label>
+                    <input
+                      id="v-entry-note" value={entryNote} onChange={(e) => setEntryNote(e.target.value)} maxLength={500}
+                      className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
+                      placeholder="e.g. Intercom at the front gate, park in the driveway"
+                    />
+                  </>
+                )}
+                {entryMethod === "arrange" && (
+                  <>
+                    <label htmlFor="v-entry-secret" className="block text-sm font-medium mb-1.5">Entry details (optional — you can add these later)</label>
+                    <input
+                      id="v-entry-secret" value={entrySecret} onChange={(e) => setEntrySecret(e.target.value)} maxLength={1000}
+                      className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
+                      placeholder="e.g. Temporary guest code, lockbox location"
+                    />
+                    <p className="text-sm text-muted-foreground mb-3">If your lock supports a temporary guest code, use that. Never share your main alarm code.</p>
+                  </>
+                )}
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    variant="hero" disabled={busy || !entryMethod}
+                    onClick={() => {
+                      setEntrySaved(false);
+                      void post({ action: "save_entry", method: entryMethod, note: entryNote, secret: entryMethod === "arrange" ? entrySecret : "" }).then((ok) => { setEntrySaved(ok); if (ok) setEntrySecret(""); });
+                    }}
+                  >
+                    {entryMethod === "arrange" ? "Add entry details" : "Save entry choice"}
+                  </Button>
+                  {entryMethod === "arrange" && (
+                    <Button
+                      variant="outline" disabled={busy}
+                      onClick={() => {
+                        setEntrySaved(false);
+                        void post({ action: "save_entry", method: "arrange", note: entryNote, secret: "" }).then((ok) => { setEntrySaved(ok); setEntrySecret(""); });
+                      }}
+                    >
+                      Add later
+                    </Button>
+                  )}
+                  {data.entry?.method && (
+                    <Button
+                      variant="outline" disabled={busy}
+                      onClick={() => {
+                        setEntrySaved(false);
+                        void post({ action: "delete_entry" }).then((ok) => { if (ok) { setEntryMethod(null); setEntryNote(""); setEntrySecret(""); setEntrySaved(true); } });
+                      }}
+                    >
+                      Remove entry arrangement
+                    </Button>
+                  )}
+                </div>
+                {entrySaved && <p className="mt-3 text-sm text-sage-foreground" role="status">Saved.</p>}
+                {data.entry?.has_secret && <p className="mt-3 text-sm text-foreground">Entry details are saved for this visit.</p>}
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Only you, Gatehouse and your assigned cleaner for this visit can see these details. Access ends when the visit is finished or cancelled, and entry details are deleted after the visit (visit date + 2 days at the latest). If your cleaner changes, the previous cleaner loses access and you will be asked to add details again.
+                </p>
+              </div>
+            )}
+            {manageable && data.state !== "confirmed" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-3">Entry</h2>
+                <p className="text-sm text-foreground">You will arrange entry here after your visit is confirmed and your cleaner is assigned. Nothing secret is needed before then.</p>
+              </div>
+            )}
             {manageable && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">
                   <CalendarClock className="inline w-5 h-5 mr-1 -mt-1" aria-hidden="true" />
-                  Access &amp; notes
+                  Rooms not to photograph
                 </h2>
-                <label htmlFor="v-notes" className="block text-sm font-medium mb-1.5">
-                  Entry instructions (gate code, lockbox, key…)
-                </label>
-                <textarea
-                  id="v-notes"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  rows={3}
-                  maxLength={300}
-                  className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
-                  placeholder="e.g. Lockbox by the side door, code in your booking email — or: I'll be home."
-                />
                 <label htmlFor="v-zones" className="block text-sm font-medium mb-1.5">
                   Rooms NOT to photograph (optional)
                 </label>
@@ -690,16 +786,140 @@ const Visit = () => {
                   disabled={busy}
                   onClick={() => {
                     setAccessSaved(false);
-                    void post({ action: "update_access", notes, no_photo_zones: zones }).then((ok) => setAccessSaved(ok));
+                    void post({ action: "update_access", no_photo_zones: zones }).then((ok) => setAccessSaved(ok));
                   }}
                 >
-                  Save instructions
+                  Save
                 </Button>
                 {accessSaved && <span className="ml-3 text-sm text-sage-foreground">Saved.</span>}
               </div>
             )}
 
-            {data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
+            {data.state === "date_declined" && (
+              <p className="text-lg text-foreground mb-6 text-center">
+                The date you picked doesn&apos;t work on our side. Pick one of the alternatives, or
+                suggest your own — your request and your saved card stay exactly as they are, and
+                nothing is charged.
+              </p>
+            )}
+            {data.state === "cancelled" && (
+              <p className="text-lg text-foreground mb-6 text-center">
+                {data.cancelled_scope === "stop"
+                  ? "This visit and all future recurring visits are cancelled."
+                  : "This visit is cancelled. Your recurring schedule, if you have one, stays in place."}{" "}
+                Your saved card stays on file for future bookings — email us any time to have it removed.
+              </p>
+            )}
+            {data.state === "awaiting_confirmation" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <p className="text-foreground font-semibold mb-1">Next step is ours.</p>
+                <p className="text-sm text-muted-foreground">
+                  Your card is saved — $0 charged today.
+                  {data.confirm_by ? <> We&apos;ll confirm your cleaner and arrival window by <strong>{data.confirm_by}</strong>.</> : " We'll confirm your cleaner and arrival window by email within one business day."}
+                </p>
+                {data.scope_review_needed && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    We may check a couple of scope details with you before confirming. Your agreed
+                    price won&apos;t change unless you agree to a change.
+                  </p>
+                )}
+              </div>
+            )}
+            {data.report_preparing && data.state !== "report_sent" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <p className="text-foreground font-semibold mb-1">Your cleaning is complete.</p>
+                <p className="text-sm text-muted-foreground">
+                  We&apos;re preparing your photo report. Your review period has not started —
+                  it begins only when the report reaches you.
+                </p>
+              </div>
+            )}
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") ? (
+              <section id="report" className="scroll-mt-28">
+                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} onChanged={() => void load()} />
+              </section>
+            ) : (
+              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+                <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+              </section>
+            )}
+
+            {rows.length > 0 && (
+              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
+                <dl className="space-y-1.5">
+                  {rows.map(([k, v]) => (
+                    <div key={k} className="flex justify-between gap-4 text-sm">
+                      <dt className="text-muted-foreground">{k}</dt>
+                      <dd className="font-semibold text-right">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
+
+            {data.state === "report_sent" && data.has_card && data.card_last4 && (
+              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
+                <p className="text-sm">
+                  Card we&apos;ll charge: <strong>{data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••{data.card_last4}</strong>
+                  {" · "}
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link>
+                </p>
+              </div>
+            )}
+
+            {(data.state === "card_needed" || data.state === "card_failed") && (
+              <div className="text-center mb-8">
+                <Button variant="hero" size="lg" asChild>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Save card — $0 today</Link>
+                </Button>
+              </div>
+            )}
+
+            {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">
+                {data.cleaner.photo ? (
+                  <img src={data.cleaner.photo} alt={data.cleaner.name} className="w-16 h-16 rounded-full object-cover border border-border" />
+                ) : (
+                  <span className="w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0">
+                    <User className="w-8 h-8 text-sage-foreground" aria-hidden="true" />
+                  </span>
+                )}
+                <div className="text-left">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Your cleaner</p>
+                  <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
+                  {data.cleaner.phone && (
+                    <p className="text-sm">
+                      <a className="underline" href={`tel:${data.cleaner.phone.replace(/\D/g, "")}`}>{data.cleaner.phone}</a>
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">
+                    An independent cleaning professional matched to your home by Gatehouse. If your
+                    cleaner ever changes, we tell you before the visit — never a surprise stranger.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {(data.state === "confirmed" || data.state === "awaiting_confirmation") && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-2">Before your visit</h2>
+                <ul className="list-disc pl-5 space-y-1 text-sm text-foreground">
+                  <li>Tidy surfaces so the visit goes to cleaning, not sorting.</li>
+                  <li>Secure pets, or tell us below where they&apos;ll be.</li>
+                  <li>Entry: after confirmation, choose below how your cleaner gets in — you can be home, have someone meet them, or arrange entry.</li>
+                  <li>You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.</li>
+                  <li>If anything about the arrival changes, we email you the same day.</li>
+                </ul>
+                <p className="text-sm text-muted-foreground mt-3">
+                  If we can&apos;t get in: we re-check your instructions, try to reach you, and wait
+                  before marking the visit missed. A visit we can&apos;t enter is charged as a full
+                  visit under our Terms — so clear instructions really help.
+                </p>
+              </div>
+            )}
+
+                        {data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Dates that work for us</h2>
                 <div className="flex flex-wrap gap-2">

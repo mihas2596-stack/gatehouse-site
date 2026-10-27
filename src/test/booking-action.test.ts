@@ -145,3 +145,4 @@ describe("booking-action client_link", () => {
     }
   });
 });
+
