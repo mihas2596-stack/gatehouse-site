@@ -501,11 +501,11 @@ const Quote = () => {
   const includedAddons = ADDONS_INCLUDED_IN[service];
   // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
   const priceBlockAddons = [
-    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +$${fmt$(dispPrice(ADDONS.insideOven.price))}` : "",
-    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +$${fmt$(dispPrice(ADDONS.insideFridge.price))}` : "",
-    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +$${fmt$(dispPrice(ADDONS.insideCabinets.price))}` : "",
-    interiorWindows > 0 ? `${interiorWindows} interior windows +$${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))}` : "",
-    pets ? `Pets +$${fmt$(dispPrice(ADDONS.pets.price))}` : "",
+    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +${fmt$(dispPrice(ADDONS.insideOven.price))}` : "",
+    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +${fmt$(dispPrice(ADDONS.insideFridge.price))}` : "",
+    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +${fmt$(dispPrice(ADDONS.insideCabinets.price))}` : "",
+    interiorWindows > 0 ? `${interiorWindows} interior windows +${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))}` : "",
+    pets ? `Pets +${fmt$(dispPrice(ADDONS.pets.price))}` : "",
   ].filter(Boolean).join(", ");
 
   return (
@@ -1030,7 +1030,7 @@ const Quote = () => {
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
                     <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                      <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? `{fmt$(breakdown.recurring_total)} per visit, every other week` : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? `, then {fmt$(breakdown.recurring_total)} every other week` : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
+                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
                   </dl>

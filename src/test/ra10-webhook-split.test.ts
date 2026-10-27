@@ -167,6 +167,9 @@ describe("RA10 webhook obligation split", () => {
   it("a cleaning webhook still pays the cleaning and receipts $200", async () => {
     storeMeta["gh_state"] = "report_sent";
     row["status"] = "report_sent";
+    // N08: the webhook pre-verifies against the row's PINNED amount —
+    // a row without one is not a verified cleaning obligation.
+    row["amount_cents"] = 20000;
     const res = response();
     await handler(signedReq(cleaningEvent("evt_clean_1")) as never, res as never);
     expect(res.code).toBe(200);

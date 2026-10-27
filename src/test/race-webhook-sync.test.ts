@@ -38,7 +38,7 @@ function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[]
   for (const [k, v] of u.searchParams.entries()) {
     if (k === "order" || k === "limit" || k === "select") continue;
     if (v.startsWith("eq.")) out = out.filter((r) => String(r[k] ?? "") === decodeURIComponent(v.slice(3)));
-    if (v.startsWith("neq.")) out = out.filter((r) => String(r[k] ?? "") !== decodeURIComponent(v.slice(4)));
+    if (v.startsWith("neq.")) out = out.filter((r) => r[k] !== null && r[k] !== undefined && String(r[k]) !== decodeURIComponent(v.slice(4)));
     if (v === "is.null") out = out.filter((r) => r[k] === null || r[k] === undefined);
   }
   if (u.searchParams.get("order")?.startsWith("created_at.desc")) {
@@ -113,10 +113,11 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
-      return res(201, {});
+      return res(201, [body]);
     }
     if (method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};

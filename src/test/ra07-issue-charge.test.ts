@@ -39,7 +39,7 @@ function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[]
   for (const [k, v] of u.searchParams.entries()) {
     if (k === "order" || k === "limit" || k === "select") continue;
     if (v.startsWith("eq.")) out = out.filter((r) => String(r[k] ?? "") === decodeURIComponent(v.slice(3)));
-    if (v.startsWith("neq.")) out = out.filter((r) => String(r[k] ?? "") !== decodeURIComponent(v.slice(4)));
+    if (v.startsWith("neq.")) out = out.filter((r) => r[k] !== null && r[k] !== undefined && String(r[k]) !== decodeURIComponent(v.slice(4)));
     if (v === "is.null") out = out.filter((r) => r[k] === null || r[k] === undefined);
     if (v.startsWith("in.(") && v.endsWith(")")) {
       const set = new Set(v.slice(4, -1).split(","));
@@ -158,10 +158,11 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
-      return res(201, {});
+      return res(201, [body]);
     }
     if (method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
@@ -270,7 +271,7 @@ describe("RA07 issue vs charge barrier", () => {
     expect(evts.some((e) => e.event === "payment_succeeded")).toBe(true);
   });
 
-  it("issue first: the charge is blocked outright, no intent created", async () => {
+  it("issue first: a non-resolving charge is blocked outright, no intent created", async () => {
     const sentAt = sentWorld();
     const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
     const issue = await call(reportHandler, {
@@ -282,14 +283,41 @@ describe("RA07 issue vs charge barrier", () => {
     // response carries payment_in_flight: true).
     expect(issue.body["payment_in_flight"]).toBeUndefined();
     expect(resendSubjects).toContain("We received your report — the charge is paused");
+    // An owner charge is NOT the client's resolve-and-pay consent:
+    // the open dispute blocks it outright, creates no intent, and
+    // leaves the dispute open.
+    const charge = await call(bookingAction, {
+      method: "POST",
+      headers: { authorization: AUTH, origin: "https://www.gatehousehomecleaning.com" },
+      body: { action: "charge", booking_id: BID, amount_cents: 20000 },
+    });
+    expect(charge.code).toBe(409);
+    expect(charge.body["error"]).toBe("issue_open");
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["status"]).toBe("report_sent");
+    expect(rows[0]["issue_open"]).toBe(true);
+  });
+
+  it("issue first, then client Approve: N05 resolve-and-pay resolves the dispute and charges once", async () => {
+    const sentAt = sentWorld();
+    const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
+    const issue = await call(reportHandler, {
+      method: "POST", headers: {},
+      body: { bt, action: "issue", room: "Kitchen", reason: "Missed spot" },
+    });
+    expect(issue.code).toBe(200);
     const approve = await call(reportHandler, {
       method: "POST", headers: {},
       body: { bt, action: "approve", seen_publication_id: sentAt },
     });
-    expect(approve.code).toBe(409);
-    expect(approve.body["error"]).toBe("issue_open");
-    expect(piCalls).toHaveLength(0);
-    expect(rows[0]["status"]).toBe("report_sent");
+    expect(approve.code).toBe(200);
+    expect(approve.body["state"]).toBe("paid");
+    expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
+    expect(rows[0]["status"]).toBe("paid");
+    expect(rows[0]["issue_open"]).toBe(false);
+    // issue_ever stays true: the timer never returns for this visit.
+    expect(rows[0]["issue_ever"]).toBe(true);
+    expect(evts.some((e) => e.event === "issue_resolved" && (e.detail as Record<string, unknown>)?.["via"] === "client_resolve_and_pay")).toBe(true);
   });
 
   it("two concurrent Approves charge exactly once (idempotent key + paid-write CAS)", async () => {

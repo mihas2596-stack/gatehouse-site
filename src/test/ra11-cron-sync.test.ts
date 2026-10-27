@@ -2,9 +2,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import autoChargeHandler from "../../api/auto-charge";
 
-// RA11: the cron's sync-recovery pass repairs a Stripe success whose
-// row write was lost (meta paid, row not paid) WITHOUT a new charge:
-// the row is mirrored from gh_last_payment and counted as synced.
+// RA11 (N08): shared Stripe customer metadata is NO LONGER proof of
+// payment. Sync-recovery mirrors a row to paid ONLY when the named
+// intent is verified at Stripe (this booking, this customer, pinned
+// amount, USD, cleaning kind, succeeded) — never from meta alone,
+// and it never creates a new charge.
 
 const BID = "bid-ra11-1";
 const ROW_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -72,6 +74,12 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       }
       return res(200, { ...cust, metadata: cust.metadata });
     }
+    const piM = u.pathname.match(/^\/v1\/payment_intents\/(pi_[^/]+)$/);
+    if (piM && method === "GET") {
+      const found = (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents?.[piM[1]];
+      if (found) return res(200, found);
+      return res(404, { error: { message: "not found" } });
+    }
     if (u.pathname === "/v1/payment_intents" && method === "POST") {
       piCalls.push("created");
       return res(200, { id: "pi_new_1", status: "succeeded" });
@@ -93,8 +101,9 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
       return res(201, {});
     }
@@ -136,7 +145,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("RA11 cron sync recovery", () => {
-  it("meta paid + row payment_pending mirrors the row, charges nothing", async () => {
+  it("meta paid alone does NOT sync: no verified intent, row stays payment_pending, charges nothing", async () => {
     const sentAt = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
     rows = [{
       id: ROW_ID, booking_id: BID, status: "payment_pending", report_status: "sent",
@@ -155,8 +164,44 @@ describe("RA11 cron sync recovery", () => {
       },
     }];
     evts = [
-      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: sentAt },
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
     ];
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["ok"]).toBe(true);
+    expect(r.body["charged"]).toBe(0);
+    expect(r.body["synced"]).toBe(0);
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["status"]).toBe("payment_pending");
+    expect(rows[0]["payment_intent_id"]).toBe(null);
+    expect(evts.some((e) => e.event === "payment_succeeded")).toBe(false);
+  });
+
+  it("verified succeeded intent DOES sync: row mirrors to paid, charges nothing", async () => {
+    const sentAt = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+    rows = [{
+      id: ROW_ID, booking_id: BID, status: "payment_pending", report_status: "sent",
+      amount_cents: 20000, visit_date: "2027-01-15", window: "midday",
+      issue_open: false, issue_ever: false, report_bounced: false,
+      report_sent_at: sentAt, payment_intent_id: null,
+    }];
+    customers = [{
+      id: "cus_ra11_1",
+      metadata: {
+        gh_booking_id: BID, gh_state: "paid", gh_payment_method: "pm_ra11_1",
+        gh_first_price_cents: "20000", gh_report_sent_at: sentAt,
+        gh_report_version: "1", gh_report_amount_cents: "20000",
+        gh_last_payment: "pi_sync_1", gh_paid_at: sentAt,
+        gh_receipt_email_id: "email_receipt_1",
+      },
+    }];
+    evts = [
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents = {
+      pi_sync_1: { id: "pi_sync_1", status: "succeeded", amount: 20000, currency: "usd", customer: "cus_ra11_1", metadata: { gh_booking_id: BID } },
+    };
     const r = response();
     await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
     expect(r.code).toBe(200);
@@ -168,6 +213,7 @@ describe("RA11 cron sync recovery", () => {
     expect(rows[0]["payment_intent_id"]).toBe("pi_sync_1");
     expect(evts.some((e) => e.event === "payment_succeeded"
       && (e.detail as Record<string, unknown>)?.["via"] === "timer_sync_recovery")).toBe(true);
+    delete (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents;
   });
 
   it("an already-paid row is left alone by the sync pass", async () => {

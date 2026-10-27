@@ -55,16 +55,37 @@ function eqFilters(u: URL): Array<[string, string]> {
 
 function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[] {
   let out = [...list];
-  for (const [k, v] of eqFilters(u)) out = out.filter((r) => String(r[k] ?? "") === v);
   for (const [k, v] of u.searchParams.entries()) {
-    if (v.startsWith("in.(") && v.endsWith(")")) {
-      const set = new Set(v.slice(4, -1).split(","));
-      out = out.filter((r) => set.has(String(r[k] ?? "")));
+    if (k === "order" || k === "limit" || k === "select") continue;
+    if (k === "or") {
+      const inner = v.replace(/^\(|\)$/g, "");
+      out = out.filter((r) => inner.split(",").some((c) => {
+        const d1 = c.indexOf("."); const rest = c.slice(d1 + 1); const d2 = rest.indexOf(".");
+        if (d1 <= 0 || d2 <= 0) return false;
+        const field = c.slice(0, d1), op = rest.slice(0, d2), val = decodeURIComponent(rest.slice(d2 + 1));
+        if (op === "eq") return String(r[field] ?? "") === val;
+        if (op === "neq") return r[field] !== null && r[field] !== undefined && String(r[field]) !== val;
+        if (op === "is") return val === "null" ? r[field] === null || r[field] === undefined : r[field] !== null && r[field] !== undefined;
+        return false;
+      }));
+      continue;
     }
-    if (v.startsWith("lt.")) out = out.filter((r) => String(r[k] ?? "") < v.slice(3));
+    const dot = v.indexOf(".");
+    if (dot <= 0) continue;
+    const op = v.slice(0, dot), val = decodeURIComponent(v.slice(dot + 1));
+    if (op === "eq") out = out.filter((r) => String(r[k] ?? "") === val);
+    else if (op === "neq") out = out.filter((r) => r[k] !== null && r[k] !== undefined && String(r[k]) !== val);
+    else if (op === "is") out = out.filter((r) => val === "null" ? r[k] === null || r[k] === undefined : r[k] !== null && r[k] !== undefined);
+    else if (op === "lt") out = out.filter((r) => String(r[k] ?? "") < val);
+    else if (op === "lte") out = out.filter((r) => String(r[k] ?? "") <= val);
+    else if (op === "gt") out = out.filter((r) => String(r[k] ?? "") > val);
+    else if (op === "gte") out = out.filter((r) => String(r[k] ?? "") >= val);
+    else if (op === "in") out = out.filter((r) => val.replace(/^\(|\)$/g, "").split(",").includes(String(r[k] ?? "")));
   }
-  if (u.searchParams.get("order")?.startsWith("created_at.desc")) {
-    out.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+  const order = u.searchParams.get("order");
+  if (order) {
+    const [field, dir] = order.split(".");
+    out.sort((a, b) => { const cmp = String(a[field] ?? "").localeCompare(String(b[field] ?? "")); return dir === "desc" ? -cmp : cmp; });
   }
   const limit = u.searchParams.get("limit");
   if (limit) out = out.slice(0, parseInt(limit, 10));
@@ -194,14 +215,15 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
       if (table === "gh_visits") {
         rows.push(body);
-        return res(201, body);
+        return res(201, [body]);
       }
-      return res(201, {});
+      return res(201, [body]);
     }
     if (method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
@@ -221,7 +243,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
         const arr = table === "gh_photos" ? photos : rows;
         arr.splice(arr.indexOf(d), 1);
       }
-      return res(200, {});
+      return res(200, doomed);
     }
   }
   return res(404, { error: { message: "route not stubbed" } });

@@ -27,13 +27,13 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
-  dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent,
+  dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent, logEventStrict,
   newCleanerToken, hashToken, tokenHashEquals, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
-import { reconcileIntent, confirmIntent } from "./_payment_intent.js";
+import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { deleteAccess, revokeAccessForCleanerChange, saveAccessNote } from "./_visit_access.js";
 import {
@@ -359,11 +359,15 @@ export async function sendReceiptEmailOnce(
   const isClaim = (v: string | null | undefined) => typeof v === "string" && v.startsWith("claim:");
   const claimAgeMs = (v: string) => Date.now() - (parseInt(v.slice("claim:".length), 10) || 0);
   if (dbConfigured()) {
-    const rows = await dbSelect<{ id: string; receipt_email_id?: string | null }>(
+    // N13: an unreadable DB must fail closed (no send), never degrade
+    // to a claim-less send — dbSelect hides errors as "no rows", so
+    // the strict variant is the only one that can tell the two apart.
+    const strict = await dbSelectStrict<{ id: string; receipt_email_id?: string | null }>(
       "gh_visits",
       `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
     );
-    const row = rows[0];
+    if (!strict.ok) return false;
+    const row = strict.rows[0];
     if (row) {
       const current = row.receipt_email_id ?? null;
       if (current && !isClaim(current)) return true;
@@ -565,6 +569,7 @@ type VisitRowLite = {
   status: string;
   report_status: string;
   report_sent_at: string | null;
+  issue_open?: boolean | null;
   checklist: unknown;
   visit_date: string | null;
 };
@@ -1146,7 +1151,8 @@ export default async function handler(req: Req, res: Res) {
           proposed_date: meta["gh_proposed_date"] ?? "",
           alt_dates: meta["gh_alt_dates"] ?? "",
           cleaner_name: meta["gh_cleaner_name"] ?? "",
-          access_notes: meta["gh_access_notes"] ?? "",
+          // access_notes intentionally absent: the legacy shared-
+          // metadata channel is closed; entry lives in gh_visit_access.
           no_photo_zones: meta["gh_no_photo_zones"] ?? "",
           issue_room: meta["gh_issue_room"] ?? "",
           issue_reason: meta["gh_issue_reason"] ?? "",
@@ -1360,6 +1366,18 @@ export default async function handler(req: Req, res: Res) {
           already_confirmed: true,
         });
       }
+      // N09: revoke BEFORE the assignment lands, verified. The old
+      // order (assign first, revoke best-effort after) let an A→B
+      // change with a failed revoke keep the old secret bound to A —
+      // and a later A reassignment re-exposed it. A failed revoke now
+      // aborts the assignment entirely.
+      if (changed) {
+        const revoked = await revokeAccessForCleanerChange(row.id, cleanerId);
+        if (!revoked) {
+          logErr("assign_confirm", "entry revoke failed — assignment aborted");
+          return json(502, { ok: false, error: "entry_revoke_failed" });
+        }
+      }
       // Save FIRST: one patch for assignment + confirmation, so the
       // record can never show one without the other. Report state is
       // untouched: a repair keeps a submitted report in review.
@@ -1376,7 +1394,6 @@ export default async function handler(req: Req, res: Res) {
         return json(502, { ok: false, error: "db_error" });
       }
       if (changed) {
-        await revokeAccessForCleanerChange(row.id, cleanerId);
         await logEvent(row.id, bookingId, "owner", "entry_revoked");
       }
       // Link: a new or changed person gets a fresh v2 link (old one
@@ -1655,121 +1672,14 @@ export default async function handler(req: Req, res: Res) {
         }
         return json(502, { ok: false, error: outcome.error });
       }
-      // Legacy path (no visit row): metadata gates, with RA03/RA02
-      // hardening — a failed search never means "no payment", and a
-      // found intent is verified before it is confirmed.
-      if (issueOpen) {
-        logErr("charge", "blocked: issue open");
-        return json(409, { ok: false, error: "issue_open" });
-      }
-      if (state !== "approved") {
-        logErr("charge", `blocked: state=${state}, need approved`);
-        return json(409, { ok: false, error: "not_approved" });
-      }
-      const paymentMethod = meta["gh_payment_method"];
-      if (!paymentMethod) {
-        logErr("charge", "blocked: no saved payment method");
-        return json(409, { ok: false, error: "no_payment_method" });
-      }
-      const quotedCents = parseInt(meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "", 10);
-      if (!Number.isFinite(quotedCents) || quotedCents <= 0) {
-        logErr("charge", "blocked: no quoted price on record");
-        return json(409, { ok: false, error: "quote_missing" });
-      }
-      if (amountCents !== quotedCents) {
-        logErr("charge", `blocked: amount ${amountCents} != quoted ${quotedCents}`);
-        return json(409, { ok: false, error: "amount_mismatch" });
-      }
-      const fresh = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-      const freshMeta = ((fresh.data["metadata"] as Record<string, string> | undefined) ?? {});
-      if (freshMeta["gh_issue_open"] === "1") {
-        logErr("charge", "blocked on re-read: issue open");
-        return json(409, { ok: false, error: "issue_open" });
-      }
-      if ((freshMeta["gh_state"] ?? "") !== "approved") {
-        logErr("charge", `blocked on re-read: state=${freshMeta["gh_state"] ?? "?"}, need approved`);
-        return json(409, { ok: false, error: "not_approved" });
-      }
-      const reportVersion = parseInt(meta["gh_report_version"] ?? "1", 10) || 1;
-      const idemKey = `charge_${bookingId}_v${reportVersion}`;
-      const rec = await reconcileIntent(STRIPE_SECRET_KEY, bookingId, [], {
-        amountCents, currency: "usd", customerId: customer.id,
-      });
-      if (rec.state === "unknown") return json(502, { ok: false, error: "payment_unknown" });
-      if (rec.state === "mismatch") return json(409, { ok: false, error: "payment_intent_mismatch" });
-      if (rec.state === "succeeded") {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "paid",
-          "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": rec.intent.id,
-        });
-        const adoptedReceipt = await sendReceiptEmailOnce(
-          STRIPE_SECRET_KEY, customer.id,
-          { ...meta, gh_report_amount_cents: String(amountCents) },
-          bookingId,
-        );
-        log("charge", { booking: bookingId, status: "adopted", payment_intent: rec.intent.id });
-        return json(200, { ok: true, state: "paid", payment_intent: rec.intent.id, receipt_sent: adoptedReceipt, adopted: true });
-      }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "payment_pending",
-        "metadata[gh_report_version]": String(reportVersion),
-      });
-      if (rec.state === "live" && rec.intent.status === "processing") {
-        return json(409, { ok: false, error: "payment_processing" });
-      }
-      // Legacy confirm key: no journal exists to number attempts, so
-      // the key is derived from the payment method itself — a new card
-      // gets a new key (no idempotency clash), the same card replays.
-      const legacyConfirmKey = rec.state === "live"
-        ? `${idemKey}_confirm_${createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12)}`
-        : idemKey;
-      const pi = rec.state === "live"
-        ? await confirmIntent(STRIPE_SECRET_KEY, rec.intent.id, paymentMethod, legacyConfirmKey)
-        : await stripePost(
-        STRIPE_SECRET_KEY,
-        "/payment_intents",
-        {
-          amount: String(amountCents),
-          currency: "usd",
-          customer: customer.id,
-          payment_method: paymentMethod,
-          off_session: "true",
-          confirm: "true",
-          description: `Gatehouse cleaning — booking ${bookingId}`,
-          "metadata[gh_booking_id]": bookingId,
-          "metadata[gh_report_version]": String(reportVersion),
-        },
-        idemKey,
-      );
-      if (!pi.ok) {
-        const errMsg = ((pi.data["error"] as { message?: string } | undefined)?.message ?? "charge failed");
-        logErr("charge", `stripe ${pi.status}: ${errMsg}`);
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "payment_failed",
-        });
-        return json(402, { ok: false, error: "payment_failed", detail: errMsg });
-      }
-      const piStatus = pi.data["status"];
-      if (piStatus === "succeeded") {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "paid",
-          "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
-        });
-        const receiptSent = await sendReceiptEmailOnce(
-          STRIPE_SECRET_KEY, customer.id,
-          { ...meta, gh_report_amount_cents: String(amountCents) },
-          bookingId,
-        );
-        log("charge", { booking: bookingId, status: "succeeded", receiptSent });
-        return json(200, { ok: true, state: "paid", payment_intent: pi.data["id"], receipt_sent: receiptSent });
-      }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "payment_failed",
-      });
-      log("charge", { booking: bookingId, status: String(piStatus) });
-      return json(402, { ok: false, error: "payment_requires_action", status: piStatus });
+      // No visit row: there is no durable obligation to charge
+      // (N08/RA01). Shared customer metadata is not proof of amount,
+      // consent, payment or absence of a dispute, so a booking without
+      // a row is NOT chargeable here — it needs an explicit migration
+      // record first, not a metadata charge. A DB read failure would
+      // have produced the same shape, so it fails closed too.
+      logErr("charge", "blocked: no visit row for booking");
+      return json(409, { ok: false, error: "no_visit_row" });
     }
 
     if (action === "send_report") {
@@ -1921,12 +1831,34 @@ export default async function handler(req: Req, res: Res) {
       // it, so a changed value means another send already claimed this
       // slot. The loser returns the existing result, no second email,
       // no second report_sent event. Legacy (no row) keeps the guard.
+      // N07 journal repair: a previous send emailed the report and
+      // claimed the row, but its report_sent journal event was lost.
+      // The timer requires that event, so repair it WITHOUT re-emailing
+      // (the Resend message id in metadata proves the email went out).
+      if (visitRow && visitRow.report_status === "sent" && meta["gh_report_email_id"]
+        && !events.some((e) => e.event === "report_sent")) {
+        const repaired = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
+          version: parseInt(meta["gh_report_version"] ?? "1", 10) || 1,
+          email_sent: true, photos: 0, journal_repaired: true,
+        });
+        if (repaired) {
+          return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: true, journal_repaired: true });
+        }
+        return json(502, { ok: false, error: "journal_failed" });
+      }
       if (visitRow) {
+        // N01: the CAS must check the PAYMENT status too, atomically.
+        // The old resend CAS matched only report_sent_at, so a resend
+        // that read the pre-charge state could overwrite a charge's
+        // payment_pending claim back to report_sent — orphaning the
+        // in-flight intent while a new Approve minted a second one
+        // (the audit's $200 × 2). A first publish additionally
+        // requires the row NOT to be payment_pending.
         const casMatch = visitRow.report_status === "submitted"
-          ? `id=eq.${visitRow.id}&report_status=eq.submitted`
+          ? `id=eq.${visitRow.id}&report_status=eq.submitted&status=neq.payment_pending`
           : visitRow.report_sent_at
-            ? `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at)}`
-            : `id=eq.${visitRow.id}&report_status=eq.sent`;
+            ? `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at)}&status=eq.report_sent`
+            : `id=eq.${visitRow.id}&report_status=eq.sent&status=eq.report_sent`;
         const claimed = await dbUpdateCount("gh_visits", casMatch, {
           report_status: "sent",
           report_sent_at: sentAt,
@@ -1936,6 +1868,16 @@ export default async function handler(req: Req, res: Res) {
           issue_open: false,
         });
         if (claimed === 0) {
+          // N01: a lost CAS is not automatically "already sent". If a
+          // payment is in flight, say so honestly; only a row that is
+          // already sent (and not pending) is an existing result.
+          const freshVisit = await latestVisit(bookingId);
+          if (freshVisit?.status === "payment_pending") {
+            return json(409, {
+              ok: false, error: "payment_in_flight",
+              hint: "A payment for this visit is in progress. Wait for it to settle, then re-send if still needed.",
+            });
+          }
           return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
         }
         // RA15: claimed === -1 means the DB could not be read for the
@@ -2038,26 +1980,74 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
-      if (!emailSent) {
-        // The report email did not go out: the client cannot see the
-        // report, so the 24h auto-charge clock must NOT run on it.
-        // Reuse the bounce block flag — auto-charge and the reminder
-        // pass both skip blocked reports; the operator re-sends.
+      if (!emailSent && visitRow) {
+        // N07: the report email did not go out, so the 24h clock must
+        // NOT run on this publication. The bounce block is a VERIFIED
+        // row write; if even that fails, the publication itself is
+        // rolled back to its pre-CAS state (no report_sent journal
+        // event is written either way) and the operator gets an error
+        // to retry — never a silent "sent" row the client never saw.
+        const bounced = await dbUpdateCount("gh_visits", `id=eq.${visitRow.id}`, {
+          report_bounced: true,
+        });
+        if (bounced !== 1) {
+          await dbUpdateCount(
+            "gh_visits",
+            `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(sentAt)}&status=eq.report_sent`,
+            {
+              report_status: visitRow.report_status,
+              report_sent_at: visitRow.report_sent_at,
+              status: visitRow.status,
+              issue_open: visitRow.issue_open === true,
+            },
+          );
+          await logEvent(visitRow.id, bookingId, "system", "report_delivery_failed", {
+            version, reason: "email_failed_bounce_write_failed",
+          });
+          logErr("send_report", "email not sent and bounce write failed — publication rolled back");
+          return json(502, { ok: false, error: "db_error" });
+        }
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_report_bounced]": "1",
         });
-        logErr("send_report", "email not sent — auto-charge clock blocked");
+        await logEvent(visitRow.id, bookingId, "system", "report_delivery_failed", {
+          version, reason: "email_not_sent",
+        });
+        logErr("send_report", "email not sent — auto-charge clock blocked, publication not journaled");
+        return json(502, {
+          ok: false, error: "report_email_failed",
+          hint: "The report email did not go out, so the 24h clock is blocked. Re-send the report.",
+        });
+      }
+      if (!emailSent && !visitRow) {
+        // Legacy (no row): nothing durable to block the clock on, so
+        // the metadata bounce flag is the only block — set it and
+        // report the failure honestly instead of a silent success.
+        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+          "metadata[gh_report_bounced]": "1",
+        });
+        logErr("send_report", "email not sent (legacy, no row)");
+        return json(502, { ok: false, error: "report_email_failed" });
       }
       if (visitRow) {
         // The publication itself was already claimed by the CAS above;
         // this only records the email outcome of the winning send.
+        // Email success is proven here (emailSent true), so the
+        // journal event carries email_sent: true — the timer's
+        // delivery proof (N07). If the journal write fails, the
+        // operator retries and the repair path above heals it
+        // without a duplicate email.
         await dbUpdate("gh_visits", `id=eq.${visitRow.id}`, {
           report_email_id: reportEmailId || null,
-          report_bounced: !emailSent,
+          report_bounced: false,
         });
-        await logEvent(visitRow.id, bookingId, "owner", "report_sent", {
-          version, email_sent: emailSent, photos: finalPhotos.length,
+        const journaled = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
+          version, email_sent: true, photos: finalPhotos.length,
         });
+        if (!journaled) {
+          logErr("send_report", "email sent but report_sent journal failed — retry repairs it");
+          return json(502, { ok: false, error: "journal_failed", email_sent: true });
+        }
         if (issueIsOpen) {
           await logEvent(visitRow.id, bookingId, "owner", "issue_resolved", {
             via: "report_resend", note: "Resolved by owner decision together with the re-sent report.",
@@ -2065,8 +2055,17 @@ export default async function handler(req: Req, res: Res) {
         }
       }
       if (visitRow) {
-        await deleteAccess(visitRow.id);
-        await logEvent(visitRow.id, bookingId, "system", "entry_revoked");
+        // Entry cleanup after a successful publish: the cleaner no
+        // longer needs access. A cleanup failure is journaled but
+        // does not fail the publish — the sent report_status itself
+        // gates the cleaner view, so a leftover row cannot re-expose
+        // the secret (N09).
+        const accessDeleted = await deleteAccess(visitRow.id);
+        if (!accessDeleted) {
+          await logEvent(visitRow.id, bookingId, "system", "entry_revoke_failed", { via: "send_report" });
+        } else {
+          await logEvent(visitRow.id, bookingId, "system", "entry_revoked");
+        }
       }
       log("send_report", { booking: bookingId, version, photos: finalPhotos.length, emailSent });
       return json(200, {
@@ -2180,6 +2179,16 @@ export default async function handler(req: Req, res: Res) {
       const rowCleanerId = (row as unknown as { cleaner_id?: string | null } | null)?.cleaner_id ?? null;
       const changed = Boolean(prevCleaner) && (rosterId && rowCleanerId ? rowCleanerId !== rosterId : prevCleaner !== name);
       const firstAssignment = !prevCleaner;
+      // N09: revoke BEFORE any cleaner change lands (profile, name,
+      // link). A failed revoke aborts the whole assignment, so a
+      // failed A→B change can never leave A's secret re-exposable.
+      if (row && changed) {
+        const revoked = await revokeAccessForCleanerChange(row.id, rosterId || null);
+        if (!revoked) {
+          logErr("set_cleaner", "entry revoke failed — assignment aborted");
+          return json(502, { ok: false, error: "entry_revoke_failed" });
+        }
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
@@ -2252,7 +2261,6 @@ export default async function handler(req: Req, res: Res) {
       // confirmation email itself).
       let cleanerEmailSent = false;
       if (row && changed) {
-        await revokeAccessForCleanerChange(row.id, rosterId || null);
         await logEvent(row.id, bookingId, "owner", "entry_revoked");
       }
       if (row && (changed || (!prevCleaner && wasConfirmed))) {
@@ -2296,73 +2304,226 @@ export default async function handler(req: Req, res: Res) {
     }
 
     if (action === "charge_fee") {
-      // Collect the late-cancellation fee recorded by the client cancel
-      // flow (api/visit). P08: the amount and the charged flag come from
-      // THIS booking's own journal, never from shared customer metadata —
-      // another booking's fee or flag must not leak into this one.
+      // Cancellation fee as its OWN durable obligation (RA, N08):
+      // own pinned amount, own state, own intent, own recovery.
+      // It never shares the cleaning payment's idempotency key, its
+      // journal events, or gh_last_payment — writing a fee intent id
+      // into gh_last_payment was exactly how the timer sync once
+      // marked an unpaid cleaning "paid" from another booking's fee.
+      // A card decline or an unknown outcome is never "fixed" by
+      // blindly creating a new fee payment: decline is an established
+      // failure (fee_failed, retry allowed), unknown keeps the claim
+      // (fee_pending) and the next attempt reconciles first.
       const cancelled = row ? row.status === "cancelled" : state === "cancelled";
       if (!cancelled) {
         return json(409, { ok: false, error: "not_cancelled" });
       }
+      if (!row) {
+        // No row, no durable fee record: shared metadata alone never
+        // authorizes a fee charge (same rule as the cleaning charge).
+        return json(409, { ok: false, error: "no_fee_record" });
+      }
       const cancelEv = events.find((e) => e.event === "visit_cancelled");
-      let feeCents = typeof cancelEv?.detail?.["fee_cents"] === "number"
+      const feeCents = typeof cancelEv?.detail?.["fee_cents"] === "number"
         ? (cancelEv.detail["fee_cents"] as number)
         : NaN;
-      if (!Number.isFinite(feeCents) && !row) {
-        // Legacy no-row booking: no journal exists, so the shared
-        // metadata fee is the only record. Row-backed bookings never
-        // fall back — a missing event there means no recorded fee
-        // (fail closed), which is exactly what blocks the B13 leak.
-        const metaFee = parseInt(meta["gh_cancel_fee_cents"] ?? "", 10);
-        feeCents = Number.isFinite(metaFee) ? metaFee : NaN;
-      }
       if (!Number.isFinite(feeCents) || feeCents <= 0) {
         return json(409, { ok: false, error: "no_fee_due" });
       }
-      if (events.some((e) => e.event === "fee_charged" || e.event === "cancellation_fee_paid") || (!row && meta["gh_fee_charged"] === "1")) {
+      const feeRowRes = await dbSelectStrict<{ fee_status: string | null; fee_intent_id: string | null }>(
+        "gh_visits",
+        `id=eq.${row.id}&limit=1`,
+      );
+      if (!feeRowRes.ok) return json(502, { ok: false, error: "db_error" });
+      const feeRow = feeRowRes.rows[0] ?? null;
+      if (feeRow?.fee_status === "fee_paid"
+        || events.some((e) => e.event === "fee_charged" || e.event === "cancellation_fee_paid")) {
         return json(200, { ok: true, already: true, fee_cents: feeCents });
       }
       const pm = meta["gh_payment_method"] ?? "";
       if (!pm) return json(409, { ok: false, error: "no_payment_method" });
-      const pi = await stripePost(
-        STRIPE_SECRET_KEY,
-        "/payment_intents",
-        {
-          amount: String(feeCents),
-          currency: "usd",
-          customer: customer.id,
-          payment_method: pm,
-          off_session: "true",
-          confirm: "true",
-          description: `Gatehouse late-cancellation fee — booking ${bookingId}`,
-          "metadata[gh_booking_id]": bookingId,
-          "metadata[gh_kind]": "cancellation_fee",
-        },
-        `fee_${bookingId}`,
+      // Claim the fee obligation: only an unpaid or previously-failed
+      // fee can be claimed; a pending fee is someone else's in-flight
+      // attempt and must not be double-claimed.
+      const claimed = await dbUpdateCount(
+        "gh_visits",
+        `id=eq.${row.id}&or=(fee_status.is.null,fee_status.eq.fee_failed)`,
+        { fee_status: "fee_pending", fee_amount_cents: feeCents },
       );
-      if (pi.ok && pi.data["status"] === "succeeded") {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_fee_charged]": "1",
-          "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
-        });
-        if (row) {
-          await logEvent(row.id, bookingId, "system", "fee_charged", {
-            fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? ""),
-          });
+      if (claimed === 0) {
+        const fresh = await dbSelectStrict<{ fee_status: string | null }>(
+          "gh_visits", `id=eq.${row.id}&limit=1`,
+        );
+        if (fresh.ok && fresh.rows[0]?.fee_status === "fee_paid") {
+          return json(200, { ok: true, already: true, fee_cents: feeCents });
         }
-        // RA10: the fee gets its own receipt (best-effort — a receipt
-        // failure never fails the fee charge itself).
-        try {
-          await sendFeeReceiptEmailOnce(
-            STRIPE_SECRET_KEY, customer.id, bookingId, String(pi.data["id"] ?? ""), feeCents,
-          );
-        } catch { /* best-effort */ }
-        log("charge_fee", { booking: bookingId, feeCents });
-        return json(200, { ok: true, fee_cents: feeCents, payment_intent: String(pi.data["id"] ?? "") });
+        return json(409, { ok: false, error: "fee_processing" });
       }
-      const errMsg = (pi.data["error"] as { message?: string } | undefined)?.message ?? "fee charge failed";
+      if (claimed < 0) return json(502, { ok: false, error: "db_error" });
+      const markFeePaid = async (piId: string): Promise<boolean> => {
+        const n = await dbUpdateCount(
+          "gh_visits",
+          `id=eq.${row.id}&fee_status=eq.fee_pending`,
+          { fee_status: "fee_paid", fee_intent_id: piId },
+        );
+        if (n === 1) return true;
+        const fresh = await dbSelectStrict<{ fee_status: string | null; fee_intent_id: string | null }>(
+          "gh_visits", `id=eq.${row.id}&limit=1`,
+        );
+        return Boolean(fresh.ok && fresh.rows[0]?.fee_status === "fee_paid" && fresh.rows[0]?.fee_intent_id === piId);
+      };
+      const markFeeFailed = async (): Promise<void> => {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { fee_status: "fee_failed" });
+      };
+      // Reconcile the fee obligation first: a known fee intent, or a
+      // search for fee intents of this booking, decides everything.
+      // Any failed read is UNKNOWN — the claim stays pending.
+      let feeIntent: { id: string; status: string; amount: number } | null = null;
+      let feeUnknown = false;
+      const knownFeeId = feeRow?.fee_intent_id ?? null;
+      if (knownFeeId) {
+        const got = await getIntent(STRIPE_SECRET_KEY, knownFeeId);
+        if (got.status === "error") {
+          feeUnknown = true;
+        } else {
+          const mismatch = verifyIntentForObligation(got.intent, {
+            amountCents: feeCents, currency: "usd", customerId: customer.id, bookingId,
+          });
+          if (mismatch && got.intent.metadata?.["gh_kind"] !== "cancellation_fee") {
+            // A non-fee intent id on the fee row is corrupt data, not
+            // a fee payment: refuse, do not adopt it as the fee.
+            await markFeeFailed();
+            return json(409, { ok: false, error: "payment_intent_mismatch" });
+          }
+          if (!mismatch) feeIntent = got.intent;
+        }
+      }
+      if (!feeIntent && !feeUnknown) {
+        const searched = await searchIntents(STRIPE_SECRET_KEY, bookingId);
+        if (searched.status === "error") {
+          feeUnknown = true;
+        } else {
+          const fee = searched.intents
+            .filter((pi) => pi.metadata?.["gh_kind"] === "cancellation_fee")
+            .sort((a, b) => b.created - a.created)[0] ?? null;
+          if (fee) {
+            const mismatch = verifyIntentForObligation(fee, {
+              amountCents: feeCents, currency: "usd", customerId: customer.id, bookingId,
+            });
+            if (!mismatch) feeIntent = fee;
+          }
+        }
+      }
+      if (feeUnknown) {
+        return json(502, { ok: false, error: "payment_unknown" });
+      }
+      if (feeIntent?.status === "succeeded") {
+        if (await markFeePaid(feeIntent.id)) {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+            "metadata[gh_fee_charged]": "1",
+          });
+          await logEvent(row.id, bookingId, "system", "fee_charged", {
+            fee_cents: feeCents, payment_intent: feeIntent.id, adopted: true,
+          });
+          try {
+            await sendFeeReceiptEmailOnce(
+              STRIPE_SECRET_KEY, customer.id, bookingId, feeIntent.id, feeCents,
+            );
+          } catch { /* best-effort */ }
+          return json(200, { ok: true, fee_cents: feeCents, payment_intent: feeIntent.id, adopted: true });
+        }
+        return json(502, { ok: false, error: "payment_unconfirmed" });
+      }
+      if (feeIntent && feeIntent.status === "processing") {
+        return json(409, { ok: false, error: "fee_processing" });
+      }
+      let piId = feeIntent?.id ?? "";
+      let piStatus = "";
+      let piOk = false;
+      if (feeIntent && ["requires_payment_method", "requires_confirmation", "requires_action"].includes(feeIntent.status)) {
+        // Confirm the live fee intent with the CURRENT card. The key
+        // is bound to (booking, intent, card): a card change is a new
+        // attempt, the same card replays the unknown outcome.
+        const methodHash = createHash("sha256").update(pm).digest("hex").slice(0, 12);
+        const feeConfirmKey = `fee_${bookingId}_confirm_${feeIntent.id}_${methodHash}`;
+        await logEvent(row.id, bookingId, "system", "fee_confirm_started", {
+          payment_intent: feeIntent.id, key: feeConfirmKey,
+        });
+        let res: { ok: boolean; status: number; data: Record<string, unknown> };
+        try {
+          res = await confirmIntent(STRIPE_SECRET_KEY, feeIntent.id, pm, feeConfirmKey);
+        } catch {
+          await logEvent(row.id, bookingId, "system", "fee_confirm_attempt", {
+            payment_intent: feeIntent.id, outcome: "unknown",
+          });
+          return json(502, { ok: false, error: "payment_unknown" });
+        }
+        piOk = res.ok;
+        piStatus = String(res.data["status"] ?? "");
+        piId = feeIntent.id;
+        await logEvent(row.id, bookingId, "system", "fee_confirm_attempt", {
+          payment_intent: feeIntent.id, outcome: piOk ? piStatus : "failed",
+        });
+      } else if (!feeIntent) {
+        // No fee intent yet: create exactly one, under the fee's own
+        // idempotency key. A retry after an unknown create finds the
+        // intent by search above instead of creating a second one.
+        let pi: { ok: boolean; status: number; data: Record<string, unknown> };
+        try {
+          pi = await stripePost(
+            STRIPE_SECRET_KEY,
+            "/payment_intents",
+            {
+              amount: String(feeCents),
+              currency: "usd",
+              customer: customer.id,
+              payment_method: pm,
+              off_session: "true",
+              confirm: "true",
+              description: `Gatehouse late-cancellation fee — booking ${bookingId}`,
+              "metadata[gh_booking_id]": bookingId,
+              "metadata[gh_kind]": "cancellation_fee",
+            },
+            `fee_${bookingId}`,
+          );
+        } catch {
+          await logEvent(row.id, bookingId, "system", "fee_create_unknown", { key: `fee_${bookingId}` });
+          return json(502, { ok: false, error: "payment_unknown" });
+        }
+        piOk = pi.ok;
+        piStatus = String(pi.data["status"] ?? "");
+        piId = String(pi.data["id"] ?? "");
+        if (piId) {
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, { fee_intent_id: piId });
+        }
+      }
+      if (piOk && piStatus === "succeeded" && piId) {
+        if (await markFeePaid(piId)) {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+            "metadata[gh_fee_charged]": "1",
+          });
+          await logEvent(row.id, bookingId, "system", "fee_charged", {
+            fee_cents: feeCents, payment_intent: piId,
+          });
+          try {
+            await sendFeeReceiptEmailOnce(
+              STRIPE_SECRET_KEY, customer.id, bookingId, piId, feeCents,
+            );
+          } catch { /* best-effort */ }
+          log("charge_fee", { booking: bookingId, feeCents });
+          return json(200, { ok: true, fee_cents: feeCents, payment_intent: piId });
+        }
+        return json(502, { ok: false, error: "payment_unconfirmed" });
+      }
+      const errMsg = piStatus || "fee charge failed";
+      await markFeeFailed();
+      await logEvent(row.id, bookingId, "system", "fee_failed", { detail: errMsg.slice(0, 200) });
       logErr("charge_fee", errMsg);
-      return json(402, { ok: false, error: "fee_charge_failed", detail: errMsg });
+      return json(402, {
+        ok: false,
+        error: piStatus === "requires_action" ? "payment_requires_action" : "fee_charge_failed",
+        detail: errMsg,
+      });
     }
 
     if (action === "delete_card") {
@@ -2397,7 +2558,9 @@ export default async function handler(req: Req, res: Res) {
       let visit = await latestVisit(bookingId);
       if (!visit) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const created = await dbUpsert<VisitRowLite & { id: string }>(
+        // Insert-or-read (same rule as send-contact): a concurrent
+        // cleaner_link must never merge-overwrite an existing row.
+        const created = await dbInsert<VisitRowLite & { id: string }>(
           "gh_visits",
           {
             booking_id: bookingId,
@@ -2411,10 +2574,9 @@ export default async function handler(req: Req, res: Res) {
             checklist: DEFAULT_CHECKLIST,
             status: "scheduled",
           },
-          "booking_id,visit_no",
         );
-        if (!created) return json(502, { ok: false, error: "db_error" });
-        visit = created;
+        visit = created ?? (await latestVisit(bookingId));
+        if (!visit) return json(502, { ok: false, error: "db_error" });
       }
       const v2 = mintV2Link(visit.id, visit.visit_date);
       if (v2 && (await writeV2Link(visit.id, v2))) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { dbConfigured, dbSelect, dbUpsert, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
 import { mintOwnerLoginToken } from "./_owner_auth.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
@@ -728,17 +728,23 @@ export default async function handler(req: Req, res: Res) {
           for (const z of (extra_zones ?? []).slice(0, 8)) {
             if (typeof z === "string" && z.trim()) rooms.push({ name: z.trim().slice(0, 60), items: [...genericItems] });
           }
-          // M6: insert-only. A retried submission reproduces the same
-          // booking id by design — it must never regress a visit that
-          // has already advanced (merge-duplicates would overwrite the
-          // status and wipe the checklist).
+          // M6/N-upsert: insert-only, never merge. A retried or
+          // concurrent submission reproduces the same booking id by
+          // design — it must never regress a visit that has already
+          // advanced, and must never change its pinned amount.
+          // The old read-then-merge-upsert lost the race: two
+          // concurrent submissions both read "no row" and the second
+          // merge overwrote the first row's amount/status. Now the
+          // unique constraint decides: the insert winner owns the
+          // row, the loser re-reads it unchanged (409 → select).
           const existingRows = await dbSelect<{ id: string }>(
             "gh_visits",
             `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
           );
-          const visitRow = existingRows[0] ?? (await dbUpsert<{ id: string }>(
-            "gh_visits",
-            {
+          let visitRow = existingRows[0] ?? null;
+          let createdByThisCall = false;
+          if (!visitRow) {
+            const inserted = await dbInsert<{ id: string }>("gh_visits", {
               booking_id: bookingId,
               visit_no: 1,
               client_name: (name ?? "").trim() || null,
@@ -755,12 +761,23 @@ export default async function handler(req: Req, res: Res) {
               checklist: { rooms },
               status: "requested",
               is_test: /\b(qa|test)\b/i.test(name ?? ""),
-            },
-            "booking_id,visit_no",
-          ));
+            });
+            if (inserted) {
+              visitRow = inserted;
+              createdByThisCall = true;
+            } else {
+              // Lost the insert race (or the row appeared between the
+              // select and the insert): re-read the winner unchanged.
+              const reread = await dbSelect<{ id: string }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
+              );
+              visitRow = reread[0] ?? null;
+            }
+          }
           if (visitRow) {
             visitRowId = visitRow.id;
-            if (!existingRows[0]) {
+            if (createdByThisCall) {
               // Single pricing record for the booking (§5/§7): the server
               // breakdown's first_service is what every surface must show
               // ("First visit: Deep clean" vs plain Standard), not the

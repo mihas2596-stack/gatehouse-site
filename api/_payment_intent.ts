@@ -25,6 +25,8 @@
 //   version binds the client's CONSENT (which publication they
 //   approved), not the money.
 
+import { createHash } from "crypto";
+
 const STRIPE_API = "https://api.stripe.com/v1";
 
 export type FoundIntent = {
@@ -124,17 +126,29 @@ export async function getIntent(
   }
 }
 
-// RA02: verify a found intent against the visit's pinned obligation.
-// Returns null when the intent may be adopted/confirmed, otherwise the
-// mismatch reason. Cancellation-fee intents are a different obligation.
+// RA02 (hardened, N08): verify a found intent against the visit's
+// pinned obligation. Returns null when the intent may be adopted or
+// confirmed, otherwise the mismatch reason. Empty fields are NOT a
+// match — an intent with no currency, no customer, or no booking
+// binding cannot prove it belongs to this obligation, so it is a
+// mismatch (fail closed), never a silent pass. Cancellation-fee
+// intents are a different obligation.
 export function verifyIntentForObligation(
   intent: FoundIntent,
-  obligation: { amountCents: number; currency: string; customerId: string },
+  obligation: { amountCents: number; currency: string; customerId: string; bookingId?: string },
 ): string | null {
   if (intent.metadata?.["gh_kind"] === "cancellation_fee") return "wrong_kind";
   if (intent.amount !== obligation.amountCents) return "amount_mismatch";
-  if (obligation.currency && intent.currency && intent.currency !== obligation.currency) return "currency_mismatch";
-  if (obligation.customerId && intent.customer && intent.customer !== obligation.customerId) return "customer_mismatch";
+  if (!intent.currency || (obligation.currency && intent.currency !== obligation.currency)) {
+    return "currency_mismatch";
+  }
+  if (!intent.customer || (obligation.customerId && intent.customer !== obligation.customerId)) {
+    return "customer_mismatch";
+  }
+  if (obligation.bookingId) {
+    const bound = intent.metadata?.["gh_booking_id"];
+    if (!bound || bound !== obligation.bookingId) return "booking_mismatch";
+  }
   return null;
 }
 
@@ -169,7 +183,9 @@ export async function reconcileIntent(
     // stands in for the cleaning payment, and it never blocks creating
     // one. It is skipped here, not treated as a mismatch.
     if (intent.metadata?.["gh_kind"] === "cancellation_fee") return null;
-    const mismatch = verifyIntentForObligation(intent, obligation);
+    // Binding to THIS booking is part of verification (N08): an intent
+    // for another booking, even with the right amount, is a mismatch.
+    const mismatch = verifyIntentForObligation(intent, { ...obligation, bookingId });
     if (mismatch) return { state: "mismatch", intent, reason: mismatch };
     if (intent.status === "succeeded") return { state: "succeeded", intent };
     if (LIVE_STATUSES.includes(intent.status)) {
@@ -253,27 +269,58 @@ export async function confirmIntent(
   return { ok: res.ok, status: res.status, data };
 }
 
-// RA13: confirm-attempt keys. Attempts are journal events
-// (payment_confirm_attempt { pi, attempt, outcome }); retrying an
-// attempt whose outcome is UNKNOWN reuses its key and parameters, a new
-// attempt after an established failure gets the next key.
+// RA13 (rewritten, N06): confirm-attempt keys are bound to the
+// payment method, not to a position in the journal and not to the
+// report version — the obligation is per visit, and a republication
+// must not change the identity of the payment attempt.
+//
+// Key = charge_<booking>_confirm_<pi>_<method-hash>:
+//   - same card + same intent → the SAME key forever, so retrying an
+//     unknown outcome replays Stripe's original result instead of
+//     minting a second confirm;
+//   - a new card → a different key, so a card change is a real new
+//     attempt (the old bug reused the previous key with the NEW card's
+//     parameters, which Stripe rejects or, in mocks, silently applies);
+//   - the key never depends on how many attempt events survive in the
+//     newest-60 journal window, so numbering can never reset and
+//     collide after the window rolls.
+// The attempt NUMBER is informational only (max number seen for this
+// intent, order-independent — production journals are newest-first,
+// so "last element" used to mean the OLDEST attempt). Selection uses
+// (created_at, attempt) maxima, never array position. Callers must
+// log the attempt's parameters BEFORE calling Stripe
+// (payment_confirm_started) and its outcome after, so an unknown
+// outcome is recoverable from the journal.
 export function confirmAttemptKey(
   bookingId: string,
-  version: number,
   piId: string,
-  events: Array<{ event: string; detail: Record<string, unknown> | null }>,
+  paymentMethod: string,
+  events: Array<{
+    event: string;
+    detail: Record<string, unknown> | null;
+    created_at?: string;
+  }>,
 ): { key: string; attempt: number; reuse: boolean } {
+  const methodHash = createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12);
+  const key = `charge_${bookingId}_confirm_${piId}_${methodHash}`;
   const attempts = events.filter(
     (e) => e.event === "payment_confirm_attempt" && e.detail?.["pi"] === piId,
   );
-  const last = attempts[attempts.length - 1];
-  if (last && last.detail?.["outcome"] === "unknown") {
-    return {
-      key: String(last.detail?.["key"] ?? ""),
-      attempt: typeof last.detail?.["attempt"] === "number" ? (last.detail["attempt"] as number) : attempts.length,
-      reuse: true,
-    };
+  const numOf = (e: (typeof attempts)[number]): number =>
+    typeof e.detail?.["attempt"] === "number" ? (e.detail["attempt"] as number) : 0;
+  const maxAttempt = attempts.reduce((m, e) => Math.max(m, numOf(e)), 0);
+  // Latest attempt FOR THIS METHOD, order-independent: newest
+  // created_at wins, ties broken by attempt number.
+  const forMethod = attempts.filter((e) => e.detail?.["payment_method"] === paymentMethod);
+  forMethod.sort((a, b) => {
+    const ta = a.created_at ?? "";
+    const tb = b.created_at ?? "";
+    if (ta !== tb) return tb < ta ? -1 : 1;
+    return numOf(b) - numOf(a);
+  });
+  const latest = forMethod[0];
+  if (latest && latest.detail?.["outcome"] === "unknown") {
+    return { key, attempt: numOf(latest) || maxAttempt || 1, reuse: true };
   }
-  const n = attempts.length + 1;
-  return { key: `charge_${bookingId}_v${version}_confirm_${n}`, attempt: n, reuse: false };
+  return { key, attempt: maxAttempt + 1, reuse: false };
 }

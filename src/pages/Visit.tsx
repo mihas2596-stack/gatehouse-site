@@ -705,6 +705,7 @@ const Visit = () => {
                       className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
                       placeholder="e.g. Intercom at the front gate, park in the driveway"
                     />
+                    <p className="text-sm text-muted-foreground mb-3">Notes are not encrypted — never put codes in the note. Codes go in Entry details below, which are encrypted.</p>
                   </>
                 )}
                 {entryMethod === "arrange" && (
@@ -723,7 +724,7 @@ const Visit = () => {
                     variant="hero" disabled={busy || !entryMethod}
                     onClick={() => {
                       setEntrySaved(false);
-                      void post({ action: "save_entry", method: entryMethod, note: entryNote, secret: entryMethod === "arrange" ? entrySecret : "" }).then((ok) => { setEntrySaved(ok); if (ok) setEntrySecret(""); });
+                      void post({ action: "save_entry", method: entryMethod, note: entryNote, secret: entryMethod === "arrange" ? entrySecret : "", secret_action: entryMethod === "arrange" ? (entrySecret ? "replace" : "keep") : undefined }).then((ok) => { setEntrySaved(ok); if (ok) setEntrySecret(""); });
                     }}
                   >
                     {entryMethod === "arrange" ? "Add entry details" : "Save entry choice"}
@@ -733,7 +734,7 @@ const Visit = () => {
                       variant="outline" disabled={busy}
                       onClick={() => {
                         setEntrySaved(false);
-                        void post({ action: "save_entry", method: "arrange", note: entryNote, secret: "" }).then((ok) => { setEntrySaved(ok); setEntrySecret(""); });
+                        void post({ action: "save_entry", method: "arrange", note: entryNote, secret: "", secret_action: "keep" }).then((ok) => { setEntrySaved(ok); setEntrySecret(""); });
                       }}
                     >
                       Add later
@@ -754,7 +755,7 @@ const Visit = () => {
                 {entrySaved && <p className="mt-3 text-sm text-sage-foreground" role="status">Saved.</p>}
                 {data.entry?.has_secret && <p className="mt-3 text-sm text-foreground">Entry details are saved for this visit.</p>}
                 <p className="mt-3 text-sm text-muted-foreground">
-                  Only you, Gatehouse and your assigned cleaner for this visit can see these details. Access ends when the visit is finished or cancelled, and entry details are deleted after the visit (visit date + 2 days at the latest). If your cleaner changes, the previous cleaner loses access and you will be asked to add details again.
+                  Entry details are encrypted and shown only to your assigned cleaner for this visit. Access ends when the visit is finished or cancelled, and entry details are deleted after the visit (visit date + 2 days at the latest). If your cleaner changes, the previous cleaner loses access and you will be asked to add details again. Removing the arrangement deletes it; editing only the note never deletes saved entry details.
                 </p>
               </div>
             )}

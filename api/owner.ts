@@ -74,10 +74,15 @@ function annotateVisit(
 ): Record<string, unknown> {
   // Strip the token hash AND the v2 issuance metadata: the panel only
   // needs to know whether the link is reusable, never the internals.
-  const { cleaner_token_hash, cleaner_link_version, cleaner_link_issuance, ...rest } = v as Record<string, unknown> & {
+  // Also strip the legacy plaintext access_notes column: entry
+  // details live only in gh_visit_access (the detail view's `entry`
+  // object), and the old column must not keep travelling in
+  // list/detail payloads as a second, unencrypted channel.
+  const { cleaner_token_hash, cleaner_link_version, cleaner_link_issuance, access_notes: _legacyAccessNotes, ...rest } = v as Record<string, unknown> & {
     cleaner_token_hash?: unknown;
     cleaner_link_version?: unknown;
     cleaner_link_issuance?: unknown;
+    access_notes?: unknown;
   };
   const expires = typeof v["cleaner_token_expires"] === "string" ? (v["cleaner_token_expires"] as string) : null;
   const active = Boolean(cleaner_token_hash) && (!expires || Date.parse(expires) > Date.now());

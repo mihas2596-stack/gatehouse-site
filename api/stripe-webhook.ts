@@ -21,7 +21,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import { sendReceiptEmailOnce, sendFeeReceiptEmailOnce } from "./booking-action.js";
-import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -221,12 +221,50 @@ export default async function handler(req: Req, res: Res) {
         // cleaning status, and never triggers the cleaning receipt.
         // Out-of-order and repeat deliveries are deduped on the fee's
         // own marker, not on the cleaning payment pointer.
+        // N08: the fee mirror is verified against the cancel record
+        // (amount) and the fee row (no conflicting paid fee), and a
+        // failed mirror is NOT silently acked — the handler returns
+        // 500 below so Stripe retries the delivery.
+        let mirrorFailed = false;
         if (eventType === "payment_intent.succeeded") {
           const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
           const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
           if (piId && curMeta["gh_fee_last_payment"] === piId) {
             log("fee", { state: "already_recorded", booking: bookingId, pi: piId });
           } else {
+            // Verify against the row's fee obligation before any write.
+            let feeVerified = true;
+            if (dbConfigured()) {
+              const vrows = await dbSelectStrict<{ id: string; fee_status: string | null; fee_intent_id: string | null }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+              );
+              if (!vrows.ok) {
+                mirrorFailed = true;
+              } else if (vrows.rows[0]?.fee_status === "fee_paid" && vrows.rows[0]?.fee_intent_id !== piId) {
+                feeVerified = false;
+                log("fee", { state: "conflict_skip", booking: bookingId, pi: piId });
+              }
+              if (feeVerified && !mirrorFailed) {
+                const cevs = await dbSelect<{ detail: Record<string, unknown> | null }>(
+                  "gh_events",
+                  `booking_id=eq.${encodeURIComponent(bookingId)}&event=eq.visit_cancelled&limit=1`,
+                );
+                const recorded = typeof cevs[0]?.detail?.["fee_cents"] === "number"
+                  ? (cevs[0].detail["fee_cents"] as number) : NaN;
+                if (Number.isFinite(recorded) && recorded !== feeCents) {
+                  feeVerified = false;
+                  log("fee", { state: "amount_mismatch_skip", booking: bookingId, pi: piId });
+                }
+              }
+            }
+            if (!feeVerified) {
+              // Not this fee: ack without writing (a retry would
+              // mismatch identically), and do not mark it seen as a
+              // fee payment anywhere.
+            } else if (mirrorFailed) {
+              // DB unreadable: fall through to the 500 below.
+            } else {
             await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
               "metadata[gh_fee_charged]": "1",
               "metadata[gh_fee_last_payment]": piId,
@@ -239,18 +277,24 @@ export default async function handler(req: Req, res: Res) {
                   `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
                 );
                 if (rows[0]) {
-                  await logEvent(rows[0].id, bookingId, "system", "cancellation_fee_paid", {
+                  const journaled = await logEventStrict(rows[0].id, bookingId, "system", "cancellation_fee_paid", {
                     payment_intent: piId, amount_cents: feeCents,
                   });
+                  const marked = journaled
+                    ? await dbUpdateCount("gh_visits", `id=eq.${rows[0].id}`, { fee_status: "fee_paid", fee_intent_id: piId })
+                    : -1;
+                  if (!journaled || marked < 0) mirrorFailed = true;
                 }
               } catch (err) {
                 logErr("db_mirror_fee", err);
+                mirrorFailed = true;
               }
             }
             try {
               await sendFeeReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, bookingId, piId, feeCents);
             } catch { /* best-effort */ }
             log("fee", { state: eventType, booking: bookingId, amount_cents: feeCents });
+          }
           }
         } else {
           if (dbConfigured()) {
@@ -270,14 +314,54 @@ export default async function handler(req: Req, res: Res) {
           }
           log("fee", { state: eventType, booking: bookingId });
         }
+        if (mirrorFailed) {
+          res.status(500).json({ ok: false, error: "mirror_failed" });
+          return;
+        }
       } else if (customerId && bookingId) {
+        // N08: verify BEFORE any write. A succeeded event for the
+        // wrong amount, the wrong booking, or a fee-shaped intent
+        // must never mark a cleaning paid — the old code mirrored
+        // any succeeded intent with this booking id in metadata.
+        // A failed mirror is NOT silently acked: the handler returns
+        // 500 at the bottom so Stripe retries (the meta write is
+        // idempotent, so the retry heals the mirror).
+        let cleanMirrorFailed = false;
+        let cleanVerified = true;
+        let cleanRow: { id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null } | null = null;
+        if (dbConfigured()) {
+          const vrows = await dbSelectStrict<{ id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null }>(
+            "gh_visits",
+            `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+          );
+          if (!vrows.ok) {
+            cleanMirrorFailed = true;
+          } else {
+            cleanRow = vrows.rows[0] ?? null;
+            if (cleanRow && eventType === "payment_intent.succeeded") {
+              const pinned = typeof cleanRow.amount_cents === "number" ? cleanRow.amount_cents : NaN;
+              if (!Number.isFinite(pinned) || pinned !== feeCents) {
+                cleanVerified = false;
+                log("payment", { state: "amount_mismatch_skip", booking: bookingId, pi: piId });
+              }
+              if (cleanRow.status === "paid" && cleanRow.payment_intent_id !== piId) {
+                cleanVerified = false;
+                log("payment", { state: "conflict_skip", booking: bookingId, pi: piId });
+              }
+            }
+          }
+        }
         // Guard against out-of-order events: never regress a "paid" booking
         // back to an earlier state. Read current state first.
         const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
         const curMeta = (cur.ok ? (cur.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
         const curState = curMeta["gh_state"] ?? "";
         const newState = eventType === "payment_intent.succeeded" ? "paid" : "payment_failed";
-        if (curState === "paid" && newState !== "paid") {
+        if (!cleanVerified) {
+          // Ack without writing: a retry would mismatch identically.
+        } else if (cleanMirrorFailed) {
+          // DB unreadable: fall through to the 500 below.
+        } else if (curState === "paid" && newState !== "paid") {
           log("payment", { state: "regression_blocked", booking: bookingId, curState, newState });
         } else if (piId && curMeta["gh_last_payment"] === piId && curState === newState) {
           // Same payment intent already recorded (cross-instance redelivery):
@@ -291,43 +375,51 @@ export default async function handler(req: Req, res: Res) {
           log("payment", { state: eventType, booking: bookingId });
         }
         // §13: mirror into the booking's DB row + journal, idempotently.
-        // Without this, /report and /visit (which derive state from the
-        // row + journal) would keep showing a paid visit as awaiting.
-        // A DB failure here must never fail the webhook (Stripe would
-        // retry and the meta write above already landed).
-        if (dbConfigured()) {
+        if (cleanVerified && !cleanMirrorFailed && dbConfigured()) {
           try {
-            const rows = await dbSelect<{ id: string; status: string | null; payment_intent_id: string | null }>(
-              "gh_visits",
-              `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
-            );
-            const vrow = rows[0];
+            const vrow = cleanRow;
             if (vrow) {
               if (newState === "paid" && !(vrow.status === "paid" && vrow.payment_intent_id === piId)) {
-                await dbUpdate("gh_visits", `id=eq.${vrow.id}`, {
+                const marked = await dbUpdateCount("gh_visits", `id=eq.${vrow.id}&status=neq.paid`, {
                   status: "paid",
                   paid_at: new Date().toISOString(),
                   payment_intent_id: piId,
                 });
-                await logEvent(vrow.id, bookingId, "system", "payment_succeeded", {
-                  via: "stripe_webhook", payment_intent_id: piId,
-                });
+                const journaled = marked === 1
+                  ? await logEventStrict(vrow.id, bookingId, "system", "payment_succeeded", {
+                      via: "stripe_webhook", payment_intent_id: piId,
+                    })
+                  : false;
+                if (marked !== 1 || !journaled) cleanMirrorFailed = true;
               } else if (newState === "payment_failed" && vrow.status !== "paid") {
-                await logEvent(vrow.id, bookingId, "system", "payment_failed", {
+                const journaled = await logEventStrict(vrow.id, bookingId, "system", "payment_failed", {
                   via: "stripe_webhook", payment_intent_id: piId,
                 });
+                if (!journaled) cleanMirrorFailed = true;
               }
             }
           } catch (err) {
             logErr("db_mirror", err);
+            cleanMirrorFailed = true;
           }
         }
-        if (newState === "paid") {
+        if (cleanMirrorFailed) {
+          // Stripe retries; the retry re-verifies and heals the mirror
+          // (meta write above is idempotent, already_recorded skips it).
+          res.status(500).json({ ok: false, error: "mirror_failed" });
+          return;
+        }
+        if (cleanVerified && newState === "paid") {
           // Receipt email (idempotent — the helper no-ops when the
           // receipt marker is already stored). A failure here never
-          // fails the webhook: the cron retries the EMAIL later.
+          // fails the webhook: the cron retries the EMAIL later. The
+          // amount comes from the visit's pinned amount, not metadata.
           try {
-            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, curMeta, bookingId);
+            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, {
+              ...curMeta,
+              ...(cleanRow?.amount_cents != null
+                ? { gh_report_amount_cents: String(cleanRow.amount_cents) } : {}),
+            }, bookingId);
           } catch { /* best-effort */ }
         }
       }

@@ -36,6 +36,8 @@ function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[]
   let out = [...list];
   for (const [k, v] of u.searchParams.entries()) {
     if (v.startsWith("eq.")) out = out.filter((r) => String(r[k] ?? "") === v.slice(3));
+    if (v.startsWith("neq.")) out = out.filter((r) => r[k] !== null && r[k] !== undefined && String(r[k]) !== v.slice(4));
+    if (v === "is.null") out = out.filter((r) => r[k] === null || r[k] === undefined);
     if (v.startsWith("in.(") && v.endsWith(")")) {
       const set = new Set(v.slice(4, -1).split(","));
       out = out.filter((r) => set.has(String(r[k] ?? "")));
@@ -98,6 +100,8 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
           status: p.ok ? "succeeded" : "requires_payment_method",
           amount: Number(p.amount),
           created: 1,
+          currency: "usd",
+          customer: customers.find((c) => c.metadata["gh_booking_id"] === p.booking)?.id ?? null,
           metadata: { gh_booking_id: p.booking, gh_report_version: p.version },
         }));
       return res(200, { data });
@@ -142,14 +146,20 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
       if (table === "gh_visits") {
         rows.push(body);
-        return res(201, body);
+        return res(201, [body]);
       }
-      return res(201, {});
+      return res(201, [body]);
+    }
+    if (method === "DELETE") {
+      const doomed = applyFilters(rows, u);
+      for (const d of doomed) { const i = rows.indexOf(d); if (i >= 0) rows.splice(i, 1); }
+      return res(200, doomed);
     }
     if (method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
@@ -218,7 +228,7 @@ describe("approve vs timer race", () => {
       },
     }];
     evts = [
-      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: sentAt },
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
       { visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: remindedAt },
     ];
     const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
@@ -257,7 +267,7 @@ describe("approve vs timer race", () => {
       },
     }];
     evts = [
-      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: sentAt },
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
       { visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: remindedAt },
     ];
     const [charge, cron] = await Promise.all([

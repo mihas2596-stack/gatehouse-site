@@ -96,13 +96,15 @@ beforeEach(() => {
       if (method === "PATCH") {
         const patch = JSON.parse(String(init?.body ?? "{}")) as Acc;
         const qId = u.searchParams.get("id");
-        for (const r of accessRows) if (qId === `eq.${r["id"]}`) Object.assign(r, patch);
-        return okRes(null);
+        const matched: Acc[] = [];
+        for (const r of accessRows) if (qId === `eq.${r["id"]}`) { Object.assign(r, patch); matched.push(r); }
+        return okRes(matched);
       }
       if (method === "DELETE") {
         const qVid = u.searchParams.get("visit_id");
+        const deleted = accessRows.filter((r) => qVid === `eq.${r["visit_id"]}`);
         accessRows = accessRows.filter((r) => qVid !== `eq.${r["visit_id"]}`);
-        return okRes(null);
+        return okRes(deleted);
       }
       const qVid = u.searchParams.get("visit_id");
       let out = [...accessRows];
@@ -112,11 +114,12 @@ beforeEach(() => {
     if (u.pathname.includes("/rest/v1/gh_visits")) {
       if (method === "PATCH") {
         const patch = JSON.parse(String(init?.body ?? "{}")) as Row;
+        const matched: Row[] = [];
         for (const r of rows) {
           const qId = u.searchParams.get("id");
-          if (qId && qId === `eq.${r["id"]}`) Object.assign(r, patch);
+          if (qId && qId === `eq.${r["id"]}`) { Object.assign(r, patch); matched.push(r); }
         }
-        return okRes(null);
+        return okRes(matched);
       }
       return okRes([...rows].slice(0, 1));
     }

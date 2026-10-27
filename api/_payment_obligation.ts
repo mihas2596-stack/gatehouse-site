@@ -91,6 +91,23 @@ function latestSent(events: ObligationEvent[]): ObligationEvent | null {
   return best;
 }
 
+// N07: a publication counts as DELIVERED for the timer only when the
+// journal proves the report email went out (email_sent === true).
+// A report_sent event with email_sent false — or no event at all —
+// is an unproven delivery and can never start the 24h clock, even if
+// the row already says "sent" (the exact failure the audit
+// reproduced: CAS landed, the bounced-flag write failed, the timer
+// charged at +25h for a report the client never received).
+function latestDeliveredSent(events: ObligationEvent[]): ObligationEvent | null {
+  let best: ObligationEvent | null = null;
+  for (const e of events) {
+    if (e.event !== "report_sent") continue;
+    if (e.detail?.["email_sent"] !== true) continue;
+    if (!best || e.created_at > best.created_at) best = e;
+  }
+  return best;
+}
+
 function latestReturnedAfterSent(events: ObligationEvent[]): boolean {
   const sent = latestSent(events);
   if (!sent) return false;
@@ -220,7 +237,7 @@ export async function chargeVisit(input: {
       if (rec.intent.status === "processing") {
         return { outcome: "processing", payment_intent: rec.intent.id };
       }
-      return confirmExisting(rec.intent.id);
+      return confirmExisting(rec.intent.id, rec.intent.amount);
     }
     if (rec.state === "mismatch") {
       return { outcome: "mismatch", error: "payment_intent_mismatch", detail: rec.reason };
@@ -264,6 +281,12 @@ export async function chargeVisit(input: {
   if (!basis || !input.allowedBases.includes(basis)) {
     return { outcome: "blocked", error: "payment_basis_missing" };
   }
+  // N07: the timer basis additionally requires a PROVEN delivery.
+  // An explicit client approval is a separate basis (the client
+  // demonstrably saw the report) and is unaffected.
+  if (source === "timer_24h" && !latestDeliveredSent(events)) {
+    return { outcome: "blocked", error: "report_delivery_unconfirmed" };
+  }
   // RA06: the timer runs from the CURRENT publication, never an old
   // one. A republication resets the 24h clock even if metadata still
   // shows the old date.
@@ -277,7 +300,12 @@ export async function chargeVisit(input: {
     `status=eq.report_sent`,
     `report_status=eq.sent`,
     `issue_open=neq.true`,
-    ...(basis === "timer_rule" ? [`report_bounced=neq.true`] : []),
+    // N04: dispute HISTORY is checked inside the atomic timer
+    // admission, not only by the earlier read: an issue opened and
+    // resolved between the read and the claim must still block the
+    // timer forever (issue_ever). Approve paths are unaffected — an
+    // explicit new consent after a resolved dispute still pays.
+    ...(basis === "timer_rule" ? [`report_bounced=neq.true`, `issue_ever=neq.true`] : []),
     ...(row.report_sent_at
       ? [`report_sent_at=eq.${encodeURIComponent(row.report_sent_at)}`]
       : []),
@@ -292,6 +320,12 @@ export async function chargeVisit(input: {
     if (freshRow?.status === "payment_pending") return { outcome: "processing" };
     if (issueStateFrom(freshEv, freshRow?.issue_open ?? null, freshRow?.issue_ever ?? null).open) {
       return { outcome: "blocked", error: "issue_open" };
+    }
+    // N04: same gate on the lost-claim path — a resolved dispute
+    // between the read and the claim blocks the timer, it does not
+    // degrade to "processing" (which the caller would retry).
+    if (basis === "timer_rule" && issueStateFrom(freshEv, freshRow?.issue_open ?? null, freshRow?.issue_ever ?? null).ever) {
+      return { outcome: "blocked", error: "issue_ever" };
     }
     if (freshRow?.report_status !== "sent") return { outcome: "blocked", error: "report_not_current" };
     return { outcome: "processing" };
@@ -319,7 +353,7 @@ export async function chargeVisit(input: {
     if (rec.intent.status === "processing") {
       return { outcome: "processing", payment_intent: rec.intent.id };
     }
-    return confirmExisting(rec.intent.id);
+    return confirmExisting(rec.intent.id, rec.intent.amount);
   }
 
   // --- Create (one obligation, one idempotency key). ---
@@ -389,14 +423,81 @@ export async function chargeVisit(input: {
     return { outcome: "paid", payment_intent: piId, adopted, receipt_sent: receiptSent };
   }
 
-  async function confirmExisting(piId: string): Promise<ChargeOutcome> {
-    const attempt = confirmAttemptKey(bookingId, version, piId, events);
+  // N02: confirming a LIVE (not yet paid) intent is a NEW money
+  // operation, not adoption of an existing success. It must re-pass
+  // every live gate on FRESH data: the claim must still be ours, the
+  // publication must be unchanged, no issue may be open, no return
+  // may have superseded the report, and the payment basis must still
+  // hold. A payment_pending row is NOT by itself permission to
+  // confirm. Adoption of an already-succeeded intent is a different
+  // path (recordPaid via reconcile) and never confirms anything.
+  // N06: the attempt's parameters are journaled BEFORE the Stripe
+  // call (payment_confirm_started), so an unknown outcome is
+  // recoverable; the key is bound to (booking, intent, card).
+  async function confirmExisting(piId: string, intentAmountCents?: number): Promise<ChargeOutcome> {
+    const revalidation = await (async (): Promise<string | null> => {
+      const fr = await loadRow(bookingId);
+      if (!fr.ok) return "db_unreadable";
+      const frow = fr.row;
+      if (!frow) return "no_row";
+      if (frow.status === "paid") return "already_paid";
+      if (frow.status === "cancelled") return "visit_not_chargeable";
+      if (frow.status !== "payment_pending") return "claim_lost";
+      if (frow.report_status !== "sent") return "report_not_current";
+      if (frow.report_sent_at !== row.report_sent_at) return "report_changed";
+      const fev = await loadEvents(bookingId);
+      if (!fev.ok) return "db_unreadable";
+      const fevents = fev.events;
+      if (latestReturnedAfterSent(fevents)) return "report_not_current";
+      if (issueStateFrom(fevents, frow.issue_open ?? null, frow.issue_ever ?? null).open) {
+        return "issue_open";
+      }
+      const fbounced = frow.report_bounced === true;
+      const fsentMs = Math.max(
+        Date.parse(frow.report_sent_at ?? "") || 0,
+        (() => {
+          const ls = latestSent(fevents);
+          return ls ? Date.parse(ls.created_at) || 0 : 0;
+        })(),
+      );
+      const fbasis = paymentBasis(
+        {
+          reportSentAt: fsentMs ? new Date(fsentMs).toISOString() : null,
+          events: fevents, issueOpenRow: frow.issue_open ?? null,
+          issueEverRow: frow.issue_ever ?? null, bounced: fbounced,
+        },
+        Date.now(),
+      );
+      if (!fbasis || !input.allowedBases.includes(fbasis)) return "payment_basis_missing";
+      if (source === "timer_24h" && !latestDeliveredSent(fevents)) {
+        return "report_delivery_unconfirmed";
+      }
+      if (intentAmountCents !== undefined && intentAmountCents !== amountCents) {
+        return "payment_intent_mismatch";
+      }
+      return null;
+    })();
+    if (revalidation === "already_paid") return { outcome: "blocked", error: "already_paid" };
+    if (revalidation === "db_unreadable") {
+      // Claim stays: an unreadable DB must not release a live claim
+      // to a retry that could double-confirm.
+      return { outcome: "unknown", error: "db_unreadable" };
+    }
+    if (revalidation) {
+      await releaseClaim();
+      return { outcome: "blocked", error: revalidation };
+    }
+    const attempt = confirmAttemptKey(bookingId, piId, paymentMethod, events);
+    await logEvent(row.id, bookingId, "system", "payment_confirm_started", {
+      pi: piId, attempt: attempt.attempt, key: attempt.key, payment_method: paymentMethod,
+    });
     let res: { ok: boolean; status: number; data: Record<string, unknown> };
     try {
       res = await confirmIntent(secretKey, piId, paymentMethod, attempt.key);
     } catch {
       await logEvent(row.id, bookingId, "system", "payment_confirm_attempt", {
-        pi: piId, attempt: attempt.attempt, key: attempt.key, outcome: "unknown",
+        pi: piId, attempt: attempt.attempt, key: attempt.key, payment_method: paymentMethod,
+        outcome: "unknown",
       });
       return { outcome: "unknown", error: "payment_unknown", payment_intent: piId };
     }
@@ -409,7 +510,8 @@ export async function chargeVisit(input: {
           ? status || "failed"
           : "failed";
     await logEvent(row.id, bookingId, "system", "payment_confirm_attempt", {
-      pi: piId, attempt: attempt.attempt, key: attempt.key, outcome,
+      pi: piId, attempt: attempt.attempt, key: attempt.key, payment_method: paymentMethod,
+      outcome,
     });
     return handlePiResult(res, piId);
   }

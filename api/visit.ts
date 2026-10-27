@@ -19,7 +19,7 @@
 // collected later by the operator (booking-action charge_fee).
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { issueStateFrom, timerBlockReason } from "./_payment_basis.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
@@ -208,7 +208,11 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
     gh_proposed_date: evStr(proposedEv, "date"),
     gh_proposed_pending: proposedPending ? "1" : "",
     gh_cancel_scope: evStr(cancelledEv, "scope"),
-    gh_access_notes: row.access_notes ?? "",
+    // N-entry: old plaintext row.access_notes are NEVER copied into
+    // Stripe metadata (or emails, journals, logs) anymore. The
+    // gh_visit_access table is the only entry channel; legacy rows
+    // are handled by the prepared migration, not by re-publishing
+    // their contents into a shared customer record.
     gh_no_photo_zones: row.no_photo_zones ?? "",
     gh_payment_method: paymentMethodId,
     gh_issue_open: issueOpen ? "1" : "",
@@ -647,9 +651,14 @@ export default async function handler(req: Req, res: Res) {
     // AND a cleaner is assigned, and only while the visit is not done.
     // The secret itself never enters this view — only has_secret.
     const entryConfirmed = Boolean(latestEvent(events, "visit_confirmed"));
+    // N10: entry closes when the cleaner finishes (report
+    // submitted/sent), not only when the owner publishes it. Before
+    // that change, a finished-but-unpublished report still accepted
+    // new secrets.
     const entryAvailable = Boolean(
       row && entryConfirmed && (meta["gh_cleaner_name"] ?? "").trim() !== ""
-        && row.status !== "cancelled" && !row.report_sent_at,
+        && row.status !== "cancelled" && !row.report_sent_at
+        && row.report_status !== "submitted" && row.report_status !== "sent",
     );
     let entryView: ClientEntryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
     if (entryAvailable && row) {
@@ -795,15 +804,32 @@ export default async function handler(req: Req, res: Res) {
       if (row && !alreadyConfirmed) {
         const datePatch: Record<string, unknown> = { visit_date: date };
         if (meta["gh_confirmed_window"]) datePatch.window = meta["gh_confirmed_window"];
-        const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, datePatch);
-        if (!rowOk) {
+        const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}`, datePatch);
+        if (changed !== 1) {
           res.status(502).json({ requestId, ok: false, error: "db_error" });
           return;
         }
-        // S01: the accepted date IS the agreement — the row must carry
-        // it too, or the cleaner (and owner) views keep showing the
-        // old day while the client sees the new one.
-        await logEvent(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
+        // N14: the row AND the journal are the agreement, together.
+        // A failed journal write used to return 200 anyway, so after
+        // a reload the client saw the old date while the cleaner saw
+        // the new one. Now a journal failure rolls the row back to
+        // the previous date/window (verified) and returns an error;
+        // only a failed rollback — DB down twice — is "unknown".
+        const journaled = await logEventStrict(row.id, payload.bid, "client", "visit_confirmed", { date, window: meta["gh_confirmed_window"] ?? "" });
+        if (!journaled) {
+          const rolledBack = await dbUpdateCount("gh_visits", `id=eq.${row.id}`, {
+            visit_date: row.visit_date ?? null,
+            window: row.window ?? null,
+          });
+          logErr("accept_alt_date", rolledBack === 1
+            ? "journal failed — date rolled back"
+            : "journal failed AND rollback failed — date state unknown");
+          res.status(502).json({
+            requestId, ok: false,
+            error: rolledBack === 1 ? "db_error" : "date_state_unknown",
+          });
+          return;
+        }
       }
       // Retries are safe: on the row-failure path nothing was written,
       // so meta still offers the alternatives; on the meta-failure
@@ -871,8 +897,11 @@ export default async function handler(req: Req, res: Res) {
       if (row) {
         await logEvent(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { status: "cancelled" });
-        await deleteAccess(row.id);
-        await logEvent(row.id, payload.bid, "client", "entry_revoked");
+        // N09: a failed cleanup is journaled, not hidden — the
+        // cancelled status plus the journal gate in cleanerEntryView
+        // still keep the secret from any cleaner.
+        const accessDeleted = await deleteAccess(row.id);
+        await logEvent(row.id, payload.bid, "client", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
       }
       const scopeText = scope === "stop"
         ? "This visit and all future recurring visits are cancelled."
@@ -906,7 +935,14 @@ export default async function handler(req: Req, res: Res) {
       }
       // Legacy entry-notes path, re-routed: notes are a general note in
       // gh_visit_access, never Stripe metadata and never the visit row.
+      // N10: after Finish/cancel/publication/expiry the old path must
+      // not save notes either — entry is closed, full stop. Zones
+      // (no-photo areas) are unaffected and still save above.
       if (notes !== null && row) {
+        if (!entryAvailable) {
+          res.status(409).json({ requestId, ok: false, error: "entry_not_available" });
+          return;
+        }
         await saveAccessNote(row.id, payload.bid, notes);
         if (entryAvailable) entryView = clientEntryView(await loadAccess(row.id), true);
       }
@@ -931,6 +967,14 @@ export default async function handler(req: Req, res: Res) {
       }
       const note = typeof body["note"] === "string" ? body["note"].slice(0, 500) : "";
       const secret = typeof body["secret"] === "string" ? body["secret"].slice(0, 1000) : "";
+      // N11: the client states what happens to the secret — keep
+      // (editing only the note), replace (a newly typed code), or
+      // delete (explicit removal). An empty secret field with no
+      // action keeps the saved code; it never wipes it.
+      const rawAction = typeof body["secret_action"] === "string" ? body["secret_action"] : "";
+      const secretAction = rawAction === "delete" ? "delete"
+        : rawAction === "replace" ? "replace"
+        : secret ? "replace" : "keep";
       if (method !== "arrange" && secret) {
         res.status(400).json({ requestId, ok: false, error: "secret_not_needed" });
         return;
@@ -938,6 +982,7 @@ export default async function handler(req: Req, res: Res) {
       const saved = await saveAccess({
         visitId: row.id, bookingId: payload.bid, method: method as EntryMethod,
         note, secret: method === "arrange" ? secret : "",
+        secretAction: method === "arrange" ? secretAction : "delete",
         cleanerId: (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
         visitDate: row.visit_date ?? null,
       });
@@ -956,7 +1001,13 @@ export default async function handler(req: Req, res: Res) {
         res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
         return;
       }
-      await deleteAccess(row.id);
+      // N09: a failed delete must NOT look like a successful
+      // removal to the client.
+      const deleted = await deleteAccess(row.id);
+      if (!deleted) {
+        res.status(502).json({ requestId, ok: false, error: "entry_delete_failed" });
+        return;
+      }
       await logEvent(row.id, payload.bid, "client", "entry_deleted");
       entryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
       res.status(200).json({ ...view(), entry_saved: true });

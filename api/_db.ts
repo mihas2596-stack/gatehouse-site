@@ -167,6 +167,21 @@ export async function dbDelete(table: string, match: string): Promise<boolean> {
   return r.ok;
 }
 
+/**
+ * Counted delete (N09): unlike dbDelete, a 2xx that matched zero rows
+ * is distinguishable from a real deletion, and a DB error is -1.
+ * Callers that must PROVE a secret row is gone (delete_entry, revoke)
+ * use this, never the ok-only variant: PostgREST returns 2xx for a
+ * DELETE that matched nothing, so ok alone cannot prove removal.
+ */
+export async function dbDeleteCount(table: string, match: string): Promise<number> {
+  const cfg = dbConfig();
+  if (!cfg) return -1;
+  const r = await rest(cfg, `${table}?${match}`, { method: "DELETE", prefer: "return=representation" });
+  if (!r.ok || !Array.isArray(r.data)) return -1;
+  return r.data.length;
+}
+
 export async function logEvent(
   visitId: string | null,
   bookingId: string | null,
@@ -182,6 +197,31 @@ export async function logEvent(
     event,
     detail: detail ?? null,
   });
+}
+
+/**
+ * Verified journal write (N03/N14): authoritative events (issue_opened,
+ * visit_confirmed, payment attempts) must be PROVEN stored before the
+ * caller reports success. Returns false when the DB is not configured
+ * or the insert failed — callers then fail closed or roll back instead
+ * of telling the client a fact was recorded.
+ */
+export async function logEventStrict(
+  visitId: string | null,
+  bookingId: string | null,
+  actor: string,
+  event: string,
+  detail?: Record<string, unknown>,
+): Promise<boolean> {
+  if (!dbConfigured()) return false;
+  const inserted = await dbInsert("gh_events", {
+    visit_id: visitId,
+    booking_id: bookingId,
+    actor,
+    event,
+    detail: detail ?? null,
+  });
+  return inserted !== null;
 }
 
 // ---------- Storage (private bucket "report-photos") ----------

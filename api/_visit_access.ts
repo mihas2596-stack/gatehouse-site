@@ -22,7 +22,7 @@
 // indefinitely for future visits by default.
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { dbConfigured, dbSelect, dbInsert, dbUpdate, dbDelete } from "./_db.js";
+import { dbConfigured, dbSelect, dbInsert, dbUpdate, dbDelete, dbDeleteCount } from "./_db.js";
 
 export type EntryMethod = "home" | "someone" | "arrange";
 export const ENTRY_METHODS: EntryMethod[] = ["home", "someone", "arrange"];
@@ -121,22 +121,39 @@ export async function loadAccess(visitId: string): Promise<AccessRow | null> {
  * encrypted (no server key) — the method/note are still saved, the
  * secret is not stored in cleartext anywhere.
  */
+export type SecretAction = "keep" | "replace" | "delete";
 export async function saveAccess(args: {
   visitId: string;
   bookingId: string;
   method: EntryMethod;
   note: string;
   secret: string;
+  secretAction?: SecretAction;
   cleanerId: string | null;
   visitDate: string | null;
 }): Promise<{ ok: boolean; error?: string; row: AccessRow | null }> {
   if (!dbConfigured()) return { ok: false, error: "db_not_configured", row: null };
-  let encrypted: string | null = null;
-  if (args.secret) {
+  // N11: "keep" / "replace" / "delete" are DISTINCT actions. The old
+  // code treated an empty secret field as "delete": after a reload
+  // the client form holds no secret, so editing only the note silently
+  // wiped a saved code. Now an absent/empty secret with no explicit
+  // action KEEPS the stored ciphertext; deletion happens only via
+  // the explicit delete_entry action (secretAction "delete").
+  const action: SecretAction = args.secretAction
+    ?? (args.secret ? "replace" : "keep");
+  const existing = await loadAccess(args.visitId);
+  let encrypted: string | null | undefined;
+  if (action === "delete") {
+    encrypted = null;
+  } else if (action === "replace") {
+    if (!args.secret) {
+      return { ok: false, error: "secret_required", row: null };
+    }
     encrypted = encryptEntrySecret(args.secret);
     if (!encrypted) {
-      // Save method/note, but never the cleartext secret.
-      const existing = await loadAccess(args.visitId);
+      // Save method/note, but NEVER the cleartext secret — and never
+      // wipe the previously stored secret on an encryption failure
+      // either: keep it untouched and report the failure honestly.
       const patch = {
         entry_method: args.method,
         entry_note: args.note || null,
@@ -144,7 +161,7 @@ export async function saveAccess(args: {
         expires_at: entryExpiresAt(args.visitDate),
       };
       if (existing) {
-        await dbUpdate("gh_visit_access", `id=eq.${existing.id}`, { ...patch, entry_secret: null });
+        await dbUpdate("gh_visit_access", `id=eq.${existing.id}`, patch);
       } else {
         await dbInsert("gh_visit_access", {
           visit_id: args.visitId, booking_id: args.bookingId, ...patch, entry_secret: null,
@@ -152,21 +169,23 @@ export async function saveAccess(args: {
       }
       return { ok: false, error: "entry_key_missing", row: null };
     }
+  } else {
+    encrypted = undefined; // keep whatever is stored
   }
-  const existing = await loadAccess(args.visitId);
-  const base = {
+  const base: Record<string, unknown> = {
     entry_method: args.method,
     entry_note: args.note || null,
-    entry_secret: encrypted,
     assigned_cleaner_id: args.cleanerId,
     expires_at: entryExpiresAt(args.visitDate),
   };
+  if (encrypted !== undefined) base["entry_secret"] = encrypted;
   if (existing) {
     const ok = await dbUpdate("gh_visit_access", `id=eq.${existing.id}`, base);
-    return { ok, row: ok ? { ...existing, ...base } : null };
+    return { ok, row: ok ? { ...existing, ...(base as Partial<AccessRow>) } : null };
   }
   const created = await dbInsert<AccessRow>("gh_visit_access", {
     visit_id: args.visitId, booking_id: args.bookingId, ...base,
+    entry_secret: encrypted ?? null,
   });
   return { ok: created !== null, row: created };
 }
@@ -187,9 +206,14 @@ export async function saveAccessNote(
   })) !== null;
 }
 
-export async function deleteAccess(visitId: string): Promise<void> {
-  if (!dbConfigured()) return;
-  await dbDelete("gh_visit_access", `visit_id=eq.${encodeURIComponent(visitId)}`);
+// N09: deletion is VERIFIED. Returns true only when the DB
+// confirms the row is gone (deleted count >= 0 covers "already
+// gone", which is the idempotent success); false on any DB error,
+// so callers never report a false "deleted".
+export async function deleteAccess(visitId: string): Promise<boolean> {
+  if (!dbConfigured()) return false;
+  const n = await dbDeleteCount("gh_visit_access", `visit_id=eq.${encodeURIComponent(visitId)}`);
+  return n >= 0;
 }
 
 /**
@@ -198,15 +222,19 @@ export async function deleteAccess(visitId: string): Promise<void> {
  * method is kept (it is not a secret); the client is prompted to add
  * details for the new cleaner when the method is "arrange".
  */
+// N09: revoke is VERIFIED and must run BEFORE the assignment it
+// protects. Returns false on any DB failure, so the caller aborts
+// the cleaner change instead of leaving the old secret bound to the
+// old cleaner (re-exposable by a later reassignment to them).
 export async function revokeAccessForCleanerChange(
   visitId: string,
   newCleanerId: string | null,
-): Promise<void> {
-  if (!dbConfigured()) return;
+): Promise<boolean> {
+  if (!dbConfigured()) return false;
   const existing = await loadAccess(visitId);
-  if (!existing) return;
-  if (existing.assigned_cleaner_id === newCleanerId) return;
-  await dbUpdate("gh_visit_access", `id=eq.${existing.id}`, {
+  if (!existing) return true;
+  if (existing.assigned_cleaner_id === newCleanerId) return true;
+  return dbUpdate("gh_visit_access", `id=eq.${existing.id}`, {
     entry_secret: null,
     assigned_cleaner_id: newCleanerId,
   });
@@ -237,11 +265,22 @@ export function cleanerEntryView(
   row: AccessRow | null,
   visit: { status: string; report_status: string; cleaner_id: string | null },
   confirmed: boolean,
+  events?: Array<{ event: string; created_at: string }>,
 ): { method: EntryMethod | null; note: string; secret: string | null } | null {
   if (!row || !confirmed) return null;
   if (visit.status === "cancelled") return null;
   if (visit.report_status === "submitted" || visit.report_status === "sent") return null;
   if (isAccessExpired(row)) return null;
+  // N09: even if a cleanup delete failed, a cancel or a Finish
+  // journaled AFTER this access row was created still revokes it:
+  // the view gate, not only the delete, protects the secret.
+  if (events && row.created_at) {
+    const revoked = events.some(
+      (e) => (e.event === "visit_cancelled" || e.event === "report_submitted")
+        && e.created_at >= row.created_at!,
+    );
+    if (revoked) return null;
+  }
   if (!visit.cleaner_id || !row.assigned_cleaner_id || visit.cleaner_id !== row.assigned_cleaner_id) return null;
   return {
     method: row.entry_method,

@@ -20,10 +20,10 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, logEvent, storageSignDownload, storagePut } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom } from "./_payment_basis.js";
-import { reconcileIntent, confirmIntent, confirmAttemptKey } from "./_payment_intent.js";
+
 import { chargeVisit } from "./_payment_obligation.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
@@ -628,7 +628,11 @@ export default async function handler(req: Req, res: Res) {
         // come ONLY from this visit (row + its journal). Shared
         // customer metadata may carry another booking's flags — a null
         // row marker must never fall back to another visit's marker.
-        receipt_sent: row ? Boolean(row.receipt_email_id) : Boolean(meta["gh_receipt_email_id"]),
+        // N13: a "claim:<ms>" placeholder means a receipt send is
+        // IN FLIGHT, not sent — only a real Resend id counts.
+        receipt_sent: row
+          ? Boolean(row.receipt_email_id && !row.receipt_email_id.startsWith("claim:"))
+          : Boolean(meta["gh_receipt_email_id"]),
         postpay_issue: row
           ? events.some((e) => e.event === "postpay_issue")
           : meta["gh_postpay_issue"] === "1",
@@ -773,12 +777,39 @@ export default async function handler(req: Req, res: Res) {
       // press after one must still log a genuine client approval (G3).
       // P01/RA09: an approval superseded by a newer publication, or
       // voided by a later dispute, is not consent for this charge.
+      // N05: the ONLY button shown while an issue is open reads
+      // "Resolve issue & pay", so an Approve press in that state IS
+      // the client's explicit resolve-and-pay consent — but it must
+      // be a durable transition, not a flag clear: close the dispute
+      // in the journal FIRST, then clear the row flag (verified),
+      // then record the new approval on the current publication.
+      // issue_ever is never cleared: the timer never returns for this
+      // visit, only this explicit approval pays. An ordinary Approve
+      // (no open issue) never touches dispute state at all.
+      const issueOpenNow = row
+        ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
+        : meta["gh_issue_open"] === "1";
+      if (issueOpenNow && row) {
+        const resolved = await logEventStrict(row.id, payload.bid, "client", "issue_resolved", {
+          via: "client_resolve_and_pay",
+        });
+        const cleared = resolved
+          ? await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: false })
+          : -1;
+        if (!resolved || cleared !== 1) {
+          logErr("approve", "issue resolve failed — charge refused");
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
+        }
+      }
       const approvalLogged = Boolean(clientApprovedEvent(events));
       if (!approvalLogged) {
         const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "approved",
-          "metadata[gh_issue_open]": "",
-          "metadata[gh_issue_reason]": "",
+          ...(issueOpenNow ? {
+            "metadata[gh_issue_open]": "",
+            "metadata[gh_issue_reason]": "",
+          } : {}),
           "metadata[gh_report_client_action]": "approved",
           "metadata[gh_report_responded_at]": nowIso,
         });
@@ -788,11 +819,16 @@ export default async function handler(req: Req, res: Res) {
           return;
         }
         Object.assign(meta, {
-          gh_state: "approved", gh_issue_open: "", gh_issue_reason: "",
+          gh_state: "approved",
+          ...(issueOpenNow ? { gh_issue_open: "", gh_issue_reason: "" } : {}),
         });
         if (row) {
-          await logEvent(row.id, payload.bid, "client", "report_approved", {});
-          await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
+          const approved = await logEventStrict(row.id, payload.bid, "client", "report_approved", {});
+          if (!approved) {
+            logErr("approve", "approval journal failed — charge refused");
+            res.status(502).json({ requestId, ok: false, error: "db_error" });
+            return;
+          }
         }
       }
       const paymentMethod = await reconcilePaymentMethod(STRIPE_SECRET_KEY, customer, meta);
@@ -871,114 +907,25 @@ export default async function handler(req: Req, res: Res) {
         res.status(502).json({ ...view(), error: outcome.error });
         return;
       }
-      // Legacy path (no visit row): the old metadata-gated charge, with
-      // RA03/RA02 hardening — a failed search never means "no payment",
-      // and a found intent is verified before it is confirmed.
-      const amountCents = (parseInt(meta["gh_report_amount_cents"] ?? "", 10) || parseInt(meta["gh_first_price_cents"] ?? "", 10) || NaN);
-      if (!Number.isFinite(amountCents) || amountCents <= 0) {
-        logErr("approve_charge", "blocked: no pinned amount");
-        res.status(409).json({ requestId, ok: false, error: "quote_missing" });
-        return;
-      }
-      const reportVersion = sentIdx >= 0 && typeof events[sentIdx]?.detail?.["version"] === "number"
-        ? String(events[sentIdx].detail["version"] as number)
-        : (meta["gh_report_version"] ?? "1");
-      const idemKey = `charge_${payload.bid}_v${reportVersion}`;
-      const rec = await reconcileIntent(STRIPE_SECRET_KEY, payload.bid, [], {
-        amountCents, currency: "usd", customerId: customer.id,
-      });
-      if (rec.state === "unknown") {
-        res.status(502).json({ ...view(), error: "payment_unknown" });
-        return;
-      }
-      if (rec.state === "mismatch") {
-        res.status(409).json({ ...view(), error: "payment_intent_mismatch" });
-        return;
-      }
-      if (rec.state === "succeeded") {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "paid",
-          "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": rec.intent.id,
-        });
-        Object.assign(meta, { gh_state: "paid", gh_last_payment: rec.intent.id });
-        const adoptedReceipt = await sendReceiptEmailOnce(
-          STRIPE_SECRET_KEY, customer.id,
-          { ...meta, gh_report_amount_cents: String(amountCents) },
-          payload.bid,
-        );
-        if (adoptedReceipt) meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
-        res.status(200).json(view());
-        return;
-      }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "payment_pending",
-        "metadata[gh_report_version]": reportVersion,
-      });
-      meta["gh_state"] = "payment_pending";
-      if (rec.state === "live" && rec.intent.status === "processing") {
-        res.status(409).json({ ...view(), error: "payment_processing" });
-        return;
-      }
-      // Legacy confirm key: no journal exists to number attempts, so
-      // the key is derived from the payment method itself — a new card
-      // gets a new key (no idempotency clash), the same card replays.
-      const legacyConfirmKey = rec.state === "live"
-        ? `${idemKey}_confirm_${createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12)}`
-        : idemKey;
-      const pi = rec.state === "live"
-        ? await confirmIntent(STRIPE_SECRET_KEY, rec.intent.id, paymentMethod, legacyConfirmKey)
-        : await stripePost(
-        STRIPE_SECRET_KEY,
-        "/payment_intents",
-        {
-          amount: String(amountCents),
-          currency: "usd",
-          customer: customer.id,
-          payment_method: paymentMethod,
-          off_session: "true",
-          confirm: "true",
-          description: `Gatehouse cleaning — booking ${payload.bid}`,
-          "metadata[gh_booking_id]": payload.bid,
-          "metadata[gh_report_version]": reportVersion,
-        },
-        idemKey,
-      );
-      if (pi.ok && pi.data["status"] === "succeeded") {
-        const piId = String(pi.data["id"] ?? "");
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "paid",
-          "metadata[gh_paid_at]": new Date().toISOString(),
-          "metadata[gh_last_payment]": piId,
-        });
-        Object.assign(meta, { gh_state: "paid", gh_last_payment: piId });
-        const receiptSent = await sendReceiptEmailOnce(
-          STRIPE_SECRET_KEY, customer.id,
-          { ...meta, gh_report_amount_cents: String(amountCents) },
-          payload.bid,
-        );
-        if (receiptSent) meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
-        res.status(200).json(view());
-        return;
-      }
-      const piStatus = String(pi.data["status"] ?? "failed");
-      const errMsg =
-        ((pi.data["error"] as { message?: string } | undefined)?.message ?? `payment ${piStatus}`);
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_state]": "payment_failed",
-      });
-      meta["gh_state"] = "payment_failed";
-      await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, customer.id, payload.bid, row?.id ?? null);
-      logErr("approve_charge", `${payload.bid}: ${errMsg}`);
-      res.status(402).json({
-        ...view(),
-        error: piStatus === "requires_action" ? "payment_requires_action" : "payment_failed",
-      });
+      // No visit row: no durable obligation exists, so no charge.
+      // Shared metadata is not proof of amount, consent, payment or
+      // absence of a dispute (N08/RA01) — the booking needs an
+      // explicit migration record first, not a metadata charge.
+      logErr("approve_charge", "blocked: no visit row");
+      res.status(409).json({ requestId, ok: false, error: "no_visit_row" });
       return;
     }
 
     // action === "issue"
-    if (state === "issue_open") {
+    // N03: "already open" is decided from DURABLE state (row +
+    // journal), never from shared metadata alone. A previous attempt
+    // that updated metadata but failed the journal/row writes must
+    // NOT look resolved to a retry — the retry redoes the durable
+    // writes instead of returning a false success.
+    const durableIssueOpen = row
+      ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
+      : meta["gh_issue_open"] === "1";
+    if (durableIssueOpen) {
       res.status(200).json({ ...view(), already: true });
       return;
     }
@@ -988,6 +935,24 @@ export default async function handler(req: Req, res: Res) {
     // already complete. The response and emails say so honestly.
     const paymentInFlight =
       meta["gh_state"] === "payment_pending" || row?.status === "payment_pending";
+    // N03: durable writes FIRST, verified. The journal event and the
+    // row flags (issue_open + issue_ever, the permanent timer ban)
+    // are the authority the cron reads; metadata is display only.
+    // If either durable write fails, the client gets an error and
+    // retries — never a 200 for a complaint that was not recorded.
+    if (row) {
+      const journaled = await logEventStrict(row.id, payload.bid, "client", "issue_opened", {
+        reason: reason.slice(0, 200), room: room.slice(0, 60),
+      });
+      const flagged = journaled
+        ? await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true })
+        : -1;
+      if (!journaled || flagged !== 1) {
+        logErr("issue", "durable issue write failed — no success reported");
+        res.status(502).json({ requestId, ok: false, error: "db_error" });
+        return;
+      }
+    }
     const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
       "metadata[gh_state]": "issue_open",
       "metadata[gh_issue_open]": "1",
@@ -998,21 +963,17 @@ export default async function handler(req: Req, res: Res) {
       "metadata[gh_report_responded_at]": nowIso,
     });
     if (!upd.ok) {
-      logErr("issue", `stripe ${upd.status}`);
-      res.status(502).json({ requestId, ok: false, error: "stripe_error" });
-      return;
+      // Durable truth already recorded: the charge IS paused even if
+      // this display write failed. The returned view is built from
+      // the locally-updated meta below, so the client still sees the
+      // honest paused state; the owner triage reads the journal.
+      logErr("issue", `stripe ${upd.status} (durable issue already recorded)`);
     }
     Object.assign(meta, {
       gh_state: "issue_open", gh_issue_open: "1",
       gh_issue_reason: reason.slice(0, 200), gh_issue_room: room.slice(0, 60),
     });
     if (row) {
-      await logEvent(row.id, payload.bid, "client", "issue_opened", {
-        reason: reason.slice(0, 200), room: room.slice(0, 60),
-      });
-      // The visit row's issue flag is what the automatic-charge cron
-      // reads for database visits — keep it in sync with the metadata.
-      await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
       // Persist the customer's own photo on the visit (it is also emailed
       // to the owner below) so it stays visible in the owner review
       // instead of living only in an email attachment.

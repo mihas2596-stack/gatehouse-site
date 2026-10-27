@@ -56,7 +56,7 @@ function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[]
       const set = new Set(v.slice(4, -1).split(","));
       out = out.filter((r) => set.has(String(r[k] ?? "")));
     }
-    if (v.startsWith("neq.")) out = out.filter((r) => String(r[k] ?? "") !== v.slice(4));
+    if (v.startsWith("neq.")) out = out.filter((r) => r[k] !== null && r[k] !== undefined && String(r[k]) !== v.slice(4));
   }
   if (u.searchParams.get("order")?.startsWith("created_at.desc")) {
     out.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
@@ -124,14 +124,21 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
       if (table === "gh_visits") {
         rows.push(body);
-        return res(201, body);
+        return res(201, [body]);
       }
-      return res(201, {});
+      return res(201, [body]);
+    }
+    if (method === "DELETE") {
+      const list = table === "gh_photos" ? photos : table === "gh_events" ? evts : rows;
+      const doomed = applyFilters(list, u);
+      for (const d of doomed) { const i = list.indexOf(d); if (i >= 0) list.splice(i, 1); }
+      return res(200, doomed);
     }
     if (method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};

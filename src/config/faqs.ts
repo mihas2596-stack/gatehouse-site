@@ -27,7 +27,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "How do I pause or cancel?",
-    a: "Email us to reschedule or cancel. Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. There's no long-term commitment, so you can pause the schedule any time.",
+    a: "Cancel or reschedule on your visit page or by email. Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. There's no long-term commitment, so you can pause the schedule any time.",
   },
   {
     q: "What if the cleaner can't make it?",
@@ -35,7 +35,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "What if I'm not happy with the cleaning?",
-    a: "Missed something on the checklist? We fix it free within 72 hours. Email a photo of the missed item to hello@gatehousehomecleaning.com within 24 hours after your photo report is sent.",
+    a: "Missed something on the checklist? We fix it free within 72 hours. Tap Report an issue on your photo report page — or email a photo of the missed item to hello@gatehousehomecleaning.com — within 24 hours after your photo report is sent. While your issue is open, the charge stays paused; resolving it approves the report and charges your saved card.",
   },
   {
     q: "Who will be cleaning my home?",

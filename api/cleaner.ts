@@ -219,6 +219,13 @@ async function view(visit: VisitRow) {
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.client_note&order=created_at.desc&limit=1`,
   );
+  // N09: journal gate for entry visibility — a cancel or Finish
+  // recorded after the access row was saved revokes it even if the
+  // cleanup delete itself failed.
+  const revokeEvents = await dbSelect<{ event: string; created_at: string }>(
+    "gh_events",
+    `visit_id=eq.${visit.id}&event=in.(visit_cancelled,report_submitted)&order=created_at.desc&limit=20`,
+  );
   const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
   return {
     ok: true,
@@ -232,7 +239,7 @@ async function view(visit: VisitRow) {
       entry: cleanerEntryView(await loadAccess(visit.id), {
         status: visit.status, report_status: visit.report_status,
         cleaner_id: (visit as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
-      }, await visitConfirmed(visit.id)),
+      }, await visitConfirmed(visit.id), revokeEvents),
       client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,
       client_first_name: firstName,
@@ -658,9 +665,11 @@ export default async function handler(req: Req, res: Res) {
         problem_note: checklist.problem_note ?? null,
       });
       // Finish closes entry access: the finished cleaner no longer sees
-      // the client's entry details, even if the report is held.
-      await deleteAccess(visit.id);
-      await logEvent(visit.id, visit.booking_id, "system", "entry_revoked");
+      // the client's entry details, even if the report is held. A
+      // failed delete is journaled (the submitted report_status and
+      // the journal gate above still block the view).
+      const accessDeleted = await deleteAccess(visit.id);
+      await logEvent(visit.id, visit.booking_id, "system", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
       // Auto-publish: the finished report goes straight to the client —
       // no mandatory owner step between the cleaner's finish and the
       // client's report. Exceptions stay with the owner: an open issue

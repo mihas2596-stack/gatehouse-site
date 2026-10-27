@@ -39,6 +39,51 @@ let currentMeta: Record<string, string>;
 let resendCalls: unknown[];
 let piCalls: Array<{ body: URLSearchParams; idem: string | undefined }>;
 let bt: string;
+let dbRows: Record<string, unknown>[];
+let dbEvents: Record<string, unknown>[];
+let failEventPost = false;
+function matchCond(row: Record<string, unknown>, field: string, op: string, val: string): boolean {
+  const v = row[field];
+  const dec = decodeURIComponent(val);
+  if (op === "eq") return String(v ?? "") === dec;
+  if (op === "neq") return v !== null && v !== undefined && String(v) !== dec;
+  if (op === "is") return dec === "null" ? v === null || v === undefined : v !== null && v !== undefined;
+  if (op === "lt") return String(v ?? "") < dec;
+  if (op === "lte") return String(v ?? "") <= dec;
+  if (op === "gt") return String(v ?? "") > dec;
+  if (op === "gte") return String(v ?? "") >= dec;
+  if (op === "in") return dec.replace(/^\(|\)$/g, "").split(",").includes(String(v ?? ""));
+  return false;
+}
+function applyDbFilters(list: Record<string, unknown>[], u: URL): Record<string, unknown>[] {
+  let out = [...list];
+  for (const [k, v] of u.searchParams.entries()) {
+    if (k === "order" || k === "limit" || k === "select") continue;
+    if (k === "or") {
+      const inner = v.replace(/^\(|\)$/g, "");
+      out = out.filter((r) => inner.split(",").some((c) => {
+        const d1 = c.indexOf("."); const rest = c.slice(d1 + 1); const d2 = rest.indexOf(".");
+        return d1 > 0 && d2 > 0 ? matchCond(r, c.slice(0, d1), rest.slice(0, d2), rest.slice(d2 + 1)) : false;
+      }));
+      continue;
+    }
+    const dot = v.indexOf(".");
+    if (dot <= 0) continue;
+    out = out.filter((r) => matchCond(r, k, v.slice(0, dot), v.slice(dot + 1)));
+  }
+  const order = u.searchParams.get("order");
+  if (order) {
+    const [field, dir] = order.split(".");
+    out.sort((a, b) => { const cmp = String(a[field] ?? "").localeCompare(String(b[field] ?? "")); return dir === "desc" ? -cmp : cmp; });
+  }
+  const limit = u.searchParams.get("limit");
+  if (limit) out = out.slice(0, parseInt(limit, 10));
+  return out;
+}
+function enableDb() {
+  vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "sb_test");
+}
 
 beforeEach(() => {
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_x");
@@ -50,11 +95,39 @@ beforeEach(() => {
   currentMeta = { ...CUSTOMER.metadata };
   resendCalls = [];
   piCalls = [];
+  dbRows = []; dbEvents = []; failEventPost = false;
   bt = signBooking("link-secret", {
     bid: BID, email: CUSTOMER.email, name: CUSTOMER.name,
   }).token;
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: unknown }) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: unknown; method?: string; headers?: Record<string, string> }) => {
     const u = String(url);
+    if (u.includes("supabase")) {
+      const uu = new URL(u);
+      const table = uu.pathname.split("/").pop() ?? "";
+      const method = (init?.method ?? "GET").toUpperCase();
+      const list = table === "gh_visits" ? dbRows : table === "gh_events" ? dbEvents : [];
+      const sbRes = (data: unknown) => ({ ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) });
+      if (method === "GET") return sbRes(applyDbFilters(list, uu));
+      if (method === "POST") {
+        if (failEventPost) return { ok: false, status: 500, json: async () => ({}), text: async () => "{}" };
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        const inserted = { ...body, created_at: new Date().toISOString() };
+        list.push(inserted);
+        return sbRes([inserted]);
+      }
+      if (method === "PATCH") {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        const matched = applyDbFilters(list, uu);
+        for (const target of matched) Object.assign(target, body);
+        return sbRes(matched);
+      }
+      if (method === "DELETE") {
+        const matched = applyDbFilters(list, uu);
+        for (const d of matched) { const i = list.indexOf(d); if (i >= 0) list.splice(i, 1); }
+        return sbRes(matched);
+      }
+      return sbRes([]);
+    }
     if (u.includes("/customers/search")) {
       return { ok: true, status: 200, json: async () => ({ data: [{ id: CUSTOMER.id, metadata: currentMeta }] }) };
     }
@@ -183,6 +256,19 @@ describe("report portal", () => {
 
   it("client issue pauses the charge; approve from issue_open clears it; both idempotent", async () => {
     await sendReport();
+    // Row-back the booking AFTER the legacy send: the durable row +
+    // journal are what the new approve path charges against.
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-1", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-1", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
     const issue = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(postReq({ bt, action: "issue", reason: "Missed the oven" }) as any, issue as any);
@@ -190,6 +276,8 @@ describe("report portal", () => {
     expect(issue.body["state"]).toBe("issue_open");
     expect(currentMeta["gh_issue_open"]).toBe("1");
     expect(currentMeta["gh_issue_reason"]).toBe("Missed the oven");
+    expect(dbRows[0]["issue_open"]).toBe(true);
+    expect(dbRows[0]["issue_ever"]).toBe(true);
 
     const issueAgain = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -197,16 +285,24 @@ describe("report portal", () => {
     expect(issueAgain.body["already"]).toBe(true);
     expect(currentMeta["gh_issue_reason"]).toBe("Missed the oven");
 
-    // Terms 5.2: approving charges the pinned amount immediately.
+    // Terms 5.2 / N05: the Approve press while an issue is open IS
+    // the explicit "Resolve issue & pay" consent — durable journal
+    // first, row flag cleared only when verified, then one charge
+    // at the pinned amount. issue_ever stays true: the timer never
+    // returns for this visit.
     const viewBeforeApprove = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(getReq(bt) as any, viewBeforeApprove as any);
     const approve = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBeforeApprove.body["publication_id"] }) as any, approve as any);
+    expect(approve.code).toBe(200);
     expect(approve.body["state"]).toBe("paid");
     expect(currentMeta["gh_state"]).toBe("paid");
     expect(currentMeta["gh_issue_open"]).toBe("");
+    expect(dbRows[0]["issue_open"]).toBe(false);
+    expect(dbRows[0]["issue_ever"]).toBe(true);
+    expect(dbEvents.some((e) => e.event === "issue_resolved" && (e.detail as Record<string, unknown>)?.["via"] === "client_resolve_and_pay")).toBe(true);
     expect(piCalls).toHaveLength(1);
     expect(piCalls[0].body.get("amount")).toBe("18900");
 
@@ -216,6 +312,35 @@ describe("report portal", () => {
     expect(approveAgain.code).toBe(409);
     expect(approveAgain.body["error"]).toBe("already_paid");
     expect(piCalls).toHaveLength(1);
+  });
+
+  it("approve from issue_open fails closed when the durable resolve journal write fails: issue stays open, no intent", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-2", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: true, issue_ever: true,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-2", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+      { visit_id: "row-report-2", booking_id: BID, event: "issue_opened", detail: { reason: "Missed the oven" }, created_at: new Date().toISOString() },
+    ];
+    currentMeta["gh_issue_open"] = "1";
+    currentMeta["gh_issue_reason"] = "Missed the oven";
+    failEventPost = true;
+    const view = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, view as any);
+    const approve = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: view.body["publication_id"] }) as any, approve as any);
+    expect(approve.code).toBe(502);
+    expect(dbRows[0]["issue_open"]).toBe(true);
+    expect(piCalls).toHaveLength(0);
+    expect(currentMeta["gh_state"]).not.toBe("paid");
   });
 
   it("operator approve is closed: it is not client payment approval (G3)", async () => {

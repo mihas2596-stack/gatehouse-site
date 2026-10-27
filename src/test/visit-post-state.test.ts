@@ -103,12 +103,13 @@ beforeEach(() => {
     if (u.pathname.includes("/rest/v1/gh_visits")) {
       if (method === "PATCH") {
         const patch = JSON.parse(String(init?.body ?? "{}")) as Row;
+        const matched: Row[] = [];
         for (const r of rows) {
           const qBid = u.searchParams.get("booking_id");
           const qId = u.searchParams.get("id");
-          if ((qBid && qBid === `eq.${r["booking_id"]}`) || (qId && qId === `eq.${r["id"]}`)) Object.assign(r, patch);
+          if ((qBid && qBid === `eq.${r["booking_id"]}`) || (qId && qId === `eq.${r["id"]}`)) { Object.assign(r, patch); matched.push(r); }
         }
-        return okRes(null);
+        return okRes(matched);
       }
       const qBid = u.searchParams.get("booking_id");
       let out = [...rows];

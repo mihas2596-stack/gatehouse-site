@@ -62,6 +62,43 @@ describe("quote steps", () => {
     expect(screen.getByText("First visit: $224", { exact: false })).toBeInTheDocument();
   });
 
+  it("step 3 Price row shows real recurring values, never a literal fmt$ placeholder", () => {
+    const goToStep3 = (history: "Yes" | "No", oven: boolean) => {
+      openQuote();
+      fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+      fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${history}$`) }));
+      if (oven) {
+        fireEvent.click(screen.getByLabelText(/Inside oven/));
+        // Addon price on step 1 is a single $ sign, not "+$$35".
+        expect(document.body.textContent).toContain("+$35");
+        expect(document.body.textContent).not.toContain("+$$35");
+      }
+      fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+      for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date *", "2099-12-01"]]) {
+        fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      }
+      fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
+      expect(screen.getByRole("heading", { name: "Review & save card" })).toBeInTheDocument();
+    };
+    // Defaults (3-bed M, cleaned recently, every other week): first
+    // == recurring, so the first recurring branch renders.
+    goToStep3("Yes", false);
+    expect(screen.getByText("$189 per visit, every other week")).toBeInTheDocument();
+    expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
+    cleanup();
+    // Same home + oven: both totals move by the $35 addon, still equal.
+    goToStep3("Yes", true);
+    expect(screen.getByText("$224 per visit, every other week")).toBeInTheDocument();
+    expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
+    cleanup();
+    // Not cleaned recently: first visit is a deep clean, then the
+    // recurring price — the second recurring branch renders. The
+    // line is split across JSX fragments, so assert on page text.
+    goToStep3("No", false);
+    expect(document.body.textContent).toContain("First visit $329 (deep clean) , then $189 every other week");
+    expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
+  });
+
   it("a large home is honestly marked as a manual quote, not a fixed price", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "6" } });

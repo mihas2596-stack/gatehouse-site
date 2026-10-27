@@ -153,7 +153,10 @@ describe("reminder-before-charge guard", () => {
 
   it("reminder from an earlier run: charges on time", async () => {
     storeMeta["gh_reminded_at"] = hoursAgo(25);
-    events = [{ event: "reminder_sent", detail: {}, created_at: hoursAgo(25) }];
+    events = [
+      { event: "report_sent", detail: { version: 1, email_sent: true }, created_at: hoursAgo(30) },
+      { event: "reminder_sent", detail: {}, created_at: hoursAgo(25) },
+    ];
     const r = await run();
     expect(r.body["charged"]).toBe(1);
     expect(piCalls).toBe(1);
@@ -164,7 +167,10 @@ describe("reminder-before-charge guard", () => {
 describe("G2: timer charge re-verifies amount + identity against the row", () => {
   const ready = () => {
     storeMeta["gh_reminded_at"] = hoursAgo(25);
-    events = [{ event: "reminder_sent", detail: {}, created_at: hoursAgo(25) }];
+    events = [
+      { event: "report_sent", detail: { version: 1, email_sent: true }, created_at: hoursAgo(30) },
+      { event: "reminder_sent", detail: {}, created_at: hoursAgo(25) },
+    ];
   };
   it("row amount mismatch blocks the charge", async () => {
     ready();
@@ -193,7 +199,10 @@ describe("G2: timer charge re-verifies amount + identity against the row", () =>
 describe("failed timer charge emails the client", () => {
   it("sends the payment-failed email once on a failed PaymentIntent", async () => {
     storeMeta["gh_reminded_at"] = hoursAgo(25);
-    events = [{ event: "reminder_sent", detail: {}, created_at: hoursAgo(25) }];
+    events = [
+      { event: "report_sent", detail: { version: 1, email_sent: true }, created_at: hoursAgo(30) },
+      { event: "reminder_sent", detail: {}, created_at: hoursAgo(25) },
+    ];
     piResult = { status: "requires_payment_method", error: "card declined" };
     const r = await run();
     expect(r.body["failed"]).toBe(1);

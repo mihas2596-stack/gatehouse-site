@@ -24,10 +24,10 @@
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
-import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbUpdate, dbUpdateCount, logEvent, storageRemove } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbDeleteCount, dbUpdate, dbUpdateCount, logEvent, storageRemove } from "./_db.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { loadAccess } from "./_visit_access.js";
-import { reconcileIntent, confirmIntent } from "./_payment_intent.js";
+import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
 // shared customer is currently bound to. A report sent for another
@@ -515,106 +515,13 @@ export default async function handler(req: Req, res: Res) {
           }
           continue;
         }
-        // Legacy path (no visit row): metadata gates + reconcile
-        // hardening. A failed search never means "no payment".
-        const freshRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${item.customerId}`);
-        const freshMeta = (freshRes.data["metadata"] as Record<string, string> | undefined) ?? {};
-        const still = selectDue([{ id: item.customerId, metadata: freshMeta }], Date.now());
-        if (still.length === 0) {
-          skipped++;
-          log("skip_fresh_recheck", { booking: item.bookingId });
-          continue;
-        }
-        const rec = await reconcileIntent(STRIPE_SECRET_KEY, item.bookingId, [], {
-          amountCents: item.amountCents, currency: "usd", customerId: item.customerId,
-        });
-        if (rec.state === "unknown") {
-          syncNeeded++;
-          log("sync_needed", { booking: item.bookingId, error: "search_unknown" });
-          continue;
-        }
-        if (rec.state === "mismatch") {
-          skipped++;
-          log("skip_intent_mismatch", { booking: item.bookingId });
-          continue;
-        }
-        if (rec.state === "succeeded") {
-          await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
-            "metadata[gh_state]": "paid",
-            "metadata[gh_last_payment]": rec.intent.id,
-          });
-          try {
-            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, item.customerId, {
-              ...freshMeta,
-              gh_state: "paid",
-              gh_last_payment: rec.intent.id,
-            }, item.bookingId);
-          } catch { /* the receipt-retry pass resends the letter, never the charge */ }
-          charged++;
-          log("charged_adopted", { booking: item.bookingId });
-          continue;
-        }
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
-          "metadata[gh_state]": "payment_pending",
-          "metadata[gh_charge_source]": "timer_24h",
-        });
-        if (rec.state === "live" && rec.intent.status === "processing") {
-          skipped++;
-          log("skip_processing", { booking: item.bookingId });
-          continue;
-        }
-        const legacyConfirmKey = rec.state === "live"
-          ? `charge_${item.bookingId}_v${item.reportVersion}_confirm_${createHash("sha256").update(item.paymentMethod).digest("hex").slice(0, 12)}`
-          : `charge_${item.bookingId}_v${item.reportVersion}`;
-        const pi = rec.state === "live"
-          ? await confirmIntent(STRIPE_SECRET_KEY, rec.intent.id, item.paymentMethod, legacyConfirmKey)
-          : await stripePost(
-          STRIPE_SECRET_KEY,
-          "/payment_intents",
-          {
-            amount: String(item.amountCents),
-            currency: "usd",
-            customer: item.customerId,
-            payment_method: item.paymentMethod,
-            off_session: "true",
-            confirm: "true",
-            description: `Gatehouse cleaning — booking ${item.bookingId}`,
-            "metadata[gh_booking_id]": item.bookingId,
-            "metadata[gh_report_version]": String(item.reportVersion),
-          },
-          `charge_${item.bookingId}_v${item.reportVersion}`,
-        );
-        if (pi.ok && pi.data["status"] === "succeeded") {
-          await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
-            "metadata[gh_state]": "paid",
-            "metadata[gh_last_payment]": String(pi.data["id"] ?? ""),
-          });
-          try {
-            await sendReceiptEmailOnce(STRIPE_SECRET_KEY, item.customerId, {
-              ...freshMeta,
-              gh_state: "paid",
-              gh_last_payment: String(pi.data["id"] ?? ""),
-            }, item.bookingId);
-          } catch { /* the receipt-retry pass resends the letter, never the charge */ }
-          charged++;
-          log("charged", { booking: item.bookingId, amount: item.amountCents });
-        } else {
-          const errMsg =
-            ((pi.data["error"] as { message?: string } | undefined)?.message ??
-              `payment ${String(pi.data["status"] ?? "failed")}`);
-          await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
-            "metadata[gh_state]": "payment_failed",
-          });
-          try {
-            await logEvent(null, item.bookingId, "system", "payment_failed", {
-              source: "timer_24h",
-              error: String(errMsg).slice(0, 200),
-            });
-            await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, item.customerId, item.bookingId, null);
-          } catch { /* journal + email are best-effort; the meta flag still surfaces the failure */ }
-          failed++;
-          logErr("charge_failed", `${item.bookingId}: ${errMsg}`);
-        }
+        // No visit row: not chargeable (N08). Shared metadata is
+        // not proof of amount, consent, payment or absence of a
+        // dispute, so a booking without a durable row needs an
+        // explicit migration record first — never a metadata charge.
+        skipped++;
+        log("skip_no_row", { booking: item.bookingId });
+        continue;
       } catch (err) {
         failed++;
         logErr("charge_exception", `${item.bookingId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -650,7 +557,7 @@ export default async function handler(req: Req, res: Res) {
           const bid = c.metadata["gh_booking_id"];
           const lastPi = c.metadata["gh_last_payment"];
           if (!bid || !lastPi) continue;
-          const strict = await dbSelectStrict<{ id: string; status: string | null; payment_intent_id: string | null }>(
+          const strict = await dbSelectStrict<{ id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null }>(
             "gh_visits",
             `booking_id=eq.${encodeURIComponent(bid)}&order=visit_no.desc&limit=1`,
           );
@@ -660,6 +567,31 @@ export default async function handler(req: Req, res: Res) {
           }
           const vrow = strict.rows[0];
           if (!vrow || vrow.status === "paid") continue;
+          // N08: shared metadata is only a HINT. Before repairing a
+          // row to paid, verify the real intent at Stripe: it must
+          // belong to THIS booking, THIS customer, the pinned amount,
+          // USD, the cleaning kind, and be succeeded. A foreign intent
+          // (another booking's, a fee intent, a wrong amount, a
+          // pending/failed intent) never marks a cleaning paid.
+          if (vrow.payment_intent_id && vrow.payment_intent_id !== lastPi) {
+            log("skip_sync_conflict", { booking: bid });
+            continue;
+          }
+          const got = await getIntent(STRIPE_SECRET_KEY, lastPi);
+          if (got.status === "error") {
+            syncNeeded++;
+            continue;
+          }
+          const vAmount = typeof vrow.amount_cents === "number" ? vrow.amount_cents : NaN;
+          const mismatch = !Number.isFinite(vAmount)
+            ? "amount_missing"
+            : verifyIntentForObligation(got.intent, {
+                amountCents: vAmount, currency: "usd", customerId: c.id, bookingId: bid,
+              });
+          if (mismatch || got.intent.status !== "succeeded") {
+            log("skip_sync_unverified", { booking: bid, reason: mismatch ?? got.intent.status });
+            continue;
+          }
           const n = await dbUpdateCount(
             "gh_visits",
             `id=eq.${vrow.id}&status=neq.paid`,
@@ -708,19 +640,42 @@ export default async function handler(req: Req, res: Res) {
       logErr("retention", err);
     }
 
-    // --- Receipt-retry pass: a paid visit whose receipt email failed
-    // earlier gets the EMAIL resent — never the payment (§7: retry the
-    // letter, not the charge). The helper no-ops when the receipt
-    // marker is already stored.
+    // --- Receipt-retry pass (N13): a paid visit whose receipt email
+    // failed earlier gets the EMAIL resent — never the payment (§7:
+    // retry the letter, not the charge). The marker is PER BOOKING
+    // (row receipt_email_id, or a payment_succeeded journal event
+    // with receipt_sent true) — never the shared customer's metadata
+    // flag, which belongs to whatever booking the customer is
+    // currently bound to and used to suppress other bookings'
+    // receipts. The amount comes from the visit's own pinned amount.
     let receipts = 0;
     try {
-      const paidAll = await findByState(STRIPE_SECRET_KEY, "paid");
-      for (const c of paidAll) {
-        if (c.metadata["gh_receipt_email_id"]) continue;
-        const bid = c.metadata["gh_booking_id"];
-        if (!bid) continue;
-        const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, c.id, c.metadata, bid);
-        if (sent) receipts++;
+      if (dbConfigured()) {
+        const paidRows = await dbSelect<{
+          id: string; booking_id: string; amount_cents: number | null; receipt_email_id: string | null;
+          client_email: string | null;
+        }>(
+          "gh_visits",
+          `status=eq.paid&limit=50`,
+        );
+        for (const prow of paidRows) {
+          if (!prow.booking_id) continue;
+          if (prow.receipt_email_id && !prow.receipt_email_id.startsWith("claim:")) continue;
+          const evs = await bookingEvents(prow.booking_id);
+          if (evs.some((e) => e.event === "payment_succeeded"
+            && (e.detail?.["receipt_sent"] === true))) continue;
+          // Resolve the Stripe customer by the visit's own email —
+          // never by the shared metadata binding, which may currently
+          // point at another booking of the same client.
+          if (!prow.client_email) continue;
+          const match = await findCustomerByEmail(STRIPE_SECRET_KEY, prow.client_email);
+          if (!match) continue;
+          const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, match.id, {
+            gh_state: "paid",
+            gh_report_amount_cents: prow.amount_cents != null ? String(prow.amount_cents) : "",
+          }, prow.booking_id);
+          if (sent) receipts++;
+        }
       }
     } catch (err) {
       logErr("receipt_retry", err);
@@ -766,13 +721,15 @@ export default async function handler(req: Req, res: Res) {
           `expires_at=lt.${encodeURIComponent(new Date(now).toISOString())}&limit=100`,
         );
         for (const e of expired) {
-          if (await dbDelete("gh_visit_access", `id=eq.${encodeURIComponent(e.id)}`)) entryCleaned++;
+          const deleted = await dbDeleteCount("gh_visit_access", `id=eq.${encodeURIComponent(e.id)}`);
+          if (deleted > 0) entryCleaned++;
         }
         const today = new Date(now).toISOString().slice(0, 10);
         const tomorrow = new Date(now + 24 * 3600 * 1000).toISOString().slice(0, 10);
         const rows = await dbSelect<{
           id: string; booking_id: string; client_email: string | null; cleaner_name: string | null;
           visit_date: string | null; window: string | null; status: string | null; report_sent_at: string | null;
+          entry_reminder_sent: boolean | null;
         }>(
           "gh_visits",
           `visit_date=gte.${today}&visit_date=lte.${tomorrow}&limit=50`,
@@ -781,12 +738,27 @@ export default async function handler(req: Req, res: Res) {
         for (const r of rows) {
           if (!r.booking_id || !r.client_email || !r.cleaner_name) continue;
           if (r.status === "cancelled" || r.report_sent_at) continue;
+          if (r.entry_reminder_sent) continue;
           const evs = await bookingEvents(r.booking_id);
           if (!evs.some((e) => e.event === "visit_confirmed")) continue;
           if (evs.some((e) => e.event === "entry_reminder_sent")) continue;
           const acc = await loadAccess(r.id);
           if (acc?.entry_method) continue;
           if (!RESEND_KEY) continue;
+          // N12: ATOMIC claim before sending. The two daily cron
+          // runs used to both see "no journal event" and both email.
+          // The winner claims entry_reminder_sent=true by CAS; the
+          // loser sees the claim and skips. If the send fails or its
+          // outcome is unknown, the claim is RELEASED (false) so a
+          // later run retries — an unknown send never becomes a
+          // duplicate and never becomes a lost reminder.
+          const claimed = await dbUpdateCount(
+            "gh_visits",
+            `id=eq.${r.id}&entry_reminder_sent=neq.true`,
+            { entry_reminder_sent: true },
+          );
+          if (claimed !== 1) continue;
+          let sent = false;
           try {
             const resp = await fetch("https://api.resend.com/emails", {
               method: "POST",
@@ -800,8 +772,12 @@ export default async function handler(req: Req, res: Res) {
               }),
               signal: AbortSignal.timeout(15000),
             });
-            if (!resp.ok) continue;
-          } catch { continue; }
+            sent = resp.ok;
+          } catch { sent = false; }
+          if (!sent) {
+            await dbUpdate("gh_visits", `id=eq.${r.id}`, { entry_reminder_sent: false });
+            continue;
+          }
           await logEvent(r.id, r.booking_id, "system", "entry_reminder_sent");
           entryReminded++;
         }

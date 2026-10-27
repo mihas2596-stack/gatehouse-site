@@ -76,8 +76,12 @@ beforeEach(() => {
       }
       if (u.pathname.includes("/payment_intents/search")) {
         return okRes({
+          // N08: a verified intent must carry currency + customer +
+          // booking binding, or verifyIntentForObligation rightly
+          // rejects it as a mismatch (empty fields are not a match).
           data: searchIntents.map((p) => ({
             id: p.id, status: p.status, amount: p.amount, created: 1,
+            currency: "usd", customer: "cus_v",
             metadata: { gh_booking_id: BID, gh_report_version: p.version, ...(p.kind ? { gh_kind: p.kind } : {}) },
           })),
         });

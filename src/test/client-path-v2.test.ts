@@ -20,7 +20,39 @@ const CRON = ["cron", "secret"].join("-");
 
 type StoreCust = { id: string; email: string; name: string; metadata: Record<string, string> };
 let store: StoreCust[];
+let dbRows: Record<string, unknown>[];
+let dbEvents: Record<string, unknown>[];
 let piCalls: Array<{ body: URLSearchParams }>;
+function matchCond(row: Record<string, unknown>, field: string, op: string, val: string): boolean {
+  const v = row[field]; const dec = decodeURIComponent(val);
+  if (op === "eq") return String(v ?? "") === dec;
+  if (op === "neq") return v !== null && v !== undefined && String(v) !== dec;
+  if (op === "is") return dec === "null" ? v === null || v === undefined : v !== null && v !== undefined;
+  if (op === "lt") return String(v ?? "") < dec; if (op === "lte") return String(v ?? "") <= dec;
+  if (op === "gt") return String(v ?? "") > dec; if (op === "gte") return String(v ?? "") >= dec;
+  if (op === "in") return dec.replace(/^\(|\)$/g, "").split(",").includes(String(v ?? ""));
+  return false;
+}
+function applyDbFilters(list: Record<string, unknown>[], u: URL): Record<string, unknown>[] {
+  let out = [...list];
+  for (const [k, v] of u.searchParams.entries()) {
+    if (k === "order" || k === "limit" || k === "select") continue;
+    if (k === "or") {
+      const inner = v.replace(/^\(|\)$/g, "");
+      out = out.filter((r) => inner.split(",").some((c) => {
+        const d1 = c.indexOf("."); const rest = c.slice(d1 + 1); const d2 = rest.indexOf(".");
+        return d1 > 0 && d2 > 0 ? matchCond(r, c.slice(0, d1), rest.slice(0, d2), rest.slice(d2 + 1)) : false;
+      }));
+      continue;
+    }
+    const dot = v.indexOf("."); if (dot <= 0) continue;
+    out = out.filter((r) => matchCond(r, k, v.slice(0, dot), v.slice(dot + 1)));
+  }
+  const order = u.searchParams.get("order");
+  if (order) { const [field, dir] = order.split("."); out.sort((a, b) => { const cmp = String(a[field] ?? "").localeCompare(String(b[field] ?? "")); return dir === "desc" ? -cmp : cmp; }); }
+  const limit = u.searchParams.get("limit"); if (limit) out = out.slice(0, parseInt(limit, 10));
+  return out;
+}
 let resendCalls: Array<Record<string, unknown>>;
 let detachCalls: string[];
 
@@ -62,11 +94,26 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   store = [cust("cus_v", "bid-v", { gh_confirmed_date: future(10) })];
+  dbRows = []; dbEvents = [];
   piCalls = [];
   resendCalls = [];
   detachCalls = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: unknown; headers?: Record<string, string> }) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: unknown; headers?: Record<string, string>; method?: string }) => {
     const u = new URL(String(url));
+    if (u.hostname.includes("supabase")) {
+      const table = u.pathname.split("/").pop() ?? "";
+      const method = (init?.method ?? "GET").toUpperCase();
+      const list = table === "gh_visits" ? dbRows : table === "gh_events" ? dbEvents : [];
+      const sbRes = (data: unknown) => ({ ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) });
+      if (method === "GET") return sbRes(applyDbFilters(list, u));
+      if (method === "POST") { const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}; const inserted = { ...body, created_at: new Date().toISOString() }; list.push(inserted); return sbRes([inserted]); }
+      if (method === "PATCH") { const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}; const matched = applyDbFilters(list, u); for (const target of matched) Object.assign(target, body); return sbRes(matched); }
+      if (method === "DELETE") { const matched = applyDbFilters(list, u); for (const d of matched) { const i = list.indexOf(d); if (i >= 0) list.splice(i, 1); } return sbRes(matched); }
+      return sbRes([]);
+    }
+    if (u.pathname.endsWith("/payment_intents/search")) {
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    }
     if (u.hostname === "api.resend.com") {
       resendCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return { ok: true, status: 200, json: async () => ({ id: "email-uuid-9" }) };
@@ -196,11 +243,10 @@ describe("report issue with room + photo", () => {
       gh_rp_0: JSON.stringify([{ url: "https://img.example/k.jpg", room: "Kitchen" }]),
     };
     const res = response();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler(post(btFor("bid-v"), {
       action: "issue", room: "Kitchen", reason: "Streaks on the mirror",
       photo: "data:image/jpeg;base64,QUJD",
-    }) as any, res as any);
+    }) as never, res as never);
     expect(res.body["state"]).toBe("issue_open");
     expect(res.body["issue_room"]).toBe("Kitchen");
     expect(store[0].metadata["gh_issue_room"]).toBe("Kitchen");
@@ -267,8 +313,21 @@ describe("operator: decline_date / set_cleaner / charge_fee / delete_card", () =
   });
 
   it("charge_fee collects exactly the recorded fee, once", async () => {
+    vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "sb_test");
     store[0].metadata["gh_state"] = "cancelled";
     store[0].metadata["gh_cancel_fee_cents"] = "2500";
+    // New fee obligation: amount comes only from the visit_cancelled
+    // journal event, state/intent live on the row — metadata alone
+    // is no longer a fee record (no_fee_record without a row).
+    dbRows = [{
+      id: "row-fee-1", booking_id: "bid-v", visit_no: 1, status: "cancelled",
+      report_status: "none", amount_cents: 18900, client_email: "client@example.com",
+      fee_status: null, fee_intent_id: null, fee_amount_cents: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-fee-1", booking_id: "bid-v", event: "visit_cancelled", detail: { scope: "stop", fee_cents: 2500 }, created_at: new Date().toISOString() },
+    ];
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await adminHandler(adminReq({ action: "charge_fee", booking_id: "bid-v" }) as any, res as any);
@@ -280,6 +339,10 @@ describe("operator: decline_date / set_cleaner / charge_fee / delete_card", () =
     await adminHandler(adminReq({ action: "charge_fee", booking_id: "bid-v" }) as any, again as any);
     expect(again.body["already"]).toBe(true);
     expect(piCalls).toHaveLength(1);
+    expect(dbRows[0]["fee_status"]).toBe("fee_paid");
+    expect(dbRows[0]["fee_intent_id"]).toBe("pi_fee");
+    // The fee intent is never written into the cleaning payment marker.
+    expect(store[0].metadata["gh_last_payment"]).toBeUndefined();
   });
 
   it("delete_card detaches the payment method at Stripe", async () => {
