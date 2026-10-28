@@ -194,6 +194,18 @@ const Quote = () => {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
+  const firstStepRender = useRef(true);
+  // Land at the top of the new step with focus on its heading. The
+  // old code scrolled BEFORE React re-rendered (smooth scroll plus
+  // Safari scroll anchoring left the user at the bottom of the new
+  // step); scrolling after render, instantly, fixes it for every
+  // transition, including Back/Edit buttons that only setStep.
+  useEffect(() => {
+    if (firstStepRender.current) { firstStepRender.current = false; return; }
+    const heading = document.getElementById(`quote-step-${step}-heading`);
+    heading?.scrollIntoView?.({ behavior: "auto", block: "start" });
+    heading?.focus();
+  }, [step]);
   const requestRef = useRef<{ id: string; time: string } | null>(null);
   // Any quote change must be reviewed again before the request is sent.
   useEffect(() => {
@@ -273,7 +285,6 @@ const Quote = () => {
       return;
     }
     setStep(2);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const goToStep3 = () => {
     const errs = validateBooking(false);
@@ -285,7 +296,6 @@ const Quote = () => {
       return;
     }
     setStep(3);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const priceSummaryText = isLargeHome
     ? "Custom quote — we confirm your price with you before confirming your visit, and before anything is charged"
@@ -537,7 +547,7 @@ const Quote = () => {
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
             <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
-            <h2 className="font-heading text-2xl font-bold mb-6">Your home &amp; price</h2>
+            <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
 
             {testMode && (
               <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
@@ -799,6 +809,39 @@ const Quote = () => {
                 </>
               )}
 
+              <p className="text-sm text-muted-foreground mt-3">Fixed when you send your request. Nothing is charged today. {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
+
+              <Button
+                type="button"
+                variant="hero"
+                size="xl"
+                onClick={goToStep2}
+                className="mt-5"
+              >
+                Continue to visit details
+              </Button>
+            </div>
+            </>)}
+
+             {/* BOOKING REQUEST STEP */}
+             <form
+              id="booking-request"
+              onSubmit={handleBookingSubmit}
+              noValidate
+               className="mt-2 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
+            >
+              {step === 2 && (<>
+              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
+              <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
+              <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
+              <p className="text-sm text-foreground mb-6">
+                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
+              </p>
+              <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
+                <p><strong>Price so far:</strong> {priceSummaryText}</p>
+                <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
+              </div>
+
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
               <div className="mt-6 rounded-lg border border-border bg-background p-4">
                 <h3 className="font-heading text-base font-bold">Planning your visit</h3>
@@ -832,46 +875,10 @@ const Quote = () => {
                   </p>
                 )}
               </div>
-
-              <p className="text-sm text-muted-foreground mt-3">Your visit price is fixed when you send your request (see step 3). {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
-
-              <Button
-                type="button"
-                variant="hero"
-                size="xl"
-                onClick={goToStep2}
-                className="mt-5"
-              >
-                Continue to visit details
-              </Button>
-              <p className="mt-3 text-sm text-muted-foreground">
-                Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.
-              </p>
-            </div>
-            </>)}
-
-             {/* BOOKING REQUEST STEP */}
-             <form
-              id="booking-request"
-              onSubmit={handleBookingSubmit}
-              noValidate
-               className="mt-2 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
-            >
-              {step === 2 && (<>
-              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
-              <h2 className="font-heading text-2xl font-bold mb-2">Your visit</h2>
-              <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
-              <p className="text-sm text-foreground mb-6">
-                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
-              </p>
-              <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
-                <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
-              </div>
               </>)}
               {step === 3 && (<>
               <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 3 of 3</p>
-              <h2 className="font-heading text-2xl font-bold mb-2">Review &amp; save card</h2>
+              <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
               <p className="text-sm text-foreground mb-6">
                 Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
               </p>
@@ -1042,12 +1049,13 @@ const Quote = () => {
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
                   <h3 className="font-heading text-lg font-bold mb-2">Payment and confirmation</h3>
-                  <p className="mb-2"><strong>Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</strong></p>
-                  <p className="mb-2">If you report a problem in time, the charge stays paused while we review it with you. A report email that bounces blocks the automatic 24-hour charge.</p>
-                  <p className="mb-2">Saving a card is not a confirmed date, and it is not a confirmed booking. We confirm your date within one business day, and only then is the visit confirmed.</p>
-                  <p className="mb-2">After your visit we send a status update and a reply deadline. We confirm your date within one business day.</p>
-                  <p className="text-muted-foreground">Your card details are stored by Stripe, our payment processor. We never see or store your full card number.</p>
-                  <p className="mt-2 text-muted-foreground">Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
+                  <p className="mb-3 text-lg leading-relaxed"><strong>Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</strong></p>
+                  <ul className="mb-2 list-disc space-y-2 pl-5">
+                    <li><strong>Why your card now?</strong> So paying later takes one tap — approve the photo report and you’re done. No prepayment, no second checkout.</li>
+                    <li><strong>Safe with Stripe.</strong> Your card details go straight to Stripe, our payment processor. We never see or store your full card number.</li>
+                    <li><strong>You stay in control.</strong> Report an issue within 24 hours and the charge stays paused while we fix it with you.</li>
+                  </ul>
+                  <p className="text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day. Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
                 </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
@@ -1061,7 +1069,7 @@ const Quote = () => {
                 </Button>
               </div>
               <p className="text-base text-foreground text-center mt-3">
-                <strong>$0 charged today</strong> — after sending, you will save your card (about a minute). Saving a card does not confirm your date.
+                <strong>$0 charged today</strong> — next step takes about a minute.
               </p>
               </>)}
             </form>

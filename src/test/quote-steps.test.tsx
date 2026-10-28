@@ -99,6 +99,48 @@ describe("quote steps", () => {
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
   });
 
+  it("planning lives on step 2, not step 1, and step changes land focus on the new heading", () => {
+    openQuote();
+    expect(screen.queryByText("Planning your visit")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
+    expect(screen.getByText(/Fixed when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
+    // jsdom has no real scrolling, so focus on the new heading is
+    // the testable half of the scroll fix (the effect scrolls the
+    // heading into view, then focuses it).
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your visit" }));
+    expect(screen.getByText("Planning your visit")).toBeInTheDocument();
+    expect(screen.getByLabelText("Approximate home size — if you know it")).toBeInTheDocument();
+    expect(screen.getByText("Any extra areas to clean?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
+    expect(screen.getByRole("heading", { name: "Your home & price" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your home & price" }));
+    expect(screen.queryByText("Planning your visit")).not.toBeInTheDocument();
+  });
+
+  it("step 3 payment block answers why the card, without the wall of text", () => {
+    openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date *", "2099-12-01"]]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
+    expect(screen.getByRole("heading", { name: "Review & save card" })).toBeInTheDocument();
+    expect(screen.getByText(/Why your card now\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Safe with Stripe\./)).toBeInTheDocument();
+    expect(screen.getByText(/You stay in control\./)).toBeInTheDocument();
+    expect(screen.getByText(/Saving a card doesn’t confirm your date/)).toBeInTheDocument();
+    expect(screen.queryByText(/A report email that bounces blocks/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/After your visit we send a status update/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saving a card is not a confirmed date/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/We confirm your date within one business day/)).not.toBeInTheDocument();
+  });
+
   it("a large home is honestly marked as a manual quote, not a fixed price", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "6" } });
