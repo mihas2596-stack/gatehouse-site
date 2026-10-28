@@ -348,6 +348,80 @@ export default async function handler(req: Req, res: Res) {
     let reminded = 0;
     const remindedThisRun = new Set<string>();
     const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+    // --- Early reminder pass (runs BEFORE the 20h reminder pass): a
+    // report waiting 4+ hours gets ONE early heads-up, so a client who
+    // forgot still hears from us long before the 24h charge. It uses its
+    // OWN flag (gh_early_reminded_at) and journal event
+    // (early_reminder_sent): it never satisfies the 20h reminder pass
+    // nor the charge loop's reminder-before-charge guard, so the 20h
+    // reminder still fires and the charge still waits for it. Fires
+    // only inside the 4h..20h window: a report discovered after 20h
+    // gets the 20h reminder only, never two reminders in one run.
+    let earlyReminded = 0;
+    if (RESEND_API_KEY) {
+      for (const c of candidates) {
+        const m = c.metadata;
+        if (m["gh_early_reminded_at"]) continue;
+        if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
+        if (m["gh_report_bounced"] === "1") continue;
+        const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
+        if (!Number.isFinite(sentMs)) continue;
+        if (m["gh_state"] === "paid") continue;
+        if (sentMs + 4 * 3600 * 1000 > now) continue;
+        if (sentMs + 20 * 3600 * 1000 <= now) continue;
+        if (!c.email) continue;
+        try {
+          // The report link needs a fresh booking token.
+          const key = createHash("sha256")
+            .update(`gatehouse-booking-link:${process.env["BOOKING_LINK_SECRET"] || STRIPE_SECRET_KEY}`)
+            .digest();
+          const iv = randomBytes(12);
+          const cipher = createCipheriv("aes-256-gcm", key, iv);
+          const payload = JSON.stringify({
+            bid: m["gh_booking_id"] ?? "", email: c.email, name: c.name ?? "",
+            ts: Math.floor(Date.now() / 1000),
+          });
+          const ct = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+          const token = "v2." + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64url");
+          const deadline = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            weekday: "short", month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(sentMs + 24 * 3600 * 1000));
+          const resp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: [c.email],
+              reply_to: "hello@gatehousehomecleaning.com",
+              subject: "Your cleaning report is ready — a quick look",
+              text:
+                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nYour photo report is ready — please take a quick look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
+                `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
+                `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nNick\n\nGatehouse Home Cleaning\n`,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (resp.ok) {
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
+              "metadata[gh_early_reminded_at]": new Date().toISOString(),
+              ...(m["gh_booking_id"] ? { "metadata[gh_early_reminder_for]": m["gh_booking_id"] } : {}),
+            });
+            if (m["gh_booking_id"]) {
+              const vrows = await dbSelect<{ id: string }>(
+                "gh_visits",
+                `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
+              );
+              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "early_reminder_sent", {});
+            }
+            earlyReminded++;
+          }
+        } catch (err) {
+          logErr("early_reminder", err);
+        }
+      }
+    }
     if (RESEND_API_KEY) {
       for (const c of candidates) {
         const m = c.metadata;
@@ -786,10 +860,10 @@ export default async function handler(req: Req, res: Res) {
       logErr("entry_reminder", err);
     }
 
-    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned });
+    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned });
     res.status(200).json({
       requestId, ok: true,
-      checked: candidates.length, due: due.length, charged, skipped, failed, reminded, cleaned, receipts, synced, sync_needed: syncNeeded,
+      checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded,
       entry_reminded: entryReminded, entry_cleaned: entryCleaned,
     });
   } catch (error: unknown) {
