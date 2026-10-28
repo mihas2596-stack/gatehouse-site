@@ -36,6 +36,11 @@ type Visit = {
   can_charge?: boolean;
   visit_confirmed?: boolean;
   entry_agreed?: boolean;
+  entry_method?: string | null;
+  entry_detail?: string | null;
+  entry_notes?: string | null;
+  entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
+  entry?: { method: string | null; note: string; has_secret: boolean; secret?: string | null; assigned_cleaner_id?: string | null; expires_at?: string | null; reminder_sent?: boolean } | null;
   proposed_date?: string;
   proposed_pending?: boolean;
   confirmation_email?: string | null;
@@ -54,6 +59,24 @@ const money = (cents: number | null): string =>
   cents ? `$${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : "—";
 
 // Date-only strings (YYYY-MM-DD) formatted without a timezone shift.
+// Entry status for the owner panel: the quote-time choice (row) wins,
+// the saved arrangement (gh_visit_access) is the fallback for older rows.
+function entryStatusText(v: Visit): string {
+  const method = v.entry_choice?.method ?? v.entry_method ?? v.entry?.method ?? null;
+  const detail = v.entry_choice?.detail ?? v.entry_detail ?? null;
+  if (!method) return "Not arranged yet";
+  if (method === "decide_later") return "To be arranged — contact the client";
+  if (method === "arrange_before" || method === "arrange") {
+    if (detail === "door_code") return "Arrange entry before the visit (Door code / smart lock)";
+    if (detail === "lockbox") return "Arrange entry before the visit (Lockbox)";
+    if (detail === "other") return "Arrange entry before the visit (Other arrangement)";
+    return "Arrange entry before the visit";
+  }
+  if (method === "home") return "Client will be home to let the cleaner in";
+  if (method === "someone" || method === "other_person") return "Someone else will meet the cleaner";
+  return method;
+}
+
 const fmtVisitDate = (d: string | null | undefined): string => {
   if (!d) return "no date";
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
@@ -1397,6 +1420,27 @@ const Owner = () => {
                       <p className="text-xs text-muted-foreground mt-1">Proposing emails the client an alternative date — a proposal is not a confirmation.</p>
                     </details>
                   </div>
+                )}
+              </section>
+
+              {/* Entry — quote-time choice, saved arrangement, action needed */}
+              <section id="block-entry" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
+                <h3 className="font-semibold mb-3">Entry</h3>
+                <p className="text-sm mb-2">Booking choice: {entryStatusText(v)}</p>
+                {(v.entry_choice?.notes ?? v.entry_notes) && (
+                  <p className="text-sm mb-2">Parking/building notes: {v.entry_choice?.notes ?? v.entry_notes}</p>
+                )}
+                {v.entry?.method && (
+                  <p className="text-sm mb-2">Saved arrangement: {v.entry.method === "home" ? "Client will be home" : v.entry.method === "someone" ? "Someone else will meet the cleaner" : "Arrange entry before the visit"}{v.entry.has_secret ? " · private entry details saved" : " · no private details yet"}</p>
+                )}
+                {v.entry?.reminder_sent && (
+                  <p className="text-sm text-muted-foreground mb-2">Entry reminder sent.</p>
+                )}
+                {v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid" && !v.entry_agreed && (
+                  <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
+                )}
+                {v.entry_agreed && (
+                  <p className="text-sm text-muted-foreground">Entry settled.</p>
                 )}
               </section>
 

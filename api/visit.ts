@@ -38,6 +38,7 @@ type BookingRow = {
   report_status?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
   visit_date?: string | null; window?: string | null;
+  entry_method?: string | null; entry_detail?: string | null; entry_notes?: string | null;
   cleaner_id?: string | null;
   cleaner_profile?: unknown;
 };
@@ -708,6 +709,14 @@ export default async function handler(req: Req, res: Res) {
         access_notes: "",
         entry: entryView,
         entry_available: entryAvailable,
+        // Quote-time entry preference (non-secret): shown to the client
+        // after confirmation and pre-fills the entry form. Secrets stay
+        // in gh_visit_access (entry above); this never carries them.
+        entry_choice: row ? {
+          method: row.entry_method ?? null,
+          detail: row.entry_detail ?? null,
+          notes: row.entry_notes ?? null,
+        } : null,
         no_photo_zones: meta["gh_no_photo_zones"] ?? "",
         has_card: Boolean(meta["gh_payment_method"]),
         card_brand: cardBrand,
@@ -991,6 +1000,21 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       await logEvent(row.id, payload.bid, "client", "entry_saved");
+      // Row sync (best-effort): the quote-time preference and the visit
+      // form must never diverge — the owner panel, cleaner view and the
+      // entry reminder all read the row. A sync failure never fails the
+      // save itself; the access row above is the secret store. The local
+      // row object is updated too so this response is already fresh.
+      try {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          entry_method: method === "home" ? "home" : method === "someone" ? "other_person" : "arrange_before",
+          ...(method === "arrange" ? {} : { entry_detail: null }),
+          entry_notes: note || null,
+        });
+        row.entry_method = method === "home" ? "home" : method === "someone" ? "other_person" : "arrange_before";
+        if (method !== "arrange") row.entry_detail = null;
+        row.entry_notes = note || null;
+      } catch { /* best-effort */ }
       entryView = clientEntryView(await loadAccess(row.id), true);
       res.status(200).json({ ...view(), entry_saved: true });
       return;
@@ -1009,6 +1033,39 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       await logEvent(row.id, payload.bid, "client", "entry_deleted");
+      try {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { entry_method: null, entry_detail: null });
+        row.entry_method = null;
+        row.entry_detail = null;
+      } catch { /* best-effort */ }
+      entryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
+      res.status(200).json({ ...view(), entry_saved: true });
+      return;
+    }
+
+    if (action === "set_entry_choice") {
+      if (!entryAvailable || !row) {
+        res.status(409).json({ requestId, ok: false, error: "entry_not_available" });
+        return;
+      }
+      // Narrow surface: only "decide later" goes through here. Meeting
+      // and arrange choices use save_entry (which also syncs the row).
+      if (body["method"] !== "decide_later") {
+        res.status(400).json({ requestId, ok: false, error: "invalid_entry_choice" });
+        return;
+      }
+      // A withdrawn arrangement must not leave a stale secret behind.
+      const deleted = await deleteAccess(row.id);
+      if (!deleted) {
+        res.status(502).json({ requestId, ok: false, error: "entry_delete_failed" });
+        return;
+      }
+      try {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { entry_method: "decide_later", entry_detail: null });
+        row.entry_method = "decide_later";
+        row.entry_detail = null;
+      } catch { /* best-effort */ }
+      await logEvent(row.id, payload.bid, "client", "entry_choice_changed", { method: "decide_later" });
       entryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
       res.status(200).json({ ...view(), entry_saved: true });
       return;

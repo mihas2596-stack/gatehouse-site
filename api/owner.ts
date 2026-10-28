@@ -211,6 +211,14 @@ export default async function handler(req: Req, res: Res) {
         ok: true,
         visit: {
           ...annotateVisit(visit, openedAt),
+          entry_choice: {
+            method: visit["entry_method"] ?? null,
+            detail: visit["entry_detail"] ?? null,
+            notes: visit["entry_notes"] ?? null,
+          },
+          entry_agreed: Boolean(entryRow?.entry_method)
+            || visit["entry_method"] === "home"
+            || visit["entry_method"] === "other_person",
           entry: entryRow ? {
             method: entryRow.entry_method,
             note: entryRow.entry_note ?? "",
@@ -317,6 +325,13 @@ export default async function handler(req: Req, res: Res) {
         `visit_id=in.(${ids.join(",")})&limit=200`,
       );
       for (const a of accs) if (a.entry_method) entryAgreed.add(a.visit_id);
+      // A meeting choice needs no secret: the quote-time row method
+      // settles access on its own (arrange_before without a saved
+      // secret does not — the owner still has to chase the details).
+      for (const v of visits) {
+        const m = v["entry_method"];
+        if (m === "home" || m === "other_person") entryAgreed.add(v.id);
+      }
     }
     const approved = new Set<string>();
     if (ids.length > 0) {

@@ -65,6 +65,7 @@ type VisitRow = {
   issue_open?: boolean | null;
   amount_cents?: number | null;
   client_email?: string | null;
+  entry_method?: string | null; entry_detail?: string | null; entry_notes?: string | null;
   cleaner_id?: string | null;
   cleaner_token_hash: string | null;
   cleaner_token_expires: string | null;
@@ -236,6 +237,11 @@ async function view(visit: VisitRow) {
       window: visit.window,
       address: visit.address,
       access_notes: null,
+      entry_choice: {
+        method: visit.entry_method ?? null,
+        detail: visit.entry_detail ?? null,
+        notes: visit.entry_notes ?? null,
+      },
       entry: cleanerEntryView(await loadAccess(visit.id), {
         status: visit.status, report_status: visit.report_status,
         cleaner_id: (visit as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,

@@ -935,6 +935,7 @@ function parseRosterCsv(csv: string): {
 async function sendConfirmationEmail(args: {
   to: string; firstName: string; date: string; win: string;
   service: string; cleaner: string; cents: number | null; visitLink: string;
+  entryMethod?: string | null;
 }): Promise<boolean> {
   const RESEND_API_KEY = process.env["RESEND_API_KEY"];
   if (!RESEND_API_KEY) return false;
@@ -946,6 +947,26 @@ async function sendConfirmationEmail(args: {
   const amountLine = args.cents !== null
     ? ` of $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")}`
     : "";
+  // The booking entry choice (row column, pre-migration rows read null
+  // and keep the generic paragraph). Never includes codes or details.
+  const entryLine = args.entryMethod === "home"
+    ? `\nEntry: you'll be home to let the cleaner in — no codes needed.\n\n`
+    : args.entryMethod === "other_person"
+      ? `\nEntry: someone else will meet the cleaner — no codes needed.\n\n`
+      : args.entryMethod === "arrange_before"
+        ? `\nEntry: you chose to arrange entry before the visit — please add your private entry details on your visit page (link below). No entry details are in this email.\n\n`
+        : args.entryMethod === "decide_later"
+          ? `\nEntry: you asked us to contact you about entry — we'll be in touch before the visit. You can also choose on your visit page (link below).\n\n`
+          : `\nArrange entry for your visit: on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.\n\n`;
+  const entryHtml = args.entryMethod === "home"
+    ? `<p><strong>Entry:</strong> you'll be home to let the cleaner in — no codes needed.</p>`
+    : args.entryMethod === "other_person"
+      ? `<p><strong>Entry:</strong> someone else will meet the cleaner — no codes needed.</p>`
+      : args.entryMethod === "arrange_before"
+        ? `<p><strong>Entry:</strong> you chose to arrange entry before the visit — please add your private entry details on your visit page (link below). No entry details are in this email.</p>`
+        : args.entryMethod === "decide_later"
+          ? `<p><strong>Entry:</strong> you asked us to contact you about entry — we'll be in touch before the visit. You can also choose on your visit page (link below).</p>`
+          : `<p><strong>Arrange entry for your visit:</strong> on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.</p>`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -961,7 +982,7 @@ async function sendConfirmationEmail(args: {
         text:
           `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\nDate: ${args.date}\nArrival window: ${args.win}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
           `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
-          `Arrange entry for your visit: on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.\n\n` +
+          entryLine +
           `Your visit page — status, your cleaner, reschedule or cancel:\n${args.visitLink}\n\n` +
           "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
         html:
@@ -972,7 +993,7 @@ async function sendConfirmationEmail(args: {
           `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
           emailButton(args.visitLink, "View my visit") +
           `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
-          `<p><strong>Arrange entry for your visit:</strong> on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.</p>` +
+          entryHtml +
           `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
           `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
       }),
@@ -1284,6 +1305,7 @@ export default async function handler(req: Req, res: Res) {
             cleaner: cleanerName,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
             visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
       }
@@ -1457,6 +1479,7 @@ export default async function handler(req: Req, res: Res) {
             cleaner: name,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
             visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            entryMethod: (row as unknown as { entry_method?: string | null }).entry_method ?? null,
           });
         }
       }
@@ -1510,6 +1533,7 @@ export default async function handler(req: Req, res: Res) {
             cleaner: (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim(),
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
             visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
       }

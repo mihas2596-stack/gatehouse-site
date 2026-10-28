@@ -248,3 +248,55 @@ describe("cleaner entry visibility gates", () => {
     expect(entryExpiresAt("2027-01-15")).toBe("2027-01-17T12:00:00.000Z");
   });
 });
+
+describe("visit entry choice (quote-time preference)", () => {
+  it("GET returns the booking entry choice", async () => {
+    rows[0]["entry_method"] = "arrange_before";
+    rows[0]["entry_detail"] = "lockbox";
+    rows[0]["entry_notes"] = "Park in driveway";
+    const r = await call("GET");
+    expect(r.body["entry_choice"]).toEqual({
+      method: "arrange_before", detail: "lockbox", notes: "Park in driveway",
+    });
+  });
+
+  it("save_entry syncs the row method and notes", async () => {
+    const r = await call("POST", { action: "save_entry", method: "home", note: "Intercom at gate", secret: "" });
+    expect(r.code).toBe(200);
+    expect(rows[0]["entry_method"]).toBe("home");
+    expect(rows[0]["entry_notes"]).toBe("Intercom at gate");
+    expect((r.body["entry_choice"] as Record<string, unknown>)["method"]).toBe("home");
+  });
+
+  it("save_entry arrange keeps the quote detail", async () => {
+    rows[0]["entry_detail"] = "lockbox";
+    const r = await call("POST", { action: "save_entry", method: "arrange", note: "", secret: "", secret_action: "keep" });
+    expect(r.code).toBe(200);
+    expect(rows[0]["entry_method"]).toBe("arrange_before");
+    expect(rows[0]["entry_detail"]).toBe("lockbox");
+  });
+
+  it("set_entry_choice decide_later clears the secret and sets the row", async () => {
+    await call("POST", { action: "save_entry", method: "arrange", note: "", secret: "guest-1" });
+    expect(accessRows).toHaveLength(1);
+    const r = await call("POST", { action: "set_entry_choice", method: "decide_later" });
+    expect(r.code).toBe(200);
+    expect(accessRows).toHaveLength(0);
+    expect(rows[0]["entry_method"]).toBe("decide_later");
+    expect(rows[0]["entry_detail"]).toBe(null);
+    expect(events.some((e) => e.event === "entry_choice_changed")).toBe(true);
+  });
+
+  it("set_entry_choice rejects other methods", async () => {
+    const r = await call("POST", { action: "set_entry_choice", method: "home" });
+    expect(r.code).toBe(400);
+    expect(r.body["error"]).toBe("invalid_entry_choice");
+  });
+
+  it("set_entry_choice before confirmation is 409", async () => {
+    events = [created];
+    const r = await call("POST", { action: "set_entry_choice", method: "decide_later" });
+    expect(r.code).toBe(409);
+    expect(r.body["error"]).toBe("entry_not_available");
+  });
+});

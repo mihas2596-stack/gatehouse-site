@@ -64,10 +64,10 @@ const Header = () => {
     };
   }, [isOpen]);
 
-  // Checkout-stage pages get a minimal header: logo + help only. No nav,
-  // no "See My Price" — nothing that pulls a client who is one step from
-  // finishing back into browsing.
-  const minimalHeader = location.pathname === "/thank-you" || location.pathname === "/save-card";
+  // Checkout-stage pages — and /quote itself — get a minimal header:
+  // logo + help only. No nav, no "See My Price" — nothing that pulls a
+  // client who is one step from finishing back into browsing.
+  const minimalHeader = location.pathname === "/thank-you" || location.pathname === "/save-card" || location.pathname === "/quote";
   if (minimalHeader) {
     return (
       <header

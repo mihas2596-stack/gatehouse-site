@@ -18,7 +18,7 @@ type SubmissionState = {
   kind?: "booking" | "contact";
   customerEmailSent?: boolean;
   bt?: string;
-  recap?: { price?: string; email?: string; date?: string; window?: string; status?: string; response?: string };
+  recap?: { price?: string; email?: string; date?: string; window?: string; entry?: string; status?: string; response?: string };
   plan?: Plan;
 };
 
@@ -262,6 +262,7 @@ const ThankYou = () => {
               <span>
                 {formatDateLong(requestedDate)}
                 {recap.window ? <> · {recap.window}</> : null}
+                {recap.entry ? <> · Entry: {recap.entry}</> : null}
               </span>
               <span className="rounded-full bg-peach/50 px-2.5 py-0.5 text-xs font-semibold">Awaiting confirmation</span>
             </dd>
@@ -464,7 +465,7 @@ const ThankYou = () => {
         ) : failed ? (
           "Try saving your card again"
         ) : (
-          "Save card — $0 today"
+          "Continue to save card — $0 today"
         )}
       </Button>
       <p className="mt-3 text-center text-sm text-muted-foreground">

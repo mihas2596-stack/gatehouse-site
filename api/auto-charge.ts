@@ -804,6 +804,7 @@ export default async function handler(req: Req, res: Res) {
           id: string; booking_id: string; client_email: string | null; cleaner_name: string | null;
           visit_date: string | null; window: string | null; status: string | null; report_sent_at: string | null;
           entry_reminder_sent: boolean | null;
+          entry_method: string | null;
         }>(
           "gh_visits",
           `visit_date=gte.${today}&visit_date=lte.${tomorrow}&limit=50`,
@@ -813,11 +814,16 @@ export default async function handler(req: Req, res: Res) {
           if (!r.booking_id || !r.client_email || !r.cleaner_name) continue;
           if (r.status === "cancelled" || r.report_sent_at) continue;
           if (r.entry_reminder_sent) continue;
+          // Quote-time choice settles the reminder too: a meeting
+          // choice needs no code, so reminding would be noise.
+          if (r.entry_method === "home" || r.entry_method === "other_person") continue;
           const evs = await bookingEvents(r.booking_id);
           if (!evs.some((e) => e.event === "visit_confirmed")) continue;
           if (evs.some((e) => e.event === "entry_reminder_sent")) continue;
           const acc = await loadAccess(r.id);
           if (acc?.entry_method) continue;
+          // Arrange-before WITH saved details is settled as well.
+          if (r.entry_method === "arrange_before" && acc?.entry_secret) continue;
           if (!RESEND_KEY) continue;
           // N12: ATOMIC claim before sending. The two daily cron
           // runs used to both see "no journal event" and both email.

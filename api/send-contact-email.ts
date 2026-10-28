@@ -392,7 +392,13 @@ const ContactSchema = z.object({
   full_baths: z.string().max(20).optional().or(z.literal("")),
   half_baths: z.string().max(20).optional().or(z.literal("")),
   zip: z.string().max(20).optional().or(z.literal("")),
-  address: z.string().max(200).optional().or(z.literal("")),
+  address: z.string().max(400).optional().or(z.literal("")),
+  city: z.string().max(100).optional().or(z.literal("")),
+  state: z.string().max(50).optional().or(z.literal("")),
+  apt: z.string().max(50).optional().or(z.literal("")),
+  entry_method: z.enum(["home", "other_person", "arrange_before", "decide_later"]).optional(),
+  entry_detail: z.enum(["door_code", "lockbox", "other"]).optional(),
+  entry_notes: z.string().max(500).optional().or(z.literal("")),
   price: z.string().max(20).optional().or(z.literal("")),
   // Exact quote inputs — the server recomputes the price from these and
   // never trusts the browser-sent price for the signed booking token.
@@ -616,6 +622,12 @@ export default async function handler(req: Req, res: Res) {
       bathrooms,
       zip,
       address,
+      city,
+      state,
+      apt,
+      entry_method,
+      entry_detail,
+      entry_notes,
       price,
     } = parsed.data;
 
@@ -719,15 +731,43 @@ export default async function handler(req: Req, res: Res) {
         try {
           const genericItems = [{ label: "Cleaned as agreed", done: false }];
           const stdItems = (labels: string[]) => labels.map((label) => ({ label, done: false }));
+          // Rooms are generated from THIS booking (fix 2026-10-28): the
+          // old fixed 4-room list gave a 5-bedroom house the same rooms
+          // as a 1-bedroom one, and extra zones arrive as a joined
+          // string, so the old loop minted one-letter rooms from its
+          // characters. Counts come from the validated quote inputs;
+          // when they are missing we fall back to the old generic
+          // plural rooms so the checklist is never empty.
+          const bedN = parseInt(bedrooms ?? "", 10);
+          const fullN = parseInt(parsed.data.full_baths ?? "", 10);
+          const halfN = parseInt(parsed.data.half_baths ?? "", 10);
+          const bathTasks = ["Toilet, shower/tub and sink cleaned", "Mirrors polished", "Floor cleaned", "Trash emptied"];
+          const halfTasks = ["Toilet and sink cleaned", "Mirror polished", "Floor cleaned", "Trash emptied"];
+          const bedTasks = ["Surfaces dusted", "Floor vacuumed / cleaned", "Bed made (if requested)"];
           const rooms: { name: string; items: { label: string; done: boolean }[] }[] = [
             { name: "Kitchen", items: stdItems(["Counters and sink cleaned", "Appliance exteriors wiped", "Floor vacuumed and mopped", "Trash emptied"]) },
-            { name: "Bathrooms", items: stdItems(["Toilet, shower/tub and sink cleaned", "Mirrors polished", "Floor cleaned", "Trash emptied"]) },
-            { name: "Bedrooms", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Bed made (if requested)"]) },
-            { name: "Living room", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Cushions straightened"]) },
           ];
-          for (const z of (extra_zones ?? []).slice(0, 8)) {
-            if (typeof z === "string" && z.trim()) rooms.push({ name: z.trim().slice(0, 60), items: [...genericItems] });
+          if (Number.isFinite(fullN) && fullN > 0) {
+            if (fullN === 1) rooms.push({ name: "Bathroom", items: stdItems(bathTasks) });
+            else for (let i = 1; i <= fullN; i++) rooms.push({ name: `Bathroom ${i}`, items: stdItems(bathTasks) });
+          } else {
+            rooms.push({ name: "Bathrooms", items: stdItems(bathTasks) });
           }
+          if (Number.isFinite(bedN) && bedN > 0) {
+            if (bedN === 1) rooms.push({ name: "Bedroom", items: stdItems(bedTasks) });
+            else for (let i = 1; i <= bedN; i++) rooms.push({ name: `Bedroom ${i}`, items: stdItems(bedTasks) });
+          } else {
+            rooms.push({ name: "Bedrooms", items: stdItems(bedTasks) });
+          }
+          if (Number.isFinite(halfN) && halfN > 0) {
+            if (halfN === 1) rooms.push({ name: "Half bathroom", items: stdItems(halfTasks) });
+            else for (let i = 1; i <= halfN; i++) rooms.push({ name: `Half bathroom ${i}`, items: stdItems(halfTasks) });
+          }
+          rooms.push({ name: "Living room", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Cushions straightened"]) });
+          // extra_zones arrives as a comma-joined string (see the quote
+          // form payload) — split it; never iterate the raw string.
+          const zoneNames = (extra_zones ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 8);
+          for (const z of zoneNames) rooms.push({ name: z.slice(0, 60), items: [...genericItems] });
           // M6/N-upsert: insert-only, never merge. A retried or
           // concurrent submission reproduces the same booking id by
           // design — it must never regress a visit that has already
@@ -753,6 +793,9 @@ export default async function handler(req: Req, res: Res) {
               visit_date: /^\d{4}-\d{2}-\d{2}$/.test((date ?? "").trim()) ? (date as string).trim() : null,
               window: (time ?? "").trim() || null,
               address: (address ?? "").trim() || null,
+              entry_method: entry_method ?? null,
+              entry_detail: entry_method === "arrange_before" ? entry_detail ?? null : null,
+              entry_notes: (entry_notes ?? "").trim() || null,
               // Entry instructions are NOT collected at booking (spec A §4):
               // a value sent by an old cached page is dropped here, never
               // stored in the row, Stripe metadata, or email.
@@ -813,6 +856,19 @@ export default async function handler(req: Req, res: Res) {
       log("booking", { bid: bookingId });
     }
 
+    const entryMethodLabel = (method: string, detail?: string): string => {
+      const base: Record<string, string> = {
+        home: "I'll be home to let the cleaner in",
+        other_person: "Someone else will let the cleaner in",
+        arrange_before: "I'll arrange entry before the visit",
+        decide_later: "I'll decide later — please contact me",
+      }[method] ?? method;
+      if (method === "arrange_before" && detail) {
+        const d = ({ door_code: "Door code / smart lock", lockbox: "Lockbox", other: "Other arrangement" } as Record<string, string>)[detail];
+        return d ? `${base} (${d})` : base;
+      }
+      return base;
+    };
     const row = (label: string, value: string) =>
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
@@ -843,6 +899,8 @@ export default async function handler(req: Req, res: Res) {
           ${service ? row("Service Type", escapeHtml(service)) : ""}
           ${zip ? row("ZIP", escapeHtml(zip)) : ""}
           ${address ? row("Street address", escapeHtml(address)) : ""}
+          ${entry_method ? row("Entry", escapeHtml(entryMethodLabel(entry_method, entry_detail))) : ""}
+          ${entry_notes ? row("Entry notes (parking/building)", escapeHtml(entry_notes)) : ""}
           ${bedrooms ? row("Bedrooms", escapeHtml(bedrooms)) : ""}
           ${bathrooms ? row("Bathrooms", escapeHtml(bathrooms)) : ""}
           ${serverFirst ? row("Server-verified estimate", `$${escapeHtml(serverFirst)}`) : price ? row("Client-side estimate — verify", `$${escapeHtml(price)}`) : ""}

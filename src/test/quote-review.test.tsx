@@ -76,21 +76,23 @@ describe("booking price confirmation", () => {
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["Preferred date *", "2099-12-01"]]) {
+    for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
+    fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
+    fireEvent.click(document.getElementById("b-photo")!);
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     fireEvent.click(document.getElementById("b-terms")!);
-    fireEvent.click(document.getElementById("b-photo")!);
-    expect(screen.getByRole("button", { name: "Save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
     // Editing the price leaves step 3: the save button is gone until the
     // request is reviewed again, with answers preserved.
-    fireEvent.click(screen.getByRole("button", { name: "Edit price" }));
-    expect(screen.queryByRole("button", { name: "Save card — $0 today" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
+    expect(screen.queryByRole("button", { name: "Continue to save card — $0 today" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByLabelText("Your name *")).toHaveValue("Test Person");
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByRole("button", { name: "Save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
   });
 });

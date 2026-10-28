@@ -27,6 +27,7 @@ type CleanerView = {
     address: string | null;
     access_notes: string | null;
     entry?: { method: string | null; note: string; secret: string | null } | null;
+    entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
     client_notes?: string | null;
     no_photo_zones: string | null;
     client_first_name: string;
@@ -324,6 +325,12 @@ const Cleaner = () => {
               {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
             </div>
           )}
+          {!v.entry && v.entry_choice?.method && (
+            <div className="text-sm space-y-1">
+              <p><span className="font-semibold">Entry choice:</span> {v.entry_choice.method === "home" ? "Client will be home to let you in." : v.entry_choice.method === "other_person" ? "Someone else will meet you." : v.entry_choice.method === "arrange_before" ? `Arrange entry before the visit${v.entry_choice.detail === "door_code" ? " (Door code / smart lock)" : v.entry_choice.detail === "lockbox" ? " (Lockbox)" : v.entry_choice.detail === "other" ? " (Other arrangement)" : ""}.` : "Client will decide later — contact the owner."}</p>
+              {v.entry_choice.notes && <p><span className="font-semibold">Note:</span> {v.entry_choice.notes}</p>}
+            </div>
+          )}
           {v.client_notes && (
             <p className="text-sm"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>
           )}
@@ -331,6 +338,13 @@ const Cleaner = () => {
             <p className="text-sm text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
           )}
         </div>
+
+        {data.confirmed && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
+          <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
+            <p className="text-sm font-semibold">Entry not arranged yet</p>
+            <p className="text-sm text-muted-foreground">Check with the owner before going — do not head to a visit without settled entry.</p>
+          </div>
+        )}
 
         <details className="rounded-xl border border-border bg-card p-4 mt-4">
           <summary className="text-sm font-semibold cursor-pointer">How photos work</summary>

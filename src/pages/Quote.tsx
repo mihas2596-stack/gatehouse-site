@@ -33,6 +33,16 @@ import {
   type SizeBandKey,
 } from "@/config/calculator";
 
+import {
+  ENTRY_METHODS,
+  ENTRY_DETAILS,
+  ENTRY_METHOD_LABEL,
+  ENTRY_DETAIL_LABEL,
+  entrySummaryLabel,
+  type EntryMethodChoice,
+  type EntryDetailChoice,
+} from "@/config/entry";
+
 import { SERVICE_ZIPS, earliestServiceDate, validServiceDate } from "@/config/service-area";
 
 const resolveService = (param: string | null): CalcServiceKey => {
@@ -99,6 +109,17 @@ const Quote = () => {
   // Money display: whole dollars stay "$224", cents always show two
   // decimals ("$1.50", never "$1.5").
   const fmt$ = (n: number): string => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
+  // US-style date for summaries ("November 7, 2026"). Noon avoids TZ shifts.
+  const fmtDate = (iso: string): string => {
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  };
+  const WINDOW_LABEL: Record<string, string> = {
+    morning: "Morning (7 AM – 11 AM)",
+    midday: "Midday (11 AM – 2 PM)",
+    afternoon: "Afternoon (2 PM – 5 PM)",
+    flexible: "I'm flexible",
+  };
 
   const [insideOven, setInsideOven] = useState(false);
   const [insideFridge, setInsideFridge] = useState(false);
@@ -189,7 +210,16 @@ const Quote = () => {
     termsConsent: false,
     photoConsent: false,
     smsConsent: false,
+    city: "",
+    state: "GA",
+    apt: "",
   });
+  // Entry preference (not a secret): chosen on step 2, stored with the
+  // booking, shown on step 3, thank-you, owner and cleaner surfaces.
+  // Codes/key locations are never part of it.
+  const [entryMethod, setEntryMethod] = useState<EntryMethodChoice | "">("");
+  const [entryDetail, setEntryDetail] = useState<EntryDetailChoice | "">("");
+  const [entryNotes, setEntryNotes] = useState("");
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -217,6 +247,8 @@ const Quote = () => {
     email: useRef<HTMLInputElement>(null),
     phone: useRef<HTMLInputElement>(null),
     address: useRef<HTMLInputElement>(null),
+    city: useRef<HTMLInputElement>(null),
+    state: useRef<HTMLInputElement>(null),
     date: useRef<HTMLInputElement>(null),
     termsConsent: useRef<HTMLInputElement>(null),
     photoConsent: useRef<HTMLInputElement>(null),
@@ -237,11 +269,13 @@ const Quote = () => {
     setBookingErrors((p) => ({ ...p, [t.name]: "" }));
   };
 
-  const fieldError = (field: "name" | "email" | "phone" | "address" | "date", value: string) => {
+  const fieldError = (field: "name" | "email" | "phone" | "address" | "city" | "state" | "date", value: string) => {
     if (field === "name") return value.trim().length < 1 ? "Enter your name." : "";
     if (field === "email")
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? "" : "Enter a valid email, like name@example.com.";
     if (field === "address") return value.trim().length < 5 ? "Enter your street address." : "";
+    if (field === "city") return value.trim().length < 2 ? "Enter your city." : "";
+    if (field === "state") return value.trim().length < 2 ? "Enter your state." : "";
     if (field === "date") {
       if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${minDate}.`;
       return "";
@@ -251,8 +285,8 @@ const Quote = () => {
   };
 
   const handleBookingBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    const name = e.target.name as "name" | "email" | "phone" | "address" | "date";
-    if (!(["name", "email", "phone", "address", "date"] as string[]).includes(name)) return;
+    const name = e.target.name as "name" | "email" | "phone" | "address" | "city" | "state" | "date";
+    if (!(["name", "email", "phone", "address", "city", "state", "date"] as string[]).includes(name)) return;
     setBookingErrors((p) => ({ ...p, [name]: fieldError(name, e.target.value) }));
   };
 
@@ -260,7 +294,7 @@ const Quote = () => {
   // live on step 3 and are checked on the final submit, not on Review.
   const validateBooking = (requireConsents = true) => {
     const errs: Record<string, string> = {};
-    (["name", "email", "phone", "address", "date"] as const).forEach((f) => {
+    (["name", "email", "phone", "address", "city", "state", "date"] as const).forEach((f) => {
       const msg = fieldError(f, booking[f]);
       if (msg) errs[f] = msg;
     });
@@ -287,12 +321,18 @@ const Quote = () => {
     setStep(2);
   };
   const goToStep3 = () => {
-    const errs = validateBooking(false);
+    // Step-2 validation: visit fields + the choices that live on step 2
+    // (entry method, photo consent). Terms stay on step 3.
+    const errs = { ...validateBooking(false), ...entryErrors() };
+    if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
-      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "date", "termsConsent", "photoConsent"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); break; }
+      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date"];
+      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
+      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
+      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
+      if (errs.photoConsent) { refs.photoConsent.current?.focus(); return; }
       return;
     }
     setStep(3);
@@ -307,6 +347,20 @@ const Quote = () => {
         ? `${fmt$(mainPrice)} one-time`
         : "";
   const canSubmit = canProceed && !needsCleaningHistory && !isSubmitting;
+  // Full address for the booking: street, unit, city, state, ZIP.
+  const fullAddress = useMemo(() => {
+    const street = booking.address.trim();
+    const aptPart = booking.apt.trim() ? `, ${booking.apt.trim()}` : "";
+    const cityPart = booking.city.trim();
+    const stateZip = `${booking.state.trim()} ${zip}`.trim();
+    return [street + aptPart, cityPart, stateZip].filter(Boolean).join(", ");
+  }, [booking.address, booking.apt, booking.city, booking.state, zip]);
+  const entryErrors = (): Record<string, string> => {
+    const e: Record<string, string> = {};
+    if (!entryMethod) e.entryMethod = "Choose how to arrange entry.";
+    if (entryMethod === "arrange_before" && !entryDetail) e.entryDetail = "Choose how you'll arrange entry.";
+    return e;
+  };
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -323,12 +377,14 @@ const Quote = () => {
       });
       return;
     }
-    const errs = validateBooking();
+    const errs = { ...validateBooking(), ...entryErrors() };
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
-      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "date", "termsConsent", "photoConsent"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); break; }
+      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date", "termsConsent", "photoConsent"];
+      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
+      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
+      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
       return;
     }
     setIsSubmitting(true);
@@ -350,8 +406,9 @@ const Quote = () => {
         SERVICE_LABEL_CALC[service],
         service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time",
          `Professionally cleaned in last 3 months: ${answered ? (cleanedRecently ? "Yes" : "No") : "Not answered"}`,
-        `Street address: ${booking.address.trim()}`,
+        `Street address: ${fullAddress}`,
         zip ? `ZIP ${zip}` : "",
+        `Entry: ${entrySummaryLabel(entryMethod || null, entryDetail || null)}`,
         isLargeHome
           ? "Custom quote requested — home has 6+ bedrooms or 6+ full bathrooms, no table price"
           : isRecurring && breakdown
@@ -370,7 +427,7 @@ const Quote = () => {
       // the server reproduces the same booking instead of a duplicate. The id
       // rotates when the booking content changes or after a successful send.
       if (!requestRef.current) {
-        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, mainPrice, sizeBand, extraZones]);
+        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, mainPrice, sizeBand, extraZones, entryMethod, entryDetail, entryNotes, booking.city, booking.state, booking.apt]);
         let id: string | null = null;
         try {
           if (sessionStorage.getItem("gh_request_sig") === sig) id = sessionStorage.getItem("gh_request_id");
@@ -409,7 +466,13 @@ const Quote = () => {
         full_baths: String(fullBaths),
         half_baths: String(halfBaths),
         zip: zip || "",
-        address: booking.address.trim(),
+        address: fullAddress,
+        city: booking.city.trim(),
+        state: booking.state.trim(),
+        apt: booking.apt.trim(),
+        entry_method: entryMethod || undefined,
+        entry_detail: entryDetail || undefined,
+        entry_notes: entryNotes.trim() || undefined,
         price: String(mainPrice ?? ""),
         // Server recomputes the exact breakdown from these — the browser
         // price is never trusted for the signed booking token.
@@ -481,7 +544,8 @@ const Quote = () => {
             price: recapPrice,
             email: booking.email.trim(),
             date: booking.date,
-            window: booking.time || "Flexible arrival window",
+            window: WINDOW_LABEL[booking.time] ?? "Flexible arrival window",
+            entry: entrySummaryLabel(entryMethod || null, entryDetail || null),
             status: "Request received — not confirmed yet",
             response: "We confirm by email within one business day",
           },
@@ -546,7 +610,7 @@ const Quote = () => {
       <section className="pt-2 pb-12 md:pt-4 md:pb-16">
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
-            <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
+            <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
             <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
 
             {testMode && (
@@ -636,7 +700,7 @@ const Quote = () => {
                         <Sparkles className={`w-4 h-4 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
                         {t.label}
                       </div>
-                      <p className="text-xs font-normal text-muted-foreground mt-1">{t.tagline}</p>
+                      <p className="text-sm font-normal text-muted-foreground mt-1">{t.tagline}</p>
                     </button>
                   ))}
                 </div>
@@ -831,7 +895,7 @@ const Quote = () => {
                className="mt-2 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
             >
               {step === 2 && (<>
-              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
+              <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
               <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
@@ -841,6 +905,19 @@ const Quote = () => {
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
                 <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
               </div>
+              <div className="mt-6 flex items-start gap-3">
+                <input
+                  id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
+                  checked={booking.photoConsent} onChange={handleBookingChange}
+                  aria-required="true" aria-invalid={!!bookingErrors.photoConsent} aria-describedby={bookingErrors.photoConsent ? "b-photo-error" : undefined}
+                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                />
+                <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
+                  {PHOTO_CONSENT_MAIN} *
+                  <span className="mt-1 block text-sm text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
+                </label>
+              </div>
+              {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
               <div className="mt-6 rounded-lg border border-border bg-background p-4">
@@ -852,7 +929,7 @@ const Quote = () => {
                       <option key={b.key} value={b.key}>{b.label}</option>
                     ))}
                   </select>
-                  <p className="mt-1.5 text-xs text-muted-foreground">An estimate is fine. This helps us plan enough cleaning time.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">An estimate is fine. This helps us plan enough cleaning time.</p>
                 </div>
                 <fieldset className="mt-4">
                   <legend className="text-sm font-medium">Any extra areas to clean?</legend>
@@ -871,20 +948,43 @@ const Quote = () => {
                 </fieldset>
                 {scopeReview && (
                   <p className="mt-3 text-sm font-medium text-foreground">
-                    We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request — it does not change if we resend a message, publish a new report version, or change the date or cleaner. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
+                    We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
                   </p>
                 )}
               </div>
               </>)}
               {step === 3 && (<>
-              <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">Step 3 of 3</p>
+              <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 3 of 3</p>
               <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
               <p className="text-sm text-foreground mb-6">
                 Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
               </p>
-              <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
-                <p><strong>Price:</strong> {priceSummaryText}</p>
-                {isLargeHome && <p className="text-muted-foreground mt-1">This is not a fixed price yet: homes with 6+ bedrooms or 6+ full bathrooms get an individual quote, and we confirm the price with you before confirming the visit and before any charge.</p>}
+              <div className="mb-6 rounded-lg border border-border bg-background p-5 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-heading text-lg font-bold">Your request</h3>
+                  <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
+                </div>
+                <dl className="mt-3 space-y-2">
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd></div>
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-right">{fullAddress || "—"}</dd></div>
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-right">{priceSummaryText}</dd></div>
+                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-right">$0</dd></div>
+                </dl>
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-sm font-semibold text-primary">View all details</summary>
+                  <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
+                    <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
+                    <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
+                    <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
+                    <dt className="font-semibold">Date</dt><dd>{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
+                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{fullAddress}</dd>
+                  </dl>
+                  {scopeReview && (
+                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.</p>
+                  )}
+                </details>
               </div>
               </>)}
 
@@ -928,7 +1028,18 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.phone && <p id="b-phone-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.phone}</p>}
-                  <p className="mt-1.5 text-xs text-muted-foreground">For arrival updates on the day of your visit.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">For arrival updates on the day of your visit.</p>
+                </div>
+                <div className="md:col-span-2 flex items-start gap-3">
+                  <input
+                    id="b-sms" name="smsConsent" type="checkbox"
+                    checked={booking.smsConsent} onChange={handleBookingChange}
+                    className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                  />
+                  <label htmlFor="b-sms" className="text-sm text-foreground leading-snug">
+                    {SMS_CONSENT_MAIN}
+                    <span className="mt-1 block text-sm text-muted-foreground">{SMS_DISCLOSURE}</span>
+                  </label>
                 </div>
                 <div>
                   <label htmlFor="b-address" className="block text-sm font-medium mb-1.5">Street address *</label>
@@ -941,6 +1052,76 @@ const Quote = () => {
                   />
                   {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
                 </div>
+                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-5">
+                  <div>
+                    <label htmlFor="b-city" className="block text-sm font-medium mb-1.5">City *</label>
+                    <input
+                      id="b-city" name="city" type="text" ref={refs.city} required autoComplete="address-level2"
+                      value={booking.city} onChange={handleBookingChange} onBlur={handleBookingBlur}
+                      aria-required="true" aria-invalid={!!bookingErrors.city} aria-describedby={bookingErrors.city ? "b-city-error" : undefined}
+                      placeholder="Sugar Hill"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {bookingErrors.city && <p id="b-city-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.city}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="b-state" className="block text-sm font-medium mb-1.5">State *</label>
+                    <input
+                      id="b-state" name="state" type="text" ref={refs.state} required autoComplete="address-level1" maxLength={2}
+                      value={booking.state} onChange={handleBookingChange} onBlur={handleBookingBlur}
+                      aria-required="true" aria-invalid={!!bookingErrors.state} aria-describedby={bookingErrors.state ? "b-state-error" : undefined}
+                      placeholder="GA"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {bookingErrors.state && <p id="b-state-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.state}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="b-apt" className="block text-sm font-medium mb-1.5">Apartment / unit (optional)</label>
+                    <input
+                      id="b-apt" name="apt" type="text" autoComplete="address-line2"
+                      value={booking.apt} onChange={handleBookingChange}
+                      placeholder="Apt 4"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+                <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
+                  <p id="entry-label" className="block text-sm font-medium mb-1">How would you like to arrange entry? *</p>
+                  <p className="text-sm text-muted-foreground mb-3">You’re welcome to be home for your cleaning. Choose what works best for you.</p>
+                  <div role="radiogroup" aria-labelledby="entry-label" className="flex flex-col gap-1">
+                    {ENTRY_METHODS.map((m) => (
+                      <label key={m} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                        <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
+                        {ENTRY_METHOD_LABEL[m]}
+                      </label>
+                    ))}
+                  </div>
+                  {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
+                  {entryMethod === "arrange_before" && (
+                    <div className="mt-3">
+                      <p id="entry-detail-label" className="block text-sm font-medium mb-1">How will you arrange entry?</p>
+                      <div role="radiogroup" aria-labelledby="entry-detail-label" className="flex flex-col gap-1">
+                        {ENTRY_DETAILS.map((d) => (
+                          <label key={d} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                            <input id={`entry-detail-${d}`} type="radio" name="entryDetail" value={d} checked={entryDetail === d} onChange={() => { setEntryDetail(d); setBookingErrors((p) => ({ ...p, entryDetail: "" })); }} className="h-5 w-5" />
+                            {ENTRY_DETAIL_LABEL[d]}
+                          </label>
+                        ))}
+                      </div>
+                      {bookingErrors.entryDetail && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryDetail}</p>}
+                      <p className="mt-2 text-sm text-muted-foreground">No entry codes are needed now. You can add private entry details after your visit is confirmed.</p>
+                    </div>
+                  )}
+                  <div className="mt-3">
+                    <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
+                    <input
+                      id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
+                      placeholder="e.g. Park in the driveway, gate intercom at the front"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <p className="mt-1 text-sm text-muted-foreground">Do not put entry codes, alarm codes or key locations here. Private entry details are added after your visit is confirmed.</p>
+                  </div>
+                </div>
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
@@ -951,7 +1132,7 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.date && <p id="b-date-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.date}</p>}
-                  <p className="mt-1.5 text-xs text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="b-time" className="block text-sm font-medium mb-1.5">Preferred arrival window</label>
@@ -975,7 +1156,7 @@ const Quote = () => {
                     placeholder="Pets, focus areas, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
-                  <p className="mt-1.5 text-xs text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. You will arrange entry after your visit is confirmed.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. Private entry details are added after your visit is confirmed.</p>
                 </div>
               </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
@@ -1001,62 +1182,21 @@ const Quote = () => {
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
 
-              <div className="mt-4 flex items-start gap-3">
-                <input
-                  id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
-                  checked={booking.photoConsent} onChange={handleBookingChange}
-                  aria-required="true" aria-invalid={!!bookingErrors.photoConsent} aria-describedby={bookingErrors.photoConsent ? "b-photo-error" : undefined}
-                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-                />
-                <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
-                  {PHOTO_CONSENT_MAIN} *
-                  <span className="mt-1 block text-xs text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
-                </label>
-              </div>
-              {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
 
-              <div className="mt-4 flex items-start gap-3">
-                <input
-                  id="b-sms" name="smsConsent" type="checkbox"
-                  checked={booking.smsConsent} onChange={handleBookingChange}
-                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-                />
-                <label htmlFor="b-sms" className="text-sm text-foreground leading-snug">
-                  {SMS_CONSENT_MAIN}
-                  <span className="mt-1 block text-xs text-muted-foreground">{SMS_DISCLOSURE}</span>
-                </label>
-              </div>
+
+
 
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
-              <div tabIndex={-1} className="mt-6 scroll-mt-24 rounded-lg border border-border bg-background p-5 text-sm text-foreground">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="font-heading text-lg font-bold">Check your request</h3>
-                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Edit details</Button>
-                    <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Edit price</Button>
-                  </div>
-                  <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
-                    <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
-                     <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
-                    <dt className="font-semibold">Date</dt><dd>{booking.date} · {booking.time || "Flexible arrival window"}</dd>
-                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{booking.address}</dd>
-                  </dl>
-                  {scopeReview && (
-                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request — it does not change if we resend a message, publish a new report version, or change the date or cleaner. If the scope review shows different work is needed, we agree any change with you before confirming, never after.</p>
-                  )}
-                </div>
-
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
-                  <h3 className="font-heading text-lg font-bold mb-2">Payment and confirmation</h3>
-                  <p className="mb-3 text-lg leading-relaxed"><strong>Nothing is charged today. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</strong></p>
-                  <ul className="mb-2 list-disc space-y-2 pl-5">
+                  <h3 className="font-heading text-lg font-bold mb-2">Payment</h3>
+                  <p className="text-lg leading-relaxed"><span className="font-semibold">Nothing is charged today.</span> Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</p>
+                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm">
                     <li><strong>Why your card now?</strong> So paying later takes one tap — approve the photo report and you’re done. No prepayment, no second checkout.</li>
                     <li><strong>Safe with Stripe.</strong> Your card details go straight to Stripe, our payment processor. We never see or store your full card number.</li>
                     <li><strong>You stay in control.</strong> Report an issue within 24 hours and the charge stays paused while we fix it with you.</li>
-                    <li><strong>Questions?</strong> Call us at <a href="tel:+17705258599" className="underline">(770) 525-8599</a>.</li>
                   </ul>
-                  <p className="text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day. Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
+                  <p className="mt-3 text-sm text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
                 </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
@@ -1066,11 +1206,11 @@ const Quote = () => {
                     : !canProceed
                       ? "Enter a ZIP in our service area"
                       : needsCleaningHistory ? "Answer the cleaning-history question above"
-                      : "Save card — $0 today"}
+                      : "Continue to save card — $0 today"}
                 </Button>
               </div>
-              <p className="text-base text-foreground text-center mt-3">
-                <strong>$0 charged today</strong> — next step takes about a minute.
+              <p className="text-sm text-muted-foreground text-center mt-3">
+                Questions? Call <a href="tel:+17705258599" className="underline">(770) 525-8599</a> or email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>.
               </p>
               </>)}
             </form>

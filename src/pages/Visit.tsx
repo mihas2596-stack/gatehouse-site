@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
 import { ReportContent } from "@/components/ReportContent";
+import { toVisitMethod, entrySummaryLabel, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
 
 type VisitStateName =
   | "invalid_link"
@@ -45,6 +46,7 @@ type VisitData = {
   access_notes?: string;
   entry?: { available: boolean; method: string | null; note: string; has_secret: boolean; expires_at: string | null } | null;
   entry_available?: boolean;
+  entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
   no_photo_zones?: string;
   has_card?: boolean;
   card_brand?: string;
@@ -354,8 +356,10 @@ const Visit = () => {
       } else {
         setData(j);
         setZones(j.no_photo_zones ?? "");
-        setEntryMethod(j.entry?.method ?? null);
-        setEntryNote(j.entry?.note ?? "");
+        // Pre-fill from the booking choice when no visit-form choice
+        // was saved yet (the quote-time method survives to /visit).
+        setEntryMethod(j.entry?.method ?? toVisitMethod(j.entry_choice?.method ?? null));
+        setEntryNote(j.entry?.note ?? j.entry_choice?.notes ?? "");
         setEntrySecret("");
         setEntrySaved(false);
       }
@@ -662,7 +666,7 @@ const Visit = () => {
                 <ul className="list-disc pl-5 space-y-1 text-sm text-foreground">
                   <li>Tidy surfaces so the visit goes to cleaning, not sorting.</li>
                   <li>Secure pets, or tell us below where they&apos;ll be.</li>
-                  <li>Entry: after confirmation, choose below how your cleaner gets in — you can be home, have someone meet them, or arrange entry.</li>
+                  <li>Entry: your booking choice is shown below — you can change it here and add private entry details after confirmation.</li>
                   <li>You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.</li>
                   <li>If anything about the arrival changes, we email you the same day.</li>
                 </ul>
@@ -682,6 +686,9 @@ const Visit = () => {
                 <p className="text-sm text-muted-foreground mb-3">
                   You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.
                 </p>
+                {data.entry_choice?.method && (
+                  <p className="text-sm text-foreground mb-3">Your booking entry choice: {entrySummaryLabel(data.entry_choice.method as EntryMethodChoice, data.entry_choice.detail as EntryDetailChoice | null)}. You can change it below.</p>
+                )}
                 <div role="radiogroup" aria-label="How would you like to arrange entry?" className="space-y-2 mb-4">
                   {[
                     { key: "home", label: "I’ll be home to let the cleaner in." },
@@ -751,6 +758,15 @@ const Visit = () => {
                       Remove entry arrangement
                     </Button>
                   )}
+                  <Button
+                    variant="outline" disabled={busy}
+                    onClick={() => {
+                      setEntrySaved(false);
+                      void post({ action: "set_entry_choice", method: "decide_later" }).then((ok) => { if (ok) { setEntryMethod(null); setEntryNote(""); setEntrySecret(""); setEntrySaved(true); } });
+                    }}
+                  >
+                    I’ll decide later — please contact me
+                  </Button>
                 </div>
                 {entrySaved && <p className="mt-3 text-sm text-sage-foreground" role="status">Saved.</p>}
                 {data.entry?.has_secret && <p className="mt-3 text-sm text-foreground">Entry details are saved for this visit.</p>}
@@ -908,7 +924,7 @@ const Visit = () => {
                 <ul className="list-disc pl-5 space-y-1 text-sm text-foreground">
                   <li>Tidy surfaces so the visit goes to cleaning, not sorting.</li>
                   <li>Secure pets, or tell us below where they&apos;ll be.</li>
-                  <li>Entry: after confirmation, choose below how your cleaner gets in — you can be home, have someone meet them, or arrange entry.</li>
+                  <li>Entry: your booking choice is shown below — you can change it here and add private entry details after confirmation.</li>
                   <li>You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.</li>
                   <li>If anything about the arrival changes, we email you the same day.</li>
                 </ul>
