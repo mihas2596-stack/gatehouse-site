@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Mail, MapPin, Clock, Send } from "lucide-react";
+import { Mail, MapPin, Clock, Phone, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link, useNavigate } from "react-router-dom";
 import SEO from "@/components/SEO";
@@ -168,6 +168,15 @@ const ContactInfo = () => (
           <div>
             <p className="font-semibold">Email Us</p>
             <p className="text-muted-foreground text-sm">hello@gatehousehomecleaning.com</p>
+          </div>
+        </a>
+        <a href="tel:+17705258599" className="flex items-center gap-4 p-4 bg-card rounded-xl shadow-warm hover:shadow-warm-lg transition-all group min-h-[44px]">
+          <div className="w-12 h-12 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
+            <Phone className="w-6 h-6 text-accent-foreground" />
+          </div>
+          <div>
+            <p className="font-semibold">Call Us</p>
+            <p className="text-muted-foreground text-sm">(770) 525-8599</p>
           </div>
         </a>
       </div>

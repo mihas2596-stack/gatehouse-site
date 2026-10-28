@@ -610,7 +610,7 @@ const Quote = () => {
                   {zipInArea && <span className="text-foreground">We clean homes in {zip}.</span>}
                   {zipOutOfArea && (
                     <span className="text-destructive">
-                      We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
+                      We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. <a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us</a> and we’ll let you know when we expand to your area.
                     </span>
                   )}
                 </p>
@@ -741,7 +741,7 @@ const Quote = () => {
                 </>
               ) : zipOutOfArea ? (
                 <p className="text-base font-semibold text-foreground">
-                  We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
+                  We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. <a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us</a> and we’ll let you know when we expand to your area.
                 </p>
               ) : (
                 <>
@@ -764,7 +764,7 @@ const Quote = () => {
                           : <>One-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first.
+                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first. Not sure? Pick your best guess — we review the scope with you before confirming your visit.
                       </p>
                     </div>
                   ) : breakdown ? (
@@ -1054,6 +1054,7 @@ const Quote = () => {
                     <li><strong>Why your card now?</strong> So paying later takes one tap — approve the photo report and you’re done. No prepayment, no second checkout.</li>
                     <li><strong>Safe with Stripe.</strong> Your card details go straight to Stripe, our payment processor. We never see or store your full card number.</li>
                     <li><strong>You stay in control.</strong> Report an issue within 24 hours and the charge stays paused while we fix it with you.</li>
+                    <li><strong>Questions?</strong> Call us at <a href="tel:+17705258599" className="underline">(770) 525-8599</a>.</li>
                   </ul>
                   <p className="text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day. Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.</p>
                 </div>
