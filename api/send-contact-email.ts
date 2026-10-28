@@ -85,7 +85,8 @@ export const TEST_PRICE_SCALE = 0.01;
 // every booking prices at TEST_PRICE_SCALE — no token needed. Auto-expires.
 // Extended by owner order 2026-10-26 by 24h: now ends 2026-10-27T10:33:00Z.
 // Extended again by owner order 2026-10-26 by 48h: now ends 2026-10-29T10:33:00Z.
-const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-10-29T10:33:00Z");
+// Extended again by owner order 2026-10-28 by 72h: now ends 2026-11-01T10:33:00Z.
+const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-01T10:33:00Z");
 const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;
@@ -646,7 +647,7 @@ export default async function handler(req: Req, res: Res) {
     let testScale = false;
     // Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While
     // active, every booking prices at TEST_PRICE_SCALE with no token
-    // needed; the window auto-expires 2026-10-26 10:33 UTC. Token sessions
+    // needed; the window auto-expires 2026-11-01 10:33 UTC. Token sessions
     // (testScale) work the same way on top of it.
     const cutScale = globalTestCutActive();
     let serverRecurring: string | undefined;
