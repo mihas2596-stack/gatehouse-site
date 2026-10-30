@@ -3,6 +3,14 @@ import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
+import {
+  attentionItems,
+  nextActionFor,
+  reportLabel,
+  stripeLabel,
+  visitLabel,
+  type FocusBlock,
+} from "@/lib/ownerActions";
 
 type CleanerProfile = { phone?: string | null; photo?: string | null };
 
@@ -108,52 +116,6 @@ const initials = (name: string): string => {
 
 const digitsOnly = (phone: string): string => phone.replace(/\D/g, "");
 
-const reportLabel = (s: string): string => {
-  switch (s) {
-    case "none": return "Waiting for cleaner’s report";
-    case "draft": return "Cleaner is working on the report";
-    case "returned": return "Report returned to cleaner";
-    case "submitted": return "Report ready for review";
-    case "sent": return "Report sent to the client";
-    default: return s || "—";
-  }
-};
-
-// Plain-words visit status for badges and headers — the owner should
-// never have to translate internal row statuses.
-const visitLabel = (s: string): string => {
-  switch (s) {
-    case "requested": return "Requested";
-    case "confirmed": return "Confirmed";
-    case "report_sent": return "Report sent";
-    case "approved": return "Approved";
-    case "paid": return "Paid";
-    case "cancelled": return "Cancelled";
-    case "issue_open": return "Issue open";
-    default: return s || "—";
-  }
-};
-
-// One source of truth for "what's next" — the list row, Needs attention,
-// and the detail card all derive from it. Confirmation proof is the
-// visit_confirmed event, never the row status: after a report is
-// published the row moves to report_sent, and deriving "Confirm the
-// date" from the status would contradict the client page.
-const nextActionFor = (v: Visit, paymentFailed: boolean): string => {
-  if (v.status === "cancelled" || v.status === "paid") return "No action needed";
-  if (!v.visit_confirmed) {
-    if (v.status === "requested" && !v.request_approved) return "Approve request";
-    if (!v.cleaner_name) return "Assign a cleaner";
-    return "Confirm the date";
-  }
-  if (v.report_status === "submitted") return "Review the report";
-  if (paymentFailed) return "Retry the payment";
-  if (v.issue_open) return "Resolve the customer issue";
-  if (v.report_status === "sent") return "Waiting for the customer’s review";
-  if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
-  return "No action needed";
-};
-
 const EVENT_LABELS: Record<string, string> = {
   request_approved: "Request approved",
   cleaner_assigned: "Cleaner assigned",
@@ -178,10 +140,9 @@ const EVENT_LABELS: Record<string, string> = {
 // events should not carry them, but the panel never displays them).
 const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
 
-type FocusBlock = "summary" | "cleaner" | "schedule" | "report" | "payment";
-
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
+  const [verifyingLogin, setVerifyingLogin] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
   const [linkMsg, setLinkMsg] = useState("");
@@ -203,7 +164,6 @@ const Owner = () => {
       /* private mode: session-only */
     }
   };
-  const [queueMsg, setQueueMsg] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Visit | null>(null);
@@ -274,6 +234,9 @@ const Owner = () => {
     const ol = new URLSearchParams(window.location.search).get("ol");
     if (!ol) return;
     window.history.replaceState(null, "", window.location.pathname);
+    // While the emailed link verifies, show a waiting state — never the
+    // login form, which reads as "login failed" on a slow connection.
+    setVerifyingLogin(true);
     fetch("/api/owner-auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -281,6 +244,7 @@ const Owner = () => {
     })
       .then((r) => r.json())
       .then((j) => {
+        setVerifyingLogin(false);
         if (j?.ok && typeof j.session === "string") {
           sessionStorage.setItem("gh_owner_session", j.session);
           setToken(j.session);
@@ -288,7 +252,7 @@ const Owner = () => {
           setError("This login link is invalid or expired — request a new one below.");
         }
       })
-      .catch(() => setError("Couldn't verify this login link — request a new one below."));
+      .catch(() => { setVerifyingLogin(false); setError("Couldn't verify this login link — request a new one below."); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -329,19 +293,30 @@ const Owner = () => {
     }
   }, [token, headers]);
 
-  // Needs-attention deep links: after the detail loads, scroll to the
-  // block that needs the action.
+  // Opening a card scrolls to its top and focuses its title; a
+  // Needs-attention deep link scrolls to the block that needs the
+  // action instead. Runs once per opened visit: the detail reload
+  // replaces the selected object, and must not yank a deep link back
+  // to the top.
+  const scrolledIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!selected || scrolledIdRef.current === selected.id) return;
+    scrolledIdRef.current = selected.id;
     const focus = pendingFocusRef.current;
-    if (!focus || !selected) return;
     pendingFocusRef.current = null;
     const t = window.setTimeout(() => {
-      document.getElementById(`block-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (focus) {
+        document.getElementById(`block-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        window.scrollTo({ top: 0 });
+        document.getElementById("owner-detail-title")?.focus({ preventScroll: true });
+      }
     }, 100);
     return () => window.clearTimeout(t);
   }, [selected]);
 
   const openVisit = async (v: Visit, focus?: FocusBlock) => {
+    scrolledIdRef.current = null;
     const sameVisit = selectedIdRef.current === v.id;
     selectedIdRef.current = v.id;
     if (focus) pendingFocusRef.current = focus;
@@ -442,21 +417,6 @@ const Owner = () => {
     }
   };
 
-  // Re-send a bounced report email straight from the review queue.
-  const resendQueueReport = async (v: Visit) => {
-    setQueueMsg("");
-    const j = await act({ action: "send_report", booking_id: v.booking_id });
-    if (j.ok) {
-      setQueueMsg(
-        j["email_sent"] === true
-          ? `Report email re-sent for ${v.client_name ?? "this visit"}.`
-          : `Report email failed again for ${v.client_name ?? "this visit"} — check the address and retry from the visit.`,
-      );
-      void loadList();
-    } else {
-      setQueueMsg(`Couldn’t re-send the report: ${typeof j.error === "string" ? j.error : "failed"}`);
-    }
-  };
 
   const ownerUpload = async (files: FileList | null) => {
     if (!selected || !files || files.length === 0) return;
@@ -746,6 +706,18 @@ const Owner = () => {
     }
   };
 
+  if (!token && verifyingLogin) {
+    return (
+      <div className="min-h-screen bg-background px-4 py-16">
+        <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
+        <div className="max-w-sm mx-auto text-center">
+          <h1 className="font-heading text-3xl font-bold mb-4">Owner view</h1>
+          <p className="text-sm text-muted-foreground" role="status">Verifying your login link…</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!token) {
     return (
       <div className="min-h-screen bg-background px-4 py-16">
@@ -804,45 +776,47 @@ const Owner = () => {
     );
   }
 
-  // Needs attention: one action per item, each opening the visit at the
-  // block that needs it. (Issue/bounce flags stay as badges on the row.)
-  const attentionItems = (v: Visit): { label: string; focus: FocusBlock }[] => {
-    const items: { label: string; focus: FocusBlock }[] = [];
-    // A submitted (or sent) report without a confirmation event is an
-    // inconsistent record: work happened without an agreed visit. It
-    // needs an explicit review-and-repair confirmation, not a routine
-    // date confirmation.
-    const needsReview = !v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent");
-    if (v.status === "requested" && !v.request_approved) items.push({ label: "Approve request", focus: "summary" });
-    if (!v.cleaner_name) items.push({ label: "Assign a cleaner", focus: "schedule" });
-    else if (needsReview) items.push({ label: "Needs review", focus: "schedule" });
-    else if (!v.visit_confirmed) items.push({ label: "Confirm the date", focus: "schedule" });
-    if (v.report_status === "submitted") items.push({ label: "Review the report", focus: "report" });
-    if (v.issue_open) items.push({ label: "Resolve the customer issue", focus: "report" });
-    if (v.payment_failed) items.push({ label: "Payment failed", focus: "payment" });
-    // Entry signal (spec A §5): a confirmed visit within 2 days whose
-    // entry method is not agreed yet — the owner sees it here, and the
-    // cron sends the client one reminder (deduped by journal event).
-    if (v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid" && !v.entry_agreed && v.visit_date) {
-      const d = new Date(`${v.visit_date}T12:00:00Z`).getTime();
-      const days = Number.isNaN(d) ? 99 : (d - Date.now()) / (24 * 3600 * 1000);
-      if (days >= -1 && days <= 2) items.push({ label: "Entry not agreed", focus: "summary" });
-    }
-    return items;
-  };
 
   // Next action for a list row — the shared nextActionFor, from the row
   // alone (no event/stripe detail on the list).
   const rowNextAction = (v: Visit): string => nextActionFor(v, Boolean(v.payment_failed));
 
-  // The list, the review queue, and Needs attention all read through this
-  // filter so "Hide test bookings" hides test rows everywhere at once.
+  // The list and every filter read through this so "Hide test bookings"
+  // hides test rows everywhere at once.
   const listedVisits = hideTest ? visits.filter((v) => !v.is_test) : visits;
+
+  // Task-centered filters — one list, no duplicated queues. "Needs
+  // attention" is the shared attentionItems rule (plus bounced reports,
+  // which need a re-send); "Upcoming" is the active pipeline.
+  type OwnerFilter = "attention" | "upcoming" | "completed" | "cancelled" | "all";
+  const [filter, setFilter] = useState<OwnerFilter>("attention");
+  const isAttention = (v: Visit): boolean => attentionItems(v).length > 0 || v.report_bounced;
+  const filterCounts: Record<OwnerFilter, number> = {
+    attention: listedVisits.filter(isAttention).length,
+    upcoming: listedVisits.filter((v) => v.status !== "cancelled" && v.status !== "paid").length,
+    completed: listedVisits.filter((v) => v.status === "paid").length,
+    cancelled: listedVisits.filter((v) => v.status === "cancelled").length,
+    all: listedVisits.length,
+  };
+  const FILTERS: { key: OwnerFilter; label: string; empty: string }[] = [
+    { key: "attention", label: "Needs attention", empty: "Nothing needs attention right now." },
+    { key: "upcoming", label: "Upcoming", empty: "No upcoming visits." },
+    { key: "completed", label: "Completed", empty: "No completed visits yet." },
+    { key: "cancelled", label: "Cancelled", empty: "No cancelled visits." },
+    { key: "all", label: "All visits", empty: "No visits yet." },
+  ];
+  const filteredVisits = listedVisits.filter((v) => {
+    if (filter === "all") return true;
+    if (filter === "cancelled") return v.status === "cancelled";
+    if (filter === "completed") return v.status === "paid";
+    if (filter === "upcoming") return v.status !== "cancelled" && v.status !== "paid";
+    return isAttention(v);
+  });
 
   return (
     <div className="min-h-screen bg-background page-shell">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
-      <div className="max-w-5xl mx-auto px-4 pb-6">
+      <div className={selected ? "mx-auto px-4 pb-6 lg:max-w-7xl" : "max-w-5xl mx-auto px-4 pb-6"}>
         <div className="flex items-center justify-between mb-4">
           <h1 className="font-heading text-3xl font-bold">Visits</h1>
           <Button variant="outline" size="sm" onClick={() => void loadList()}>
@@ -851,14 +825,13 @@ const Owner = () => {
         </div>
         {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
         {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
-        {!selected && (
+        <div className={selected ? "lg:grid lg:grid-cols-[380px_minmax(0,1fr)] lg:gap-6 lg:items-start" : ""}>
+          <div className={selected ? "hidden lg:block lg:sticky lg:top-24 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1" : ""}>
           <label className="flex items-center gap-2 text-sm mb-4">
             <input type="checkbox" checked={hideTest} onChange={(e) => setHideTestPersist(e.target.checked)} />
             Hide test bookings
           </label>
-        )}
 
-        {!selected && (
           <details
             className="mb-5 rounded-xl border border-border bg-card p-4"
             onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !rosterLoaded) void loadRoster(); }}
@@ -918,118 +891,51 @@ const Owner = () => {
             </div>
             {rosterMsg && <p className="text-sm mt-3" role="status">{rosterMsg}</p>}
           </details>
-        )}
 
-        {!selected && listedVisits.some((v) => v.report_status === "submitted" || v.report_bounced) && (
-          <div className="mb-5">
-            <h2 className="font-heading text-xl font-bold mb-2">Reports awaiting review</h2>
-            {queueMsg && <p className="text-sm mb-2" role="status">{queueMsg}</p>}
-            <div className="space-y-2">
-              {listedVisits
-                .filter((v) => v.report_status === "submitted" || v.report_bounced)
-                .map((v) => {
-                  const since = v.checklist?.submitted_at ? Date.parse(v.checklist.submitted_at) : NaN;
-                  const hours = Number.isFinite(since) ? Math.max(0, Math.round((Date.now() - since) / 3600000)) : null;
-                  return (
-                    <div key={v.id} className="w-full rounded-xl border border-amber-500/60 bg-amber-50 p-4">
-                      <button
-                        type="button"
-                        className="w-full text-left hover:text-primary"
-                        onClick={() => void openVisit(v, "report")}
-                      >
-                        <span className="font-semibold">{v.client_name ?? "—"}</span>{" "}
-                        <span className="text-sm text-muted-foreground">
-                          {fmtVisitDate(v.visit_date)} · {v.photo_count ?? 0} photos
-                          {hours !== null ? <> · waiting {hours < 1 ? "<1" : hours}h</> : null}
-                          {v.checklist?.problem_note ? <> · cleaner note attached</> : null}
-                          {v.report_bounced ? <> · <span className="text-destructive font-semibold">email failed</span></> : null}
-                        </span>
-                      </button>
-                      {v.report_bounced && (
-                        <div className="mt-2">
-                          <Button variant="outline" size="sm" onClick={() => void resendQueueReport(v)}>
-                            Re-send report email
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
+                  <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter visits">
+            {FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                aria-pressed={filter === f.key}
+                onClick={() => setFilter(f.key)}
+                className={`min-h-[44px] rounded-full px-3 py-1.5 text-sm font-semibold ${filter === f.key ? "bg-primary text-primary-foreground" : "border border-border bg-card"}`}
+              >
+                {f.label} ({filterCounts[f.key]})
+              </button>
+            ))}
           </div>
-        )}
-
-        {!selected && (() => {
-          const withAttention = listedVisits
-            .map((v) => ({ v, items: attentionItems(v) }))
-            .filter((x) => x.items.length > 0);
-          return withAttention.length > 0 ? (
-            <div className="mb-6">
-              <h2 className="font-heading text-lg font-bold mb-2">Needs attention</h2>
-              <div className="space-y-2">
-                {withAttention.map(({ v, items }) => (
-                  <div key={v.id} className="rounded-xl border border-amber-500/60 bg-amber-50 p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">{v.client_name ?? "—"}</span>
-                      <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} · {money(v.amount_cents)}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {items.map((it) => (
-                        <Button key={it.label} variant="outline" size="sm" onClick={() => void openVisit(v, it.focus)}>
-                          {it.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null;
-        })()}
-
-        {!selected && (
           <div className="space-y-2">
-            {listedVisits.map((v) => (
+            {filteredVisits.map((v) => (
               <button
                 key={v.id}
                 type="button"
-                className="w-full text-left rounded-xl border border-border bg-card p-4 hover:border-primary"
+                className={`w-full text-left rounded-xl border bg-card p-4 hover:border-primary ${selected?.id === v.id ? "border-primary ring-1 ring-primary" : "border-border"}`}
                 onClick={() => void openVisit(v)}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
                   {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ?? ""}</span>
-                  <span className="text-sm">{money(v.amount_cents)}</span>
+                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ?? ""} · {money(v.amount_cents)}</span>
                 </div>
-                {v.address && <div className="text-sm text-muted-foreground mt-1">{v.address}</div>}
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
                   <span className="bg-muted px-2 py-0.5 rounded">Visit: {visitLabel(v.status)}</span>
-                  <span className="bg-muted px-2 py-0.5 rounded">Report: {reportLabel(v.report_status)}</span>
-                  <span className="bg-muted px-2 py-0.5 rounded">photos: {v.photo_count ?? 0}</span>
                   {v.cleaner_name
                     ? <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded">cleaner: {v.cleaner_name}</span>
-                    : <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">no cleaner</span>}
-                  {v.cleaner_link_active
-                    ? <span className="bg-green-100 text-green-900 px-2 py-0.5 rounded">link active{v.cleaner_link_opened_at ? " · opened" : " · not opened"}</span>
-                    : v.cleaner_link_issued
-                      ? <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">link expired</span>
-                      : v.cleaner_name
-                        ? <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">no link yet</span>
-                        : null}
-                  {v.paid_at && <span className="bg-green-100 text-green-900 px-2 py-0.5 rounded">paid</span>}
-                  {v.payment_failed && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">payment failed</span>}
-                  {v.issue_open && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">issue open</span>}
-                  {v.report_bounced && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">report email issue</span>}
+                    : <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">Needs a cleaner</span>}
                 </div>
               </button>
             ))}
-            {listedVisits.length === 0 && !loading && !error && (
-              <p className="text-muted-foreground text-sm">{visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them."}</p>
+            {filteredVisits.length === 0 && !loading && !error && (
+              <p className="text-muted-foreground text-sm">
+                {filter === "all"
+                  ? (visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them.")
+                  : FILTERS.find((f) => f.key === filter)?.empty}
+              </p>
             )}
           </div>
-        )}
+        </div>
 
         {selected && (() => {
           if (!selected) return null;
@@ -1052,6 +958,7 @@ const Owner = () => {
           })();
           const nextAction = nextActionFor(v, paymentFailed);
           const assigned = Boolean(v.cleaner_name);
+          const isTerminal = v.status === "cancelled" || v.status === "paid";
           const phone = v.cleaner_profile?.phone ?? null;
           const photo = v.cleaner_profile?.photo ?? null;
           const linkIssued = Boolean(v.cleaner_link_issued);
@@ -1078,13 +985,17 @@ const Owner = () => {
 
           return (
             <div>
-              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => setSelected(null)}>
-                ← All visits
+              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; setSelected(null); }}>
+                ← Back to visits
               </button>
+              {/* Action feedback lives here, at the top of the detail —
+                  not only at the page bottom: on a phone the result of a
+                  tap must be visible where the tap happened. */}
+              {actionMsg && <p className="text-sm mb-3" role="status">{actionMsg}</p>}
 
               {/* A. Summary */}
               <section id="block-summary" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
-                <h2 className="font-heading text-2xl font-bold">{v.client_name ?? "—"}</h2>
+                <h2 id="owner-detail-title" tabIndex={-1} className="font-heading text-2xl font-bold outline-none">{v.client_name ?? "—"}</h2>
                 <p className="text-sm text-muted-foreground">
                   {v.service ?? ""} · {fmtVisitDate(v.visit_date)} {v.window ?? ""} · {money(v.amount_cents)}
                 </p>
@@ -1092,7 +1003,7 @@ const Owner = () => {
                 {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
                 <p className="text-sm">
                   Visit: <strong>{visitLabel(v.status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
-                  {stripeState && <> · Stripe: <strong>{stripeState}</strong></>}
+                  {stripeState && <> · Stripe: <strong>{stripeLabel(stripeState)}</strong></>}
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
@@ -1147,6 +1058,30 @@ const Owner = () => {
               {/* B. Cleaner — assignment and link in one block */}
               <section id="block-cleaner" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Cleaner</h3>
+                {isTerminal ? (
+                  <div>
+                    {assigned ? (
+                      <div className="flex items-start gap-3 mb-2">
+                        <div className="relative w-12 h-12 shrink-0">
+                          <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center font-semibold">
+                            {initials(v.cleaner_name ?? "")}
+                          </div>
+                          {photo && (
+                            <img src={photo} alt="" className="absolute inset-0 w-12 h-12 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-semibold">{v.cleaner_name}</p>
+                          {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>{phone}</a></p>}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No cleaner assigned.</p>
+                    )}
+                    <p className="text-sm text-muted-foreground mt-2">This visit is {visitLabel(v.status).toLowerCase()} — cleaner changes no longer apply.</p>
+                  </div>
+                ) : (
+                <>
                 {(!assigned || cleanerEditing || cleanerChanging) ? (
                   cleanerChanging ? (
                     <div className="space-y-2">
@@ -1318,6 +1253,8 @@ const Owner = () => {
                     )}
                   </div>
                 )}
+                </>
+                )}
               </section>
 
               {/* C. Schedule — confirming the visit is the owner's explicit action */}
@@ -1386,9 +1323,21 @@ const Owner = () => {
                       {!assigned ? (
                         <Button variant="hero" disabled={acting !== "" || !assignCleanerId || !confirmDate || !confirmWindow} onClick={() => void runAction("Assign & confirm visit", { action: "assign_confirm", booking_id: v.booking_id, cleaner_id: assignCleanerId, confirmed_date: confirmDate, confirmed_window: confirmWindow, ...((!v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent")) ? { repair: true } : {}) }, (j) => {
                           setScheduleEditing(false);
+                          // The server mints the cleaner link on first
+                          // assignment — surface it here (same as a cleaner
+                          // change does) instead of leaving the owner to
+                          // hunt for it in the Cleaner block above.
+                          if (typeof j["url"] === "string") {
+                            const seq = linkSeqRef.current + 1;
+                            linkSeqRef.current = seq;
+                            noteLinkResult(v.id, j["url"] as string, seq);
+                            setViewLinkUrl(j["url"] as string);
+                            setViewLinkOpen(true);
+                            pendingFocusRef.current = "cleaner";
+                          }
                           if (j["already_confirmed"] === true) setActionMsg("Already assigned and confirmed — no duplicate email sent.");
-                          else if (j["email_sent"] === true) setActionMsg("Cleaner assigned and visit confirmed. Confirmation email sent.");
-                          else setActionMsg("Cleaner assigned and visit confirmed. Confirmation email failed.");
+                          else if (j["email_sent"] === true) setActionMsg(`Cleaner assigned and visit confirmed. Confirmation email sent.${typeof j["url"] === "string" ? " The cleaner link is open in the Cleaner block above." : ""}`);
+                          else setActionMsg(`Cleaner assigned and visit confirmed. Confirmation email failed.${typeof j["url"] === "string" ? " The cleaner link is open in the Cleaner block above." : ""}`);
                         })}>
                           Assign &amp; confirm visit
                         </Button>
@@ -1668,10 +1617,10 @@ const Owner = () => {
                 </ul>
               </details>
 
-              {actionMsg && <p className="text-sm" role="status">{actionMsg}</p>}
             </div>
           );
         })()}
+        </div>
       </div>
     </div>
   );

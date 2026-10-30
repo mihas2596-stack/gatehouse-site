@@ -33,11 +33,24 @@ const CityPage = () => {
 
       <section className="py-12 md:py-16">
         <div className="container max-w-3xl">
-          <div className="space-y-5">
-            {city.paragraphs.map((text) => (
-              <p key={text.slice(0, 40)} className="text-base leading-relaxed text-foreground md:text-lg">
-                {text}
-              </p>
+          <div className="rounded-2xl bg-card p-6 shadow-warm mb-10">
+            <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Visit at a glance</h2>
+            <ul className="space-y-2 text-base leading-relaxed text-foreground">
+              <li><strong>What&apos;s covered:</strong> the published room-by-room checklist — <Link to="/whats-included" className="text-primary underline">see what&apos;s included</Link>.</li>
+              <li><strong>Price:</strong> published by bedrooms and full bathrooms — <Link to="/quote" className="text-primary underline">see your price</Link>.</li>
+              <li><strong>Payment:</strong> nothing at booking; charged when you approve the photo report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
+              <li><strong>Schedule:</strong> the same weekday and arrival window every other week; cancel or reschedule free up to 48 hours before a visit.</li>
+            </ul>
+          </div>
+
+          <div className="space-y-10">
+            {city.sections.map((section) => (
+              <section key={section.heading}>
+                <h2 className="font-heading text-2xl font-bold mb-3">{section.heading}</h2>
+                <p className="text-base leading-relaxed text-foreground md:text-lg">
+                  {section.text}
+                </p>
+              </section>
             ))}
           </div>
 

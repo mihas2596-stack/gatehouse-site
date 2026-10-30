@@ -9,10 +9,8 @@ const Privacy = () => {
         url="https://gatehousehomecleaning.com/privacy"
       />
       <div
-        className="mx-auto"
+        className="mx-auto max-w-[800px] px-5 py-8 md:px-10 md:py-12"
         style={{
-          maxWidth: "800px",
-          padding: "40px",
           lineHeight: 1.7,
         }}
       >
@@ -82,26 +80,26 @@ const Privacy = () => {
 
         <h2 className="font-heading text-2xl font-bold mb-4">TABLE OF CONTENTS</h2>
         <ol className="list-decimal pl-6 mb-8 space-y-1">
-          <li>WHAT INFORMATION DO WE COLLECT?</li>
-          <li>HOW DO WE PROCESS YOUR INFORMATION?</li>
-          <li>WHEN AND WITH WHOM DO WE SHARE YOUR PERSONAL INFORMATION?</li>
-          <li>DO WE USE COOKIES AND OTHER TRACKING TECHNOLOGIES?</li>
-          <li>HOW LONG DO WE KEEP YOUR INFORMATION?</li>
-          <li>HOW DO WE KEEP YOUR INFORMATION SAFE?</li>
-          <li>DO WE COLLECT INFORMATION FROM MINORS?</li>
-          <li>WHAT ARE YOUR PRIVACY RIGHTS?</li>
-          <li>CONTROLS FOR DO-NOT-TRACK FEATURES</li>
-          <li>DO UNITED STATES RESIDENTS HAVE SPECIFIC PRIVACY RIGHTS?</li>
-          <li>DO WE MAKE UPDATES TO THIS NOTICE?</li>
-          <li>HOW CAN YOU CONTACT US ABOUT THIS NOTICE?</li>
-          <li>HOW CAN YOU REVIEW, UPDATE, OR DELETE THE DATA WE COLLECT FROM YOU?</li>
-          <li>TEXT MESSAGES</li>
-          <li>PHOTOS OF YOUR HOME</li>
-          <li>PAYMENTS</li>
-          <li>ACCESS CODES AND KEYS</li>
+          <li><a href="#privacy-1" className="text-primary underline">WHAT INFORMATION DO WE COLLECT?</a></li>
+          <li><a href="#privacy-2" className="text-primary underline">HOW DO WE PROCESS YOUR INFORMATION?</a></li>
+          <li><a href="#privacy-3" className="text-primary underline">WHEN AND WITH WHOM DO WE SHARE YOUR PERSONAL INFORMATION?</a></li>
+          <li><a href="#privacy-4" className="text-primary underline">DO WE USE COOKIES AND OTHER TRACKING TECHNOLOGIES?</a></li>
+          <li><a href="#privacy-5" className="text-primary underline">HOW LONG DO WE KEEP YOUR INFORMATION?</a></li>
+          <li><a href="#privacy-6" className="text-primary underline">HOW DO WE KEEP YOUR INFORMATION SAFE?</a></li>
+          <li><a href="#privacy-7" className="text-primary underline">DO WE COLLECT INFORMATION FROM MINORS?</a></li>
+          <li><a href="#privacy-8" className="text-primary underline">WHAT ARE YOUR PRIVACY RIGHTS?</a></li>
+          <li><a href="#privacy-9" className="text-primary underline">CONTROLS FOR DO-NOT-TRACK FEATURES</a></li>
+          <li><a href="#privacy-10" className="text-primary underline">DO UNITED STATES RESIDENTS HAVE SPECIFIC PRIVACY RIGHTS?</a></li>
+          <li><a href="#privacy-11" className="text-primary underline">DO WE MAKE UPDATES TO THIS NOTICE?</a></li>
+          <li><a href="#privacy-12" className="text-primary underline">HOW CAN YOU CONTACT US ABOUT THIS NOTICE?</a></li>
+          <li><a href="#privacy-13" className="text-primary underline">HOW CAN YOU REVIEW, UPDATE, OR DELETE THE DATA WE COLLECT FROM YOU?</a></li>
+          <li><a href="#privacy-14" className="text-primary underline">TEXT MESSAGES</a></li>
+          <li><a href="#privacy-15" className="text-primary underline">PHOTOS OF YOUR HOME</a></li>
+          <li><a href="#privacy-16" className="text-primary underline">PAYMENTS</a></li>
+          <li><a href="#privacy-17" className="text-primary underline">ACCESS CODES AND KEYS</a></li>
         </ol>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-1" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           1. WHAT INFORMATION DO WE COLLECT?
         </h2>
         <p className="mb-4 font-semibold">Personal information you disclose to us:</p>
@@ -124,7 +122,7 @@ const Privacy = () => {
           </li>
         </ul>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-2" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           2. HOW DO WE PROCESS YOUR INFORMATION?
         </h2>
         <p className="mb-4">We process your personal information for the following reasons:</p>
@@ -139,14 +137,14 @@ const Privacy = () => {
           <li>To comply with our legal obligations.</li>
         </ul>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-3" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           3. WHEN AND WITH WHOM DO WE SHARE YOUR PERSONAL INFORMATION?
         </h2>
         <p className="mb-8">
           We may share your data with third-party vendors, service providers, contractors, or agents who perform services for us. We may also share or transfer your information in connection with any merger, sale of company assets, financing, or acquisition of all or a portion of our business.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-4" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           4. DO WE USE COOKIES AND OTHER TRACKING TECHNOLOGIES?
         </h2>
         <p className="mb-4">
@@ -165,21 +163,21 @@ const Privacy = () => {
           .
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-5" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           5. HOW LONG DO WE KEEP YOUR INFORMATION?
         </h2>
         <p className="mb-8">
           We will only keep your personal information for as long as it is necessary for the purposes set out in this Privacy Notice, unless a longer retention period is required by law.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-6" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           6. HOW DO WE KEEP YOUR INFORMATION SAFE?
         </h2>
         <p className="mb-8">
           We have implemented appropriate technical and organizational security measures to protect your personal information. However, no electronic transmission over the Internet can be guaranteed to be 100% secure.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           7. DO WE COLLECT INFORMATION FROM MINORS?
         </h2>
         <p className="mb-8">
@@ -190,7 +188,7 @@ const Privacy = () => {
           .
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           8. WHAT ARE YOUR PRIVACY RIGHTS?
         </h2>
         <p className="mb-8">
@@ -201,14 +199,14 @@ const Privacy = () => {
           . You may also unsubscribe from marketing communications at any time by clicking the unsubscribe link in our emails.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-9" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           9. CONTROLS FOR DO-NOT-TRACK FEATURES
         </h2>
         <p className="mb-8">
           We do not currently respond to DNT browser signals as no uniform technology standard has been finalized.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-10" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           10. DO UNITED STATES RESIDENTS HAVE SPECIFIC PRIVACY RIGHTS?
         </h2>
         <p className="mb-4">
@@ -247,14 +245,14 @@ const Privacy = () => {
           <strong>California "Shine The Light" Law:</strong> California residents may request information about categories of personal information we disclosed to third parties for direct marketing purposes by contacting us in writing.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-11" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           11. DO WE MAKE UPDATES TO THIS NOTICE?
         </h2>
         <p className="mb-8">
           Yes, we will update this notice as necessary to stay compliant with relevant laws. We encourage you to review this Privacy Notice frequently.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-12" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           12. HOW CAN YOU CONTACT US ABOUT THIS NOTICE?
         </h2>
         <p className="mb-4">Gatehouse Home Cleaning</p>
@@ -267,7 +265,7 @@ const Privacy = () => {
           </a>
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">
+        <h2 id="privacy-13" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
           13. HOW CAN YOU REVIEW, UPDATE, OR DELETE THE DATA WE COLLECT FROM YOU?
         </h2>
         <p className="mb-8">
@@ -278,24 +276,28 @@ const Privacy = () => {
           .
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">14. TEXT MESSAGES</h2>
+        <h2 id="privacy-14" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
+          14. TEXT MESSAGES</h2>
         <p className="mb-8">
           We do not sell or share mobile phone numbers or text-message consent with third parties for their marketing.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">15. PHOTOS OF YOUR HOME</h2>
+        <h2 id="privacy-15" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
+          15. PHOTOS OF YOUR HOME</h2>
         <p className="mb-8">
           After each visit the cleaner takes photos of the cleaned rooms for your photo report. We use them only to show
           you the work and to handle questions about the visit. We keep them for 90 days and do not publish them without
           your written permission.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">16. PAYMENTS</h2>
+        <h2 id="privacy-16" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
+          16. PAYMENTS</h2>
         <p className="mb-8">
           Card payments are processed by Stripe. We do not store full card numbers.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">17. ACCESS CODES AND KEYS</h2>
+        <h2 id="privacy-17" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
+          17. ACCESS CODES AND KEYS</h2>
         <p className="mb-8">
           Door codes, gate codes and key instructions are used only to access your home for booked visits and are shared
           only with the cleaner assigned to your visit.

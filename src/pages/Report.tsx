@@ -3,7 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, Camera, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
-import { ReportContent } from "@/components/ReportContent";
+import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { fmtDateUS } from "@/lib/formatDate";
 
 type ReportStateName =
   | "invalid_link"
@@ -69,7 +70,6 @@ const Report = () => {
   const [paidIssueOpen, setPaidIssueOpen] = useState(false);
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
-  const [zoom, setZoom] = useState<string | null>(null);
   const [failedPhotos, setFailedPhotos] = useState<Set<string>>(new Set());
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
@@ -173,7 +173,7 @@ const Report = () => {
   const booking = data?.booking ?? {};
   const summaryRows: Array<[string, string]> = [];
   if (booking.service) summaryRows.push(["Service", booking.service]);
-  if (booking.date) summaryRows.push(["Visit date", booking.date]);
+  if (booking.date) summaryRows.push(["Visit date", fmtDateUS(booking.date)]);
   if (data?.amount) summaryRows.push(["This visit", data.amount]);
   else if (booking.first) summaryRows.push(["First visit", booking.first]);
 
@@ -370,7 +370,7 @@ const Report = () => {
                           </button>
                         </div>
                       ) : (
-                        <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${p.room ?? "Your home"} photo`}>
+                        <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
                           <img
                             src={p.url}
                             alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
@@ -378,7 +378,7 @@ const Report = () => {
                             onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
                             className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                           />
-                        </button>
+                        </ZoomablePhoto>
                       )}
                       <figcaption className="text-xs text-muted-foreground mt-1">
                         <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
@@ -391,13 +391,14 @@ const Report = () => {
             ) : data.photos && data.photos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 mb-6">
                 {data.photos.map((src, i) => (
-                  <img
-                    key={i}
-                    src={src}
-                    alt={`Cleaning photo ${i + 1}`}
-                    loading="lazy"
-                    className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
-                  />
+                  <ZoomablePhoto key={i} src={src} alt={`Cleaning photo ${i + 1}`}>
+                    <img
+                      src={src}
+                      alt={`Cleaning photo ${i + 1}`}
+                      loading="lazy"
+                      className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                    />
+                  </ZoomablePhoto>
                 ))}
               </div>
             ) : (
@@ -501,14 +502,14 @@ const Report = () => {
                   checklist={data.checklist}
                   renderPhoto={(p) => (
                     <figure>
-                      <button type="button" className="block w-full" onClick={() => setZoom(p.url)} aria-label={`Enlarge ${p.room ?? "Your home"} photo`}>
+                      <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
                         <img
                           src={p.url}
                           alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
                           loading="lazy"
                           className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                         />
-                      </button>
+                      </ZoomablePhoto>
                       <figcaption className="text-xs text-muted-foreground mt-1">
                         <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
                         {p.note ? <> — {p.note}</> : null}
@@ -578,23 +579,6 @@ const Report = () => {
                 <Link to="/">Back to Home</Link>
               </Button>
             </div>
-          </div>
-        )}
-        {zoom && (
-          <div
-            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-            role="dialog"
-            aria-label="Enlarged photo"
-            onClick={() => setZoom(null)}
-          >
-            <img src={zoom} alt="Enlarged cleaning photo" className="max-w-full max-h-full object-contain rounded-lg" />
-            <button
-              type="button"
-              className="absolute top-4 right-4 text-white text-sm bg-white/10 rounded-lg px-3 py-2"
-              onClick={() => setZoom(null)}
-            >
-              Close
-            </button>
           </div>
         )}
       </div>

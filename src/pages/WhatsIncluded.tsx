@@ -21,6 +21,10 @@ const WhatsIncluded = () => {
     try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive()); } catch { /* private mode */ }
   }, []);
   const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
+  // Mobile shows the first 3 tasks per room; the rest open on tap.
+  // Desktop shows the full list (no toggle needed at that width).
+  const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({});
+  const toggleRoom = (room: string) => setOpenRooms((prev) => ({ ...prev, [room]: !prev[room] }));
   return (
   <div className="page-shell">
     <SEO
@@ -51,24 +55,54 @@ const WhatsIncluded = () => {
 
     <section className="py-12 md:py-16">
       <div className="container max-w-5xl">
-        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-          {CHECKLIST.map(({ room, tasks }) => (
-            <div key={room} className="rounded-2xl bg-card p-6 shadow-warm">
-              <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">{room}</h2>
-              <ul className="space-y-2">
-                {tasks.map((task) => (
-                  <li key={task} className="flex items-start gap-2 text-base leading-relaxed text-foreground">
-                    <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                    <span>{task}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+        <nav aria-label="Rooms" className="flex flex-wrap gap-2 mb-8">
+          {CHECKLIST.map(({ room }) => (
+            <a
+              key={room}
+              href={`#room-${room.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+              className="inline-flex min-h-[44px] items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium"
+            >
+              {room}
+            </a>
           ))}
+          <a href="#addons" className="inline-flex min-h-[44px] items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium">Add-ons</a>
+          <a href="#not-included" className="inline-flex min-h-[44px] items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium">Not included</a>
+        </nav>
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+          {CHECKLIST.map(({ room, tasks }) => {
+            const id = `room-${room.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+            const open = openRooms[room] === true;
+            return (
+              <div key={room} id={id} className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
+                <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">{room}</h2>
+                <ul className="space-y-2">
+                  {tasks.map((task, i) => (
+                    <li
+                      key={task}
+                      className={`${i >= 3 && !open ? "hidden md:flex" : "flex"} items-start gap-2 text-base leading-relaxed text-foreground`}
+                    >
+                      <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                      <span>{task}</span>
+                    </li>
+                  ))}
+                </ul>
+                {tasks.length > 3 && (
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => toggleRoom(room)}
+                    className="md:hidden mt-3 min-h-[44px] text-sm font-semibold text-primary underline"
+                  >
+                    {open ? "Show fewer tasks" : `Show all ${tasks.length} tasks`}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="mt-10 grid grid-cols-1 gap-8 md:grid-cols-2">
-          <div className="rounded-2xl bg-card p-6 shadow-warm">
+          <div id="addons" className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Add-ons (fixed price)</h2>
             <ul className="space-y-2">
               {addons.map(({ label, price }) => (
@@ -79,7 +113,7 @@ const WhatsIncluded = () => {
               ))}
             </ul>
           </div>
-          <div className="rounded-2xl bg-card p-6 shadow-warm">
+          <div id="not-included" className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Not included</h2>
             <ul className="space-y-2">
               {NOT_INCLUDED.map((item) => (

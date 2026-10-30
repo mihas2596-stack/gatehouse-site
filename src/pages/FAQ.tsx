@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { FAQS } from "@/config/faqs";
+import { FAQS, FAQ_GROUPS } from "@/config/faqs";
 
 const FAQ = () => (
   <div className="page-shell">
@@ -38,26 +38,46 @@ const FAQ = () => (
 
     <section className="py-12 md:py-16">
       <div className="container max-w-3xl">
-        <Accordion type="single" collapsible className="rounded-2xl border border-border bg-card px-5">
-          {FAQS.map((faq, index) => (
-            <AccordionItem key={faq.q} value={`item-${index}`}>
-              <AccordionTrigger className="text-left font-heading text-base font-semibold text-sage-foreground hover:no-underline md:text-lg">
-                {faq.q}
-              </AccordionTrigger>
-              <AccordionContent className="text-base leading-relaxed text-muted-foreground">
-                {faq.a}
-                {faq.link && (
-                  <>
-                    {" "}
-                    <Link to={faq.link.href} className="font-semibold text-primary underline">
-                      {faq.link.label}
-                    </Link>
-                  </>
-                )}
-              </AccordionContent>
-            </AccordionItem>
+        <nav aria-label="FAQ topics" className="flex flex-wrap gap-2 mb-8">
+          {FAQ_GROUPS.map((g) => (
+            <a
+              key={g}
+              href={`#faq-${g.toLowerCase()}`}
+              className="inline-flex min-h-[44px] items-center rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium"
+            >
+              {g}
+            </a>
           ))}
-        </Accordion>
+        </nav>
+        {FAQ_GROUPS.map((g) => {
+          const items = FAQS.filter((f) => f.group === g);
+          if (items.length === 0) return null;
+          return (
+            <section key={g} id={`faq-${g.toLowerCase()}`} className="mb-10 scroll-mt-24">
+              <h2 className="font-heading text-2xl font-bold mb-4">{g}</h2>
+              <Accordion type="single" collapsible className="rounded-2xl border border-border bg-card px-5">
+                {items.map((faq, index) => (
+                  <AccordionItem key={faq.q} value={`item-${index}`}>
+                    <AccordionTrigger className="text-left font-heading text-base font-semibold text-sage-foreground hover:no-underline md:text-lg">
+                      {faq.q}
+                    </AccordionTrigger>
+                    <AccordionContent className="text-base leading-relaxed text-muted-foreground">
+                      {faq.a}
+                      {faq.link && (
+                        <>
+                          {" "}
+                          <Link to={faq.link.href} className="font-semibold text-primary underline">
+                            {faq.link.label}
+                          </Link>
+                        </>
+                      )}
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            </section>
+          );
+        })}
 
         <div className="mt-10 text-center">
           <Button asChild variant="hero" size="lg" className="rounded-full px-8">

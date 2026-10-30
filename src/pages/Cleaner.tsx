@@ -4,6 +4,7 @@ import { Helmet } from "react-helmet-async";
 import { Camera, CheckCircle, AlertTriangle, Loader2, Trash2, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
+import { ReportChecklistView } from "@/components/ReportContent";
 
 type ChecklistItem = { label: string; done: boolean };
 type ChecklistRoom = { name: string; items: ChecklistItem[]; skip_reason?: string };
@@ -339,7 +340,7 @@ const Cleaner = () => {
           )}
         </div>
 
-        {data.confirmed && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
+        {data.confirmed && data.cancelled !== true && data.report_status !== "submitted" && data.report_status !== "sent" && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
             <p className="text-sm font-semibold">Entry not arranged yet</p>
             <p className="text-sm text-muted-foreground">Check with the owner before going — do not head to a visit without settled entry.</p>
@@ -385,6 +386,12 @@ const Cleaner = () => {
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
             <p className="font-semibold">Report published — the client can open it from their link.</p>
             <p className="text-sm text-muted-foreground">The client can open the photos and checklist from their link. You&apos;re done here — thank you!</p>
+          </div>
+        )}
+
+        {locked && (data.report_status === "submitted" || data.report_status === "sent") && checklist.rooms.length > 0 && (
+          <div className="rounded-xl border border-border bg-card p-4 mt-4">
+            <ReportChecklistView checklist={checklist} />
           </div>
         )}
 
@@ -652,7 +659,7 @@ const Cleaner = () => {
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              Sending publishes the report to the client right away. Your draft saves automatically — you can close this page and come back.
+              Sending sends the report to the owner for review — they share it with the client after checking it. Your draft saves automatically — you can close this page and come back.
             </p>
           </>
         )}

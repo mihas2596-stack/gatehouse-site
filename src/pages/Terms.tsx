@@ -9,10 +9,8 @@ const Terms = () => {
         url="https://gatehousehomecleaning.com/terms"
       />
       <div
-        className="mx-auto"
+        className="mx-auto max-w-[800px] px-5 py-8 md:px-10 md:py-12"
         style={{
-          maxWidth: "800px",
-          padding: "40px",
           lineHeight: 1.7,
         }}
       >
@@ -30,7 +28,35 @@ const Terms = () => {
           PLEASE READ THESE TERMS OF SERVICE CAREFULLY. BY ACCESSING OR USING THE GATEHOUSE HOME CLEANING WEBSITE OR BOOKING OUR CLEANING SERVICES, YOU AGREE TO BE LEGALLY BOUND BY THESE TERMS. IF YOU DO NOT AGREE, DO NOT USE OUR WEBSITE OR SERVICES.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">1. Agreement to Terms</h2>
+<h2 className="font-heading text-2xl font-bold mb-4">Contents</h2>
+        <ol className="list-decimal pl-6 mb-8 space-y-1">
+          <li><a href="#terms-1" className="text-primary underline">1. Agreement to Terms</a></li>
+          <li><a href="#terms-2" className="text-primary underline">2. Company Information</a></li>
+          <li><a href="#terms-3" className="text-primary underline">3. Description of Services</a></li>
+          <li><a href="#terms-4" className="text-primary underline">4. Booking, Confirmation, and Modification</a></li>
+          <li><a href="#terms-5" className="text-primary underline">5. Pricing and Payment</a></li>
+          <li><a href="#terms-6" className="text-primary underline">6. Cancellation, Rescheduling, and Lockouts</a></li>
+          <li><a href="#terms-7" className="text-primary underline">7. Service Concerns</a></li>
+          <li><a href="#terms-8" className="text-primary underline">8. Client Responsibilities</a></li>
+          <li><a href="#terms-9" className="text-primary underline">9. Services We Do Not Provide</a></li>
+          <li><a href="#terms-10" className="text-primary underline">10. Limitation of Liability</a></li>
+          <li><a href="#terms-11" className="text-primary underline">11. Indemnification</a></li>
+          <li><a href="#terms-12" className="text-primary underline">12. Disclaimers</a></li>
+          <li><a href="#terms-13" className="text-primary underline">13. Intellectual Property</a></li>
+          <li><a href="#terms-14" className="text-primary underline">14. Privacy</a></li>
+          <li><a href="#terms-15" className="text-primary underline">15. Electronic Communications</a></li>
+          <li><a href="#terms-16" className="text-primary underline">16. Dispute Resolution and Binding Arbitration</a></li>
+          <li><a href="#terms-17" className="text-primary underline">17. Governing Law and Jurisdiction</a></li>
+          <li><a href="#terms-18" className="text-primary underline">18. Severability</a></li>
+          <li><a href="#terms-19" className="text-primary underline">19. Waiver</a></li>
+          <li><a href="#terms-20" className="text-primary underline">20. Assignment</a></li>
+          <li><a href="#terms-21" className="text-primary underline">21. Force Majeure</a></li>
+          <li><a href="#terms-22" className="text-primary underline">22. Entire Agreement</a></li>
+          <li><a href="#terms-23" className="text-primary underline">23. Changes to These Terms</a></li>
+          <li><a href="#terms-24" className="text-primary underline">24. Contact</a></li>
+        </ol>
+
+                <h2 id="terms-1" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">1. Agreement to Terms</h2>
         <p className="mb-8">
           These Terms of Service ("Terms") constitute a legally binding agreement between you ("Client," "you," "your") and Gatehouse Home Cleaning ("Company," "we," "us," "our") regarding your access to and use of the website located at{" "}
           <a
@@ -47,7 +73,7 @@ const Terms = () => {
           By using the Site or booking Services, you represent that you are at least 18 years of age and have the legal capacity to enter into a binding contract.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">2. Company Information</h2>
+        <h2 id="terms-2" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">2. Company Information</h2>
         <p className="mb-4 font-semibold">Gatehouse Home Cleaning</p>
         <p className="mb-4">
           Email:{" "}
@@ -60,7 +86,7 @@ const Terms = () => {
           Service area: Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell, Georgia.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">3. Description of Services</h2>
+        <h2 id="terms-3" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">3. Description of Services</h2>
         <p className="mb-4">We provide residential cleaning services, which may include:</p>
         <ul className="list-disc pl-6 mb-8 space-y-2">
           <li>Standard cleaning (one-time or every other week)</li>
@@ -72,7 +98,7 @@ const Terms = () => {
           We are an independent business and do not act as an employment agency.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">4. Booking, Confirmation, and Modification</h2>
+        <h2 id="terms-4" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">4. Booking, Confirmation, and Modification</h2>
         <p className="mb-4">
           <strong>4.1 Booking Requests.</strong> Submitting a booking request through the Site or by email constitutes an offer to engage our Services. No agreement for Services is formed until we issue written confirmation (email or SMS).
         </p>
@@ -83,7 +109,7 @@ const Terms = () => {
           <strong>4.3 Property Access.</strong> You are responsible for providing safe and lawful access to the property at the scheduled time. Failure to provide access constitutes a lockout (see Section 6).
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">5. Pricing and Payment</h2>
+        <h2 id="terms-5" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">5. Pricing and Payment</h2>
         <p className="mb-4">
           <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide. If the home differs materially from those details, extra time is billed at $45 per hour and starts only with your approval — we explain why and agree the maximum charge with you first.
         </p>
@@ -97,7 +123,7 @@ const Terms = () => {
           <strong>5.4 Chargebacks.</strong> Initiating a chargeback without first attempting to resolve a dispute with us in good faith constitutes a material breach of these Terms.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">6. Cancellation, Rescheduling, and Lockouts</h2>
+        <h2 id="terms-6" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">6. Cancellation, Rescheduling, and Lockouts</h2>
         <ul className="list-disc pl-6 mb-8 space-y-2">
           <li>
             <strong>Free cancellation or rescheduling:</strong> up to 48 hours before your visit.
@@ -113,12 +139,12 @@ const Terms = () => {
           To cancel or reschedule, email us.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">7. Service Concerns</h2>
+        <h2 id="terms-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">7. Service Concerns</h2>
         <p className="mb-8">
           Missed something on the checklist? Tell us by email with a photo within 24 hours after your photo report is sent. We fix it free within 72 hours.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">8. Client Responsibilities</h2>
+        <h2 id="terms-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">8. Client Responsibilities</h2>
         <p className="mb-4">You agree to:</p>
         <ul className="list-disc pl-6 mb-8 space-y-2">
           <li>Provide accurate access information, including codes, keys, and instructions.</li>
@@ -132,7 +158,7 @@ const Terms = () => {
           Failure to meet these responsibilities may result in additional charges, partial or non-performance of Services, or termination of the booking without refund.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">9. Services We Do Not Provide</h2>
+        <h2 id="terms-9" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">9. Services We Do Not Provide</h2>
         <p className="mb-4">
           For safety, liability, and ethical reasons, our cleaning professionals will not:
         </p>
@@ -151,7 +177,7 @@ const Terms = () => {
           If these conditions are encountered on-site, our personnel may decline or limit Services without refund.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">10. Limitation of Liability</h2>
+        <h2 id="terms-10" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">10. Limitation of Liability</h2>
         <p className="mb-4">
           <strong>10.1 Liability.</strong> We perform Services with reasonable care. Service-related issues are handled under Section 7 (Service Concerns) and the damage-claims process described below.
         </p>
@@ -179,12 +205,12 @@ const Terms = () => {
           <strong>10.4 Liability Cap.</strong> TO THE MAXIMUM EXTENT PERMITTED BY LAW, OUR TOTAL AGGREGATE LIABILITY FOR ANY CLAIM ARISING OUT OF OR RELATED TO THESE TERMS OR THE SERVICES SHALL NOT EXCEED THE AMOUNT YOU PAID US FOR THE SPECIFIC SERVICE GIVING RISE TO THE CLAIM.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">11. Indemnification</h2>
+        <h2 id="terms-11" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">11. Indemnification</h2>
         <p className="mb-8">
           You agree to indemnify, defend, and hold harmless Gatehouse Home Cleaning, its owners, officers, employees, agents, and independent contractors from and against any and all claims, liabilities, damages, losses, costs, and expenses (including reasonable attorneys' fees) arising out of or related to: (a) your breach of these Terms; (b) your violation of any law or third-party right; (c) your negligent or wrongful conduct; (d) any condition of the property not disclosed prior to service.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">12. Disclaimers</h2>
+        <h2 id="terms-12" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">12. Disclaimers</h2>
         <p className="mb-8">
           THE SITE AND SERVICES ARE PROVIDED ON AN "AS IS" AND "AS AVAILABLE" BASIS. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, WE DISCLAIM ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
         </p>
@@ -192,7 +218,7 @@ const Terms = () => {
           We do not warrant that the Site will be uninterrupted, error-free, or free of viruses or other harmful components.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">13. Intellectual Property</h2>
+        <h2 id="terms-13" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">13. Intellectual Property</h2>
         <p className="mb-8">
           All content on the Site — including but not limited to text, graphics, logos, icons, images, photographs, audio clips, video clips, data compilations, software, and the trade name "Gatehouse Home Cleaning" — is the exclusive property of the Company or its licensors and is protected by United States and international copyright, trademark, and other intellectual property laws.
         </p>
@@ -200,7 +226,7 @@ const Terms = () => {
           You may not reproduce, distribute, modify, create derivative works of, publicly display, publicly perform, republish, download, store, or transmit any of the Site content without our prior written consent.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">14. Privacy</h2>
+        <h2 id="terms-14" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">14. Privacy</h2>
         <p className="mb-8">
           Your use of the Site and Services is also governed by our{" "}
           <a href="/privacy" className="text-primary underline">
@@ -209,12 +235,12 @@ const Terms = () => {
           , which is incorporated into these Terms by reference. By using the Services, you consent to the collection and use of your personal information as described in the Privacy Policy.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">15. Electronic Communications</h2>
+        <h2 id="terms-15" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">15. Electronic Communications</h2>
         <p className="mb-8">
           We send booking emails to the address you provide. Standard message and data rates may apply. You may opt out of marketing communications at any time by replying STOP to text messages, clicking "unsubscribe" in emails, or contacting us directly. Text messages are sent only if you opt in at booking. Reply STOP at any time to stop text messages, or HELP for help.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">16. Dispute Resolution and Binding Arbitration</h2>
+        <h2 id="terms-16" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">16. Dispute Resolution and Binding Arbitration</h2>
         <p className="mb-4">
           <strong>16.1 Informal Resolution.</strong> Before initiating any formal dispute, you agree to first contact us at{" "}
           <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">
@@ -241,32 +267,32 @@ const Terms = () => {
           within thirty (30) days of first agreeing to these Terms. The notice must include your full name, address, and a clear statement that you wish to opt out of arbitration.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">17. Governing Law and Jurisdiction</h2>
+        <h2 id="terms-17" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">17. Governing Law and Jurisdiction</h2>
         <p className="mb-8">
           These Terms shall be governed by and construed in accordance with the laws of the State of Georgia, United States, without regard to its conflict of law principles. Subject to Section 16, the exclusive venue for any dispute not subject to arbitration shall be the state or federal courts located in Fulton County, Georgia, and you consent to the personal jurisdiction of such courts.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">18. Severability</h2>
+        <h2 id="terms-18" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">18. Severability</h2>
         <p className="mb-8">
           If any provision of these Terms is held to be invalid, illegal, or unenforceable by a court of competent jurisdiction, the remaining provisions shall remain in full force and effect, and the invalid provision shall be replaced with a valid provision that most closely approximates the original intent.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">19. Waiver</h2>
+        <h2 id="terms-19" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">19. Waiver</h2>
         <p className="mb-8">
           No failure or delay by us in exercising any right under these Terms shall constitute a waiver of that right. No waiver shall be effective unless in writing and signed by an authorized representative of the Company.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">20. Assignment</h2>
+        <h2 id="terms-20" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">20. Assignment</h2>
         <p className="mb-8">
           You may not assign or transfer your rights or obligations under these Terms without our prior written consent. We may assign these Terms at any time without notice or consent.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">21. Force Majeure</h2>
+        <h2 id="terms-21" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">21. Force Majeure</h2>
         <p className="mb-8">
           We shall not be liable for any failure or delay in performance caused by events beyond our reasonable control, including but not limited to acts of God, natural disasters, pandemics, government actions, labor disputes, utility failures, or transportation disruptions.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">22. Entire Agreement</h2>
+        <h2 id="terms-22" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">22. Entire Agreement</h2>
         <p className="mb-8">
           These Terms, together with the{" "}
           <a href="/privacy" className="text-primary underline">
@@ -275,12 +301,12 @@ const Terms = () => {
           and any written confirmations issued for specific bookings, constitute the entire agreement between you and Gatehouse Home Cleaning regarding the Services and supersede all prior agreements, representations, and understandings, whether oral or written.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">23. Changes to These Terms</h2>
+        <h2 id="terms-23" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">23. Changes to These Terms</h2>
         <p className="mb-8">
           We may revise these Terms at any time by posting an updated version on the Site. The "Effective Date" and "Last Updated" fields at the top reflect the latest revision. Continued use of the Site or Services after changes are posted constitutes your acceptance of the revised Terms. We encourage you to review these Terms periodically.
         </p>
 
-        <h2 className="font-heading text-2xl font-bold mb-4">24. Contact</h2>
+        <h2 id="terms-24" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">24. Contact</h2>
         <p className="mb-4 font-semibold">Gatehouse Home Cleaning</p>
         <p className="mb-4">
           Email:{" "}

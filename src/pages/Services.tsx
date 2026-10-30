@@ -107,15 +107,16 @@ const Services = () => {
       </section>
 
       {/* Comparison — factual differences only, prices from the same config
-          the calculator and the server charge by. */}
+          the calculator and the server charge by. One data source renders
+          the desktop table and the mobile cards, so they can never drift. */}
       <section className="py-10 md:py-12 bg-background">
         <div className="container max-w-4xl">
           <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
           <p className="text-center text-muted-foreground mb-8">
             All three follow the same published room-by-room checklist. The difference is the interiors — and when each one applies.
           </p>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full min-w-[560px] text-left text-sm">
+          <div className="hidden md:block overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-left text-sm">
               <thead>
                 <tr className="bg-card">
                   <th className="p-4 font-semibold"></th>
@@ -125,50 +126,31 @@ const Services = () => {
                 </tr>
               </thead>
               <tbody className="[&_td]:p-4 [&_th]:p-4 [&_tr]:border-t [&_tr]:border-border align-top">
-                <tr>
-                  <th className="font-semibold">Best for</th>
-                  <td>Regular upkeep of a lived-in home</td>
-                  <td>A reset — or no professional clean in the last 3 months</td>
-                  <td>An empty home, moving in or out</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Room-by-room checklist</th>
-                  <td>Included</td>
-                  <td>Included</td>
-                  <td>Included</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Inside oven</th>
-                  <td>Add-on +${disp(ADDONS.insideOven.price)}</td>
-                  <td>Included</td>
-                  <td>Included</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Inside fridge</th>
-                  <td>Add-on +${disp(ADDONS.insideFridge.price)}</td>
-                  <td>Included</td>
-                  <td>Included</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Inside cabinets &amp; drawers</th>
-                  <td>Add-on +${disp(ADDONS.insideCabinets.price)}</td>
-                  <td>Included</td>
-                  <td>Included</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Interior windows</th>
-                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
-                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
-                  <td>Add-on +${disp(ADDONS.interiorWindow.price)} each</td>
-                </tr>
-                <tr>
-                  <th className="font-semibold">Price — small / medium / large</th>
-                  <td>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</td>
-                  <td>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))}</td>
-                  <td>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))}</td>
-                </tr>
+                {comparisonRows(disp).map((row) => (
+                  <tr key={row.label}>
+                    <th className="font-semibold">{row.label}</th>
+                    <td>{row.standard}</td>
+                    <td>{row.deep}</td>
+                    <td>{row.move}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
+          </div>
+          <div className="md:hidden space-y-4">
+            {comparisonCards(disp).map((card) => (
+              <div key={card.title} className="rounded-xl border border-border bg-card p-4">
+                <h3 className="font-heading font-bold mb-3">{card.title}</h3>
+                <dl className="space-y-2 text-sm">
+                  {card.rows.map((r) => (
+                    <div key={r.label} className="flex justify-between gap-4">
+                      <dt className="text-muted-foreground">{r.label}</dt>
+                      <dd className="font-semibold text-right">{r.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ))}
           </div>
           <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
             Haven&apos;t had a professional clean in the last 3 months? Your first visit is a deep clean — that rule is
@@ -180,6 +162,33 @@ const Services = () => {
 
     </div>
   );
+};
+
+type ComparisonRow = { label: string; standard: React.ReactNode; deep: React.ReactNode; move: React.ReactNode };
+
+const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
+  { label: "Best for", standard: "Regular upkeep of a lived-in home", deep: "A reset — or no professional clean in the last 3 months", move: "An empty home, moving in or out" },
+  { label: "Room-by-room checklist", standard: "Included", deep: "Included", move: "Included" },
+  { label: "Inside oven", standard: <>Add-on +${disp(ADDONS.insideOven.price)}</>, deep: "Included", move: "Included" },
+  { label: "Inside fridge", standard: <>Add-on +${disp(ADDONS.insideFridge.price)}</>, deep: "Included", move: "Included" },
+  { label: "Inside cabinets & drawers", standard: <>Add-on +${disp(ADDONS.insideCabinets.price)}</>, deep: "Included", move: "Included" },
+  { label: "Interior windows", standard: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</>, deep: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</>, move: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</> },
+  {
+    label: "Price — small / medium / large",
+    standard: <>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</>,
+    deep: <>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))}</>,
+    move: <>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))}</>,
+  },
+];
+
+const comparisonCards = (disp: (n: number) => number) => {
+  const rows = comparisonRows(disp);
+  const titles = ["Standard", "Deep clean", "Move-in / Move-out"] as const;
+  const keys = ["standard", "deep", "move"] as const;
+  return titles.map((title, i) => ({
+    title,
+    rows: rows.map((r) => ({ label: r.label, value: r[keys[i]] })),
+  }));
 };
 
 const ServiceCardBlock = ({
@@ -214,23 +223,25 @@ const ServiceCardBlock = ({
               </li>
             ))}
           </ul>
-          <Accordion type="single" collapsible>
-            <AccordionItem value="included" className="border-b-0">
-              <AccordionTrigger className="font-heading text-lg font-semibold hover:no-underline pt-0">
-                What's included
-              </AccordionTrigger>
-              <AccordionContent>
-                <ul className="space-y-2 pt-2">
-                  {s.includes.map((item) => (
-                    <li key={item} className="flex items-start gap-2 text-base text-foreground">
-                      <Sparkles className="w-4 h-4 text-golden mt-0.5 flex-shrink-0" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
+          {s.includes.length > 3 && (
+            <Accordion type="single" collapsible>
+              <AccordionItem value="included" className="border-b-0">
+                <AccordionTrigger className="font-heading text-lg font-semibold hover:no-underline pt-0">
+                  {s.includes.length - 3} more included
+                </AccordionTrigger>
+                <AccordionContent>
+                  <ul className="space-y-2 pt-2">
+                    {s.includes.slice(3).map((item) => (
+                      <li key={item} className="flex items-start gap-2 text-base text-foreground">
+                        <Sparkles className="w-4 h-4 text-golden mt-0.5 flex-shrink-0" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          )}
         </div>
       </div>
     </div>

@@ -4,7 +4,8 @@ import { CheckCircle, CalendarClock, AlertTriangle, Loader2, User } from "lucide
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
-import { ReportContent } from "@/components/ReportContent";
+import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { fmtDateUS } from "@/lib/formatDate";
 import { toVisitMethod, entrySummaryLabel, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
 
 type VisitStateName =
@@ -107,7 +108,7 @@ const fmtDeadline = (iso: string): string => {
 
 // §11: the report lives INSIDE the client cabinet — same booking, same
 // page, anchored at #report (the report email links straight here).
-function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string; visitState: string; cleanerName?: string | null; onChanged: () => void }) {
+function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, cardLabel, onChanged }: { bt: string; visitState: string; cleanerName?: string | null; visitDate?: string | null; visitWindow?: string | null; cardLabel?: string | null; onChanged: () => void }) {
   const [rep, setRep] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -181,10 +182,49 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
     );
   }
   const canAct = rep.state === "awaiting" || rep.state === "payment_issue";
+  const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue";
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
-      {cleanerName && <p className="text-sm text-muted-foreground mb-3">Cleaned by {cleanerName}</p>}
+      <div className="rounded-xl border border-border bg-background p-4 mb-4">
+        <dl className="space-y-1.5">
+          {visitDate && (
+            <div className="flex justify-between gap-4 text-sm">
+              <dt className="text-muted-foreground">Visit date</dt>
+              <dd className="font-semibold text-right">{fmtDateUS(visitDate)}</dd>
+            </div>
+          )}
+          {visitWindow && (
+            <div className="flex justify-between gap-4 text-sm">
+              <dt className="text-muted-foreground">Arrival window (Atlanta time)</dt>
+              <dd className="font-semibold text-right">{visitWindow}</dd>
+            </div>
+          )}
+          {rep.amount && (
+            <div className="flex justify-between gap-4 text-sm">
+              <dt className="text-muted-foreground">This visit</dt>
+              <dd className="font-semibold text-right">{rep.amount}</dd>
+            </div>
+          )}
+          {cleanerName && (
+            <div className="flex justify-between gap-4 text-sm">
+              <dt className="text-muted-foreground">Cleaned by</dt>
+              <dd className="font-semibold text-right">{cleanerName}</dd>
+            </div>
+          )}
+          {cardLabel && (
+            <div className="flex justify-between gap-4 text-sm">
+              <dt className="text-muted-foreground">{visitState === "paid" ? "Card charged" : "Card we'll charge"}</dt>
+              <dd className="font-semibold text-right">
+                {cardLabel}
+                {cardActionable && (
+                  <> · <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link></>
+                )}
+              </dd>
+            </div>
+          )}
+        </dl>
+      </div>
       {canAct && (
         <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4">
           {rep.state === "payment_issue" ? (
@@ -242,12 +282,14 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
         photoItems={rep.photo_items ?? []}
         checklist={rep.checklist}
         renderPhoto={(p) => (
-          <figure>
-            <img src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
-            <figcaption className="mt-1 text-xs text-muted-foreground">
-              {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
-            </figcaption>
-          </figure>
+          <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`}>
+            <figure>
+              <img src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
+              <figcaption className="mt-1 text-xs text-muted-foreground">
+                {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
+              </figcaption>
+            </figure>
+          </ZoomablePhoto>
         )}
       />
       {rep.deadline && rep.state === "awaiting" && !rep.charge_timer_blocked && (
@@ -446,8 +488,8 @@ const Visit = () => {
 
   const rows: Array<[string, string]> = [];
   if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
-  if (b.confirmed_date) rows.push(["Visit date (confirmed)", b.confirmed_date]);
-  else if (b.requested_date) rows.push(["Requested date — not confirmed yet", b.requested_date]);
+  if (b.confirmed_date) rows.push(["Visit date (confirmed)", fmtDateUS(b.confirmed_date)]);
+  else if (b.requested_date) rows.push(["Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
   if (b.window) rows.push(["Arrival window (Atlanta time)", b.window]);
   if (b.first) rows.push(["First visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
@@ -603,7 +645,7 @@ const Visit = () => {
 
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") && (
               <section id="report" className="scroll-mt-28">
-                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} onChanged={() => void load()} />
+                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={data.has_card && data.card_last4 ? `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••${data.card_last4}` : null} onChanged={() => void load()} />
               </section>
             )}
 
@@ -621,15 +663,6 @@ const Visit = () => {
               </div>
             )}
 
-            {data.state === "report_sent" && data.has_card && data.card_last4 && (
-              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
-                <p className="text-sm">
-                  Card we&apos;ll charge: <strong>{data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••{data.card_last4}</strong>
-                  {" · "}
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link>
-                </p>
-              </div>
-            )}
 
             {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">

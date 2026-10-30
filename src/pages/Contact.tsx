@@ -189,7 +189,6 @@ const ContactInfo = () => (
       <div>
         <p className="font-medium text-foreground">Response Time</p>
         <p>We reply within one business day.</p>
-        <p>Booking requests are confirmed within one business day.</p>
       </div>
     </div>
 
@@ -310,7 +309,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
       </Button>
 
       <p className="text-xs text-foreground text-center mt-4">
-        We'll respond within one business day. We use your details only to reply to you. See our Privacy Policy.
+        We use your details only to reply to you. See our Privacy Policy.
       </p>
     </form>
   </div>

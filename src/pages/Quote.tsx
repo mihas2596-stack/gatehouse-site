@@ -224,6 +224,16 @@ const Quote = () => {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
+  // Extras start collapsed so the price form stays short; the summary
+  // line always shows what is selected, even while collapsed.
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  const extrasSummary = [
+    insideOven && "Inside oven",
+    insideFridge && "Inside fridge",
+    insideCabinets && "Inside cabinets",
+    pets && "Pets",
+    interiorWindows > 0 && `${interiorWindows} window${interiorWindows > 1 ? "s" : ""}`,
+  ].filter(Boolean).join(", ");
   const firstStepRender = useRef(true);
   // Land at the top of the new step with focus on its heading. The
   // old code scrolled BEFORE React re-rendered (smooth scroll plus
@@ -597,13 +607,23 @@ const Quote = () => {
           <p className="text-muted-foreground text-lg">
             No email needed to see your price.
           </p>
-          <ol className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
-            <li aria-current={step === 1 ? "step" : undefined} className={step === 1 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>1 · Your home &amp; price</li>
-            <li aria-hidden="true" className="text-muted-foreground">→</li>
-            <li aria-current={step === 2 ? "step" : undefined} className={step === 2 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>2 · Your visit</li>
-            <li aria-hidden="true" className="text-muted-foreground">→</li>
-            <li aria-current={step === 3 ? "step" : undefined} className={step === 3 ? "rounded-full bg-primary px-3 py-1.5 text-primary-foreground" : "rounded-full border border-border bg-card px-3 py-1.5"}>3 · Review &amp; save card</li>
-          </ol>
+          <div className="mt-5 max-w-md mx-auto">
+            <p className="text-center text-sm font-semibold" aria-current="step">
+              Step {step} of 3 · {step === 1 ? "Your home & price" : step === 2 ? "Your visit" : "Review & save card"}
+            </p>
+            <div
+              className="mt-2 flex gap-1.5"
+              role="progressbar"
+              aria-valuemin={1}
+              aria-valuemax={3}
+              aria-valuenow={step}
+              aria-label="Booking progress"
+            >
+              {[1, 2, 3].map((n) => (
+                <span key={n} className={`h-1.5 flex-1 rounded-full ${n <= step ? "bg-primary" : "bg-border"}`} aria-hidden="true" />
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
@@ -622,7 +642,6 @@ const Quote = () => {
             )}
 
             {step === 1 && (<>
-            <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
             <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
@@ -723,10 +742,22 @@ const Quote = () => {
 
             </div>
 
-            {/* Add-ons */}
+            {/* Add-ons — collapsed by default so the price form stays short. */}
             <div className="mt-6">
-              <p className="block text-sm font-medium mb-2">Add extras (optional)</p>
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-baseline gap-x-3">
+                <button
+                  type="button"
+                  aria-expanded={extrasOpen}
+                  onClick={() => setExtrasOpen((v) => !v)}
+                  className="min-h-[44px] text-sm font-semibold text-primary underline"
+                >
+                  Add extras (optional)
+                </button>
+                <span className="text-sm text-muted-foreground">
+                  {extrasSummary || "None selected"}
+                </span>
+              </div>
+              {extrasOpen && (<div className="flex flex-col gap-3 mt-1">
                 {!includedAddons.includes("insideOven") && (
                   <label htmlFor="q-addon-oven" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                     <input id="q-addon-oven" type="checkbox" className="h-5 w-5" checked={insideOven} onChange={(e) => setInsideOven(e.target.checked)} />
@@ -766,7 +797,8 @@ const Quote = () => {
                     className="w-20 px-3 py-2 rounded-lg border border-border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>
-              </div>
+                <p className="text-sm text-muted-foreground">These are the only extras. Nothing is pre-selected for you.</p>
+              </div>)}
             </div>
 
             {service === "standard" && (
@@ -784,16 +816,10 @@ const Quote = () => {
               </fieldset>
             )}
 
-            <div className="mt-6 rounded-lg border border-border bg-background p-4">
-              <h3 className="font-heading text-base font-bold">What&apos;s included</h3>
-              <p className="mt-2 text-sm text-foreground">
-                Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas —
-                with professional supplies and equipment included. <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Add-ons above are the only extras. Nothing is pre-selected for you.
-              </p>
-            </div>
+            <p className="mt-6 text-sm text-foreground">
+              Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
+              <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
+            </p>
 
             {/* Result */}
             <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
@@ -894,8 +920,7 @@ const Quote = () => {
                className="mt-2 scroll-mt-16 pb-20 md:scroll-mt-28 md:pb-0"
             >
               {step === 2 && (<>
-              <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 2 of 3</p>
-              <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
+                <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <p className="text-sm text-foreground mb-6">
                 We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
@@ -953,8 +978,7 @@ const Quote = () => {
               </div>
               </>)}
               {step === 3 && (<>
-              <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 3 of 3</p>
-              <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
+                <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
               <p className="text-sm text-foreground mb-6">
                 Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
               </p>

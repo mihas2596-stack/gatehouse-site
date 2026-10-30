@@ -1,13 +1,12 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Heart, BadgeCheck, Shield } from "lucide-react";
+import { Heart, Shield } from "lucide-react";
 import SEO from "@/components/SEO";
 import { Check } from "lucide-react";
 import nikFounder from "@/assets/nik-founder.jpeg";
 
 const MANIFESTO_ROWS: { good: string }[] = [
-  { good: "Most homes get a price online; larger homes can email us for a custom quote" },
-  { good: "Your price on screen before you book" },
+  { good: "Most homes get a price online — before you book; larger homes can email us for a custom quote" },
 ];
 
 
@@ -28,6 +27,11 @@ const About = () => {
           </h1>
           <p className="text-lg text-foreground/80 max-w-2xl mx-auto">
             I manage Gatehouse and coordinate your visit with independent cleaning professionals in North Atlanta. You can reach me directly with questions about your request.
+          </p>
+          <p className="text-base text-foreground/80 max-w-2xl mx-auto mt-4">
+            <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>
+            {" · "}
+            <a href="tel:+17705258599" className="font-semibold text-primary underline">(770) 525-8599</a>
           </p>
         </div>
       </section>
@@ -57,10 +61,9 @@ const About = () => {
           </div>
 
           {/* VALUE CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-16">
             {[
               { icon: Heart, title: "First Clean Rule", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book." },
-              { icon: BadgeCheck, title: "Published Pricing", desc: "See your price online. No in-home estimate." },
               { icon: Shield, title: "Same Day, Same Time", desc: "Your visit is set to the same weekday and arrival window, every other week." },
             ].map((v) => (
               <div key={v.title} className="text-center p-8 bg-card rounded-2xl shadow-warm">

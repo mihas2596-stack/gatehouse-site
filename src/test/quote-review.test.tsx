@@ -44,6 +44,8 @@ describe("booking price confirmation", () => {
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     expect(screen.queryByLabelText(/claiming a founding spot/)).not.toBeInTheDocument();
+    // Extras start collapsed.
+    fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
     fireEvent.click(screen.getByLabelText(/Inside oven/));
     expect(screen.getByText("First visit: $224", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("First visit: $224 · then $224 per visit, every other week")).toBeInTheDocument();

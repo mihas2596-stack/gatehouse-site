@@ -22,7 +22,7 @@ const neighborhoods = [
 const faqs = [
   {
     q: "Which neighborhoods do you serve?",
-    a: "We serve seven cities: Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. Enter your ZIP in the calculator to check.",
+    a: "We serve seven North Atlanta cities — see the list above. Enter your ZIP in the calculator to check.",
   },
   {
     q: "Is there a travel fee for homes farther out?",
@@ -42,7 +42,7 @@ const faqs = [
   },
   {
     q: "Do you cover Atlanta proper or only the northern suburbs?",
-    a: "We serve seven North Atlanta cities: Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. We don't currently serve intown Atlanta (Midtown, Buckhead, Decatur, etc.). Enter your ZIP in the calculator to check.",
+    a: "We serve the seven North Atlanta cities listed above. We don't currently serve intown Atlanta (Midtown, Buckhead, Decatur, etc.). Enter your ZIP in the calculator to check.",
   },
   {
     q: "What if I'm just outside your service area?",
@@ -80,43 +80,35 @@ const Areas = () => {
         <div className="container">
           <div className="mx-auto max-w-4xl rounded-2xl border border-border bg-card p-6 shadow-warm md:p-8">
             <h2 className="mb-4 font-heading text-2xl font-bold text-sage-foreground">Cities we clean</h2>
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <ul className="space-y-3">
               {neighborhoods.map((n) => (
-                <li key={`area-${n.name}`}>
-                  <a
-                    className="flex min-h-[44px] items-center gap-2 rounded-lg bg-peach/30 px-3 text-sm font-semibold text-foreground underline"
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${n.name}, GA`)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {n.name}, GA
-                  </a>
+                <li key={`area-${n.name}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-peach/30 px-4 py-3">
+                  <span className="flex items-center gap-2 text-base font-semibold text-foreground">
+                    <MapPin className="w-5 h-5 text-primary" aria-hidden="true" /> {n.name}, GA
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Link
+                      to={`/areas/${n.name.toLowerCase().replace(/\s+/g, "-")}`}
+                      className="inline-flex min-h-[44px] items-center rounded-full bg-card px-4 text-sm font-semibold text-primary underline"
+                    >
+                      City page
+                    </Link>
+                    <a
+                      className="inline-flex min-h-[44px] items-center rounded-full bg-card px-4 text-sm font-semibold text-primary underline"
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${n.name}, GA`)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Open ${n.name} on Google Maps`}
+                    >
+                      Map
+                    </a>
+                  </span>
                 </li>
               ))}
             </ul>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-16">
-        <div className="container">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {neighborhoods.map((n) => (
-              <Link
-                key={n.name}
-                to={`/areas/${n.name.toLowerCase().replace(/\s+/g, "-")}`}
-                className="block bg-card rounded-2xl p-6 shadow-warm hover:shadow-warm-lg transition-all hover:-translate-y-1 group"
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-lg bg-peach/50 flex items-center justify-center group-hover:bg-peach transition-colors">
-                    <MapPin className="w-5 h-5 text-primary" />
-                  </div>
-                  <h3 className="font-heading text-lg font-semibold">{n.name}</h3>
-                </div>
-                <p className="text-muted-foreground text-sm leading-relaxed">{n.desc}</p>
-                <span className="mt-3 inline-block text-sm font-semibold text-primary">House cleaning in {n.name} →</span>
-              </Link>
-            ))}
+            <p className="mt-5 text-sm text-muted-foreground">
+              Every city gets the same every-other-week cleaning on a fixed day and time, at the published price.
+            </p>
           </div>
         </div>
       </section>
@@ -125,7 +117,7 @@ const Areas = () => {
         <div className="container text-center max-w-2xl">
           <h2 className="font-heading text-3xl font-bold mb-4">Don't See Your Neighborhood?</h2>
           <p className="text-muted-foreground text-lg mb-8">
-            We serve seven cities: Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. Enter your ZIP in the calculator to check.
+            We serve seven cities across North Atlanta (see the list above). Enter your ZIP in the calculator to check whether your home is covered.
           </p>
           <Button variant="hero" size="xl" asChild>
             <Link to="/quote" data-main-cta>Check Availability</Link>

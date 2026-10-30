@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-30T00:00:00Z"));
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-02T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);
@@ -62,6 +62,8 @@ describe("quote steps", () => {
   it("add extras are grouped, priced, and none are pre-selected", () => {
     openQuote();
     expect(screen.getByText("Add extras (optional)")).toBeInTheDocument();
+    // Extras start collapsed; expand them before touching the controls.
+    fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
     expect((screen.getByLabelText(/Inside oven/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Inside fridge/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Inside cabinets/) as HTMLInputElement).checked).toBe(false);
@@ -79,6 +81,8 @@ describe("quote steps", () => {
       fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
       fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${history}$`) }));
       if (oven) {
+        // Extras start collapsed.
+        fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
         fireEvent.click(screen.getByLabelText(/Inside oven/));
         // Addon price on step 1 is a single $ sign, not "+$$35".
         expect(document.body.textContent).toContain("+$35");
