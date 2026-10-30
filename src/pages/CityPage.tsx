@@ -26,7 +26,7 @@ const CityPage = () => {
           </h1>
           <p className="text-foreground text-lg">{city.description}</p>
           <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
-            <Link to="/quote">See My Price</Link>
+            <Link to="/quote" data-main-cta>See My Price</Link>
           </Button>
         </div>
       </section>

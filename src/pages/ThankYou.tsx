@@ -356,7 +356,7 @@ const ThankYou = () => {
           <p className="mt-4 text-base leading-relaxed">
             Your card is charged when you approve the report, or automatically 24 hours after we
             send it if you haven&apos;t reported an issue. If you report an issue within that
-            window, the charge stays paused while we review it with you.
+            window, the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.
           </p>
         </div>
 

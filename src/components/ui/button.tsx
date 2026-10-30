@@ -20,7 +20,7 @@ const buttonVariants = cva(
         golden: "bg-gradient-to-r from-golden to-accent text-accent-foreground hover:opacity-90 shadow-warm-lg font-semibold",
       },
       size: {
-        default: "min-h-10 h-auto px-5 py-2",
+        default: "min-h-11 h-auto px-5 py-2",
         sm: "min-h-9 h-auto rounded-md px-3",
         lg: "min-h-12 h-auto py-3 rounded-lg px-6 text-base",
         xl: "min-h-14 h-auto py-3 rounded-xl px-6 text-lg",

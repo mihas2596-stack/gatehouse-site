@@ -61,7 +61,7 @@ const FAQ = () => (
 
         <div className="mt-10 text-center">
           <Button asChild variant="hero" size="lg" className="rounded-full px-8">
-            <Link to="/quote">See My Price</Link>
+            <Link to="/quote" data-main-cta>See My Price</Link>
           </Button>
         </div>
       </div>

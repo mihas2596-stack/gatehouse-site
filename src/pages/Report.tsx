@@ -262,6 +262,92 @@ const Report = () => {
               Here&apos;s your home after the visit — check every room.
             </p>
             {summary}
+            <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+              <p className="text-sm text-foreground">
+                If everything looks good, approve below
+                {data.amount ? <> — your card is then charged {data.amount}</> : null}.
+                If something isn&apos;t right, report an issue and the automatic charge is blocked for this visit — it never runs on its own afterwards.
+                {data.deadline && !data.charge_timer_blocked ? (
+                  <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
+                  your saved card is charged automatically unless you report an issue.</>
+                ) : null}
+                {data.charge_timer_block_reason === "issue_ever" ? (
+                  <> Automatic payment is disabled for this visit because an issue was reported.</>
+                ) : null}
+              </p>
+            </div>
+            {actionError && (
+              <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
+            )}
+            {!issueOpen ? (
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
+                  {busy ? "Working…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
+                </Button>
+                <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
+                  Report an issue
+                </Button>
+              </div>
+            ) : (
+              <div className="text-left">
+                <label htmlFor="issue-room" className="block font-semibold mb-2">
+                  Which room?
+                </label>
+                <select
+                  id="issue-room"
+                  value={issueRoom}
+                  onChange={(e) => setIssueRoom(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
+                >
+                  <option value="">Choose a room…</option>
+                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[])).map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                  <option value="Kitchen">Kitchen</option>
+                  <option value="Bathroom">Bathroom</option>
+                  <option value="Bedroom">Bedroom</option>
+                  <option value="Living areas">Living areas</option>
+                  <option value="Other">Other / not listed</option>
+                </select>
+                <label htmlFor="issue-text" className="block font-semibold mb-2">
+                  What isn&apos;t right?
+                </label>
+                <textarea
+                  id="issue-text"
+                  value={issueText}
+                  onChange={(e) => setIssueText(e.target.value)}
+                  rows={4}
+                  maxLength={500}
+                  placeholder="Tell us what we missed — the automatic charge is blocked for this visit."
+                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
+                />
+                <label htmlFor="issue-photo" className="block font-semibold mb-2">
+                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <input
+                  id="issue-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm mb-1"
+                />
+                {issuePhotoNote && (
+                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
+                )}
+                <p className="text-xs text-muted-foreground mb-3">
+                  Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one
+                  business day.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("issue")}>
+                    {busy ? "Sending…" : "Send — block auto-charge"}
+                  </Button>
+                  <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(false)}>
+                    Back
+                  </Button>
+                </div>
+              </div>
+            )}
             {data.photo_items && data.photo_items.length > 0 ? (
               <div className="mb-6">
                 <ReportContent
@@ -325,93 +411,7 @@ const Report = () => {
               open this page. Photos are kept for 90 days, then deleted, and never published without
               your separate written permission.
             </p>
-            <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-              <p className="text-sm text-foreground">
-                If everything looks good, approve below
-                {data.amount ? <> — your card is then charged {data.amount}</> : null}.
-                If something isn&apos;t right, report an issue and the charge stays paused while we
-                make it right.
-                {data.deadline && !data.charge_timer_blocked ? (
-                  <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
-                  your saved card is charged automatically unless you report an issue.</>
-                ) : null}
-                {data.charge_timer_block_reason === "issue_ever" ? (
-                  <> Automatic payment is disabled for this visit because an issue was reported.</>
-                ) : null}
-              </p>
-            </div>
-            {actionError && (
-              <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
-            )}
-            {!issueOpen ? (
-              <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                  {busy ? "Working…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
-                </Button>
-                <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
-                  Report an issue
-                </Button>
-              </div>
-            ) : (
-              <div className="text-left">
-                <label htmlFor="issue-room" className="block font-semibold mb-2">
-                  Which room?
-                </label>
-                <select
-                  id="issue-room"
-                  value={issueRoom}
-                  onChange={(e) => setIssueRoom(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-                >
-                  <option value="">Choose a room…</option>
-                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[])).map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                  <option value="Kitchen">Kitchen</option>
-                  <option value="Bathroom">Bathroom</option>
-                  <option value="Bedroom">Bedroom</option>
-                  <option value="Living areas">Living areas</option>
-                  <option value="Other">Other / not listed</option>
-                </select>
-                <label htmlFor="issue-text" className="block font-semibold mb-2">
-                  What isn&apos;t right?
-                </label>
-                <textarea
-                  id="issue-text"
-                  value={issueText}
-                  onChange={(e) => setIssueText(e.target.value)}
-                  rows={4}
-                  maxLength={500}
-                  placeholder="Tell us what we missed — the charge stays paused while we sort it out."
-                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-                />
-                <label htmlFor="issue-photo" className="block font-semibold mb-2">
-                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
-                </label>
-                <input
-                  id="issue-photo"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
-                  className="w-full text-sm mb-1"
-                />
-                {issuePhotoNote && (
-                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
-                )}
-                <p className="text-xs text-muted-foreground mb-3">
-                  Sending this pauses your charge. We&apos;ll confirm by email and reply within one
-                  business day.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("issue")}>
-                    {busy ? "Sending…" : "Send — pause my charge"}
-                  </Button>
-                  <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(false)}>
-                    Back
-                  </Button>
-                </div>
-              </div>
-            )}
+
           </div>
         )}
 
@@ -440,9 +440,9 @@ const Report = () => {
         {!loading && data?.state === "issue_open" && (
           <div className="text-center">
             <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Request received — charge paused</h1>
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Request received — automatic charge blocked</h1>
             <p className="text-lg text-foreground mb-6">
-              We&apos;ve paused the charge for this visit. We&apos;ll reply within one business day —
+              We&apos;ve blocked the automatic charge for this visit. We&apos;ll reply within one business day —
               a confirmation is also in your email.
               {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
               {data.issue_reason ? <> “{data.issue_reason}”</> : null}
@@ -451,7 +451,7 @@ const Report = () => {
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
             )}
             <p className="text-base text-foreground mb-6">
-              If the fix looks good, resolving the issue approves the report and charges your saved
+              If the fix looks good, tap below to approve the report — that charges your saved
               card{data.amount ? <> {data.amount}</> : null} right away.
             </p>
             <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>

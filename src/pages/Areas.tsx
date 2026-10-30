@@ -30,7 +30,7 @@ const faqs = [
   },
   {
     q: "Do you serve gated communities and HOA neighborhoods?",
-    a: "Yes. Share the gate code or guest-list name when you book.",
+    a: "Yes. You add gate details privately on your confirmed visit page — never in open booking notes.",
   },
   {
     q: "Can you clean apartments and townhomes, not just single-family houses?",
@@ -128,7 +128,7 @@ const Areas = () => {
             We serve seven cities: Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. Enter your ZIP in the calculator to check.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote">Check Availability</Link>
+            <Link to="/quote" data-main-cta>Check Availability</Link>
           </Button>
         </div>
       </section>

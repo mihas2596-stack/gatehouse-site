@@ -11,7 +11,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "When exactly is my card charged?",
-    a: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If we learn the report email could not be delivered, the charge is paused until the report reaches you another way.",
+    a: "Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If we learn the report email could not be delivered, the automatic charge does not run until the report reaches you another way.",
   },
   {
     q: "Is my card safe with you?",
@@ -35,7 +35,7 @@ export const FAQS: { q: string; a: string; link?: { href: string; label: string 
   },
   {
     q: "What if I'm not happy with the cleaning?",
-    a: "Missed something on the checklist? We fix it free within 72 hours. Tap Report an issue on your photo report page — or email a photo of the missed item to hello@gatehousehomecleaning.com — within 24 hours after your photo report is sent. While your issue is open, the charge stays paused; resolving it approves the report and charges your saved card.",
+    a: "Missed something on the checklist? We fix it free within 72 hours. Tap Report an issue on your photo report page — or email a photo of the missed item to hello@gatehousehomecleaning.com — within 24 hours after your photo report is sent. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
   },
   {
     q: "Who will be cleaning my home?",

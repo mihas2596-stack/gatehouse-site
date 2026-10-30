@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import { CHECKLIST, NOT_INCLUDED } from "@/config/checklist";
-import { ADDONS } from "@/config/calculator";
+import { ADDONS, globalTestCutActive, scaleTestPrice } from "@/config/calculator";
+import { useEffect, useState } from "react";
 
 const addons = [
   ADDONS.insideOven,
@@ -13,7 +14,14 @@ const addons = [
   ADDONS.pets,
 ];
 
-const WhatsIncluded = () => (
+const WhatsIncluded = () => {
+  // Same test regime as /services: one regime, one price, clearly labeled.
+  const [testPricing, setTestPricing] = useState(false);
+  useEffect(() => {
+    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive()); } catch { /* private mode */ }
+  }, []);
+  const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
+  return (
   <div className="page-shell">
     <SEO
       title="What's Included in a House Cleaning | Gatehouse"
@@ -33,6 +41,14 @@ const WhatsIncluded = () => (
       </div>
     </section>
 
+    {testPricing && (
+      <div className="container">
+        <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
+          Test booking: prices on this page are reduced for a payment test.
+        </p>
+      </div>
+    )}
+
     <section className="py-12 md:py-16">
       <div className="container max-w-5xl">
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
@@ -41,7 +57,7 @@ const WhatsIncluded = () => (
               <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">{room}</h2>
               <ul className="space-y-2">
                 {tasks.map((task) => (
-                  <li key={task} className="flex items-start gap-2 text-sm leading-relaxed text-foreground md:text-base">
+                  <li key={task} className="flex items-start gap-2 text-base leading-relaxed text-foreground">
                     <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                     <span>{task}</span>
                   </li>
@@ -56,9 +72,9 @@ const WhatsIncluded = () => (
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Add-ons (fixed price)</h2>
             <ul className="space-y-2">
               {addons.map(({ label, price }) => (
-                <li key={label} className="flex items-center justify-between gap-4 text-sm text-foreground md:text-base">
+                <li key={label} className="flex items-center justify-between gap-4 text-base text-foreground">
                   <span>{label}</span>
-                  <span className="font-semibold text-primary">+${price}</span>
+                  <span className="font-semibold text-primary">+${disp(price)}</span>
                 </li>
               ))}
             </ul>
@@ -67,7 +83,7 @@ const WhatsIncluded = () => (
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Not included</h2>
             <ul className="space-y-2">
               {NOT_INCLUDED.map((item) => (
-                <li key={item} className="flex items-start gap-2 text-sm text-foreground md:text-base">
+                <li key={item} className="flex items-start gap-2 text-base text-foreground">
                   <X className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span>{item}</span>
                 </li>
@@ -78,12 +94,13 @@ const WhatsIncluded = () => (
 
         <div className="mt-10 text-center">
           <Button asChild variant="hero" size="lg" className="rounded-full px-8">
-            <Link to="/quote">See My Price</Link>
+            <Link to="/quote" data-main-cta>See My Price</Link>
           </Button>
         </div>
       </div>
     </section>
   </div>
-);
+  );
+};
 
 export default WhatsIncluded;

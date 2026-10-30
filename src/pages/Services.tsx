@@ -163,9 +163,9 @@ const Services = () => {
                 </tr>
                 <tr>
                   <th className="font-semibold">Price — small / medium / large</th>
-                  <td>{fmtPrice(PRICES.standardOnetime.S)} / {fmtPrice(PRICES.standardOnetime.M)} / {fmtPrice(PRICES.standardOnetime.L)} one-time<br />{fmtPrice(PRICES.recurring.S)} / {fmtPrice(PRICES.recurring.M)} / {fmtPrice(PRICES.recurring.L)} every other week</td>
-                  <td>{fmtPrice(PRICES.deep.S)} / {fmtPrice(PRICES.deep.M)} / {fmtPrice(PRICES.deep.L)}</td>
-                  <td>{fmtPrice(PRICES.moveinout.S)} / {fmtPrice(PRICES.moveinout.M)} / {fmtPrice(PRICES.moveinout.L)}</td>
+                  <td>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</td>
+                  <td>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))}</td>
+                  <td>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))}</td>
                 </tr>
               </tbody>
             </table>
@@ -201,14 +201,14 @@ const ServiceCardBlock = ({
         <Heading className={`font-heading font-bold mb-2 ${compact ? "text-xl md:text-2xl" : "text-2xl md:text-3xl"}`}>{s.title}</Heading>
         <p className="text-foreground leading-relaxed mb-6">{s.desc}</p>
         <Button variant="hero" size="lg" asChild>
-          <Link to={s.link}>See your price</Link>
+          <Link to={s.link} data-main-cta>See your price</Link>
         </Button>
       </div>
       <div className="flex-1 w-full">
         <div className="bg-background rounded-xl px-6 py-4">
           <ul className="space-y-1.5 mb-4">
             {s.includes.slice(0, 3).map((item) => (
-              <li key={`preview-${item}`} className="flex items-start gap-2 text-sm text-foreground">
+              <li key={`preview-${item}`} className="flex items-start gap-2 text-base text-foreground">
                 <Sparkles className="w-3.5 h-3.5 text-golden mt-0.5 flex-shrink-0" />
                 {item}
               </li>
@@ -222,7 +222,7 @@ const ServiceCardBlock = ({
               <AccordionContent>
                 <ul className="space-y-2 pt-2">
                   {s.includes.map((item) => (
-                    <li key={item} className="flex items-start gap-2 text-sm text-foreground">
+                    <li key={item} className="flex items-start gap-2 text-base text-foreground">
                       <Sparkles className="w-4 h-4 text-golden mt-0.5 flex-shrink-0" />
                       {item}
                     </li>

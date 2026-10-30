@@ -124,7 +124,7 @@ const About = () => {
             See your price online and book your first clean in a few minutes.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote">See My Price</Link>
+            <Link to="/quote" data-main-cta>See My Price</Link>
           </Button>
         </div>
       </section>

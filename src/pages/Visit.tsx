@@ -208,7 +208,7 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
             </>
           ) : (
             <>
-              <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to pause payment.</p>
+              <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to block the automatic charge.</p>
               {rep.deadline && !rep.charge_timer_blocked && (
                 <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
               )}
@@ -229,7 +229,7 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
       )}
       {rep.state === "issue_open" && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
-          Issue received — payment paused while we review it with you.
+          Issue received — the automatic charge is blocked for this visit.
           {rep.issue_reason ? <> You told us: “{rep.issue_reason}”.</> : null}
         </p>
       )}
@@ -268,7 +268,7 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
         </div>
       )}
       {canAct && rep.state === "awaiting" && (
-        <p className="mt-2 text-sm text-muted-foreground">Not happy? Report an issue — the charge pauses until we make it right.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Not happy? Report an issue — the automatic charge is blocked until you approve again.</p>
       )}
       {canAct && showIssue && (
         <div className="mt-4">
@@ -292,7 +292,7 @@ function ReportSection({ bt, visitState, cleanerName, onChanged }: { bt: string;
             placeholder="e.g. Kitchen"
           />
           <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}>
-            {busy ? "Working…" : "Send issue — pause payment"}
+            {busy ? "Working…" : "Send issue — block auto-charge"}
           </Button>
         </div>
       )}
@@ -593,16 +593,20 @@ const Visit = () => {
                 </p>
               </div>
             )}
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") ? (
+            {(data.state === "card_needed" || data.state === "card_failed") && (
+              <div className="text-center mb-8">
+                <Button variant="hero" size="lg" asChild>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Save card — $0 today</Link>
+                </Button>
+              </div>
+            )}
+
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") && (
               <section id="report" className="scroll-mt-28">
                 <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} onChanged={() => void load()} />
               </section>
-            ) : (
-              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
-                <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
-              </section>
             )}
+
 
             {rows.length > 0 && (
               <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
@@ -627,14 +631,6 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state === "card_needed" || data.state === "card_failed") && (
-              <div className="text-center mb-8">
-                <Button variant="hero" size="lg" asChild>
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Save card — $0 today</Link>
-                </Button>
-              </div>
-            )}
-
             {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">
                 {data.cleaner.photo ? (
@@ -645,7 +641,7 @@ const Visit = () => {
                   </span>
                 )}
                 <div className="text-left">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Your cleaner</p>
+                  <p className="text-sm uppercase tracking-wide text-muted-foreground">Your cleaner</p>
                   <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
                   {data.cleaner.phone && (
                     <p className="text-sm">
@@ -658,6 +654,13 @@ const Visit = () => {
                   </p>
                 </div>
               </div>
+            )}
+
+            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue") && (
+              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+                <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
+              </section>
             )}
 
             {(data.state === "confirmed" || data.state === "awaiting_confirmation") && (
@@ -809,130 +812,6 @@ const Visit = () => {
                   Save
                 </Button>
                 {accessSaved && <span className="ml-3 text-sm text-sage-foreground">Saved.</span>}
-              </div>
-            )}
-
-            {data.state === "date_declined" && (
-              <p className="text-lg text-foreground mb-6 text-center">
-                The date you picked doesn&apos;t work on our side. Pick one of the alternatives, or
-                suggest your own — your request and your saved card stay exactly as they are, and
-                nothing is charged.
-              </p>
-            )}
-            {data.state === "cancelled" && (
-              <p className="text-lg text-foreground mb-6 text-center">
-                {data.cancelled_scope === "stop"
-                  ? "This visit and all future recurring visits are cancelled."
-                  : "This visit is cancelled. Your recurring schedule, if you have one, stays in place."}{" "}
-                Your saved card stays on file for future bookings — email us any time to have it removed.
-              </p>
-            )}
-            {data.state === "awaiting_confirmation" && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <p className="text-foreground font-semibold mb-1">Next step is ours.</p>
-                <p className="text-sm text-muted-foreground">
-                  Your card is saved — $0 charged today.
-                  {data.confirm_by ? <> We&apos;ll confirm your cleaner and arrival window by <strong>{data.confirm_by}</strong>.</> : " We'll confirm your cleaner and arrival window by email within one business day."}
-                </p>
-                {data.scope_review_needed && (
-                  <p className="text-sm text-muted-foreground mt-2">
-                    We may check a couple of scope details with you before confirming. Your agreed
-                    price won&apos;t change unless you agree to a change.
-                  </p>
-                )}
-              </div>
-            )}
-            {data.report_preparing && data.state !== "report_sent" && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <p className="text-foreground font-semibold mb-1">Your cleaning is complete.</p>
-                <p className="text-sm text-muted-foreground">
-                  We&apos;re preparing your photo report. Your review period has not started —
-                  it begins only when the report reaches you.
-                </p>
-              </div>
-            )}
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") ? (
-              <section id="report" className="scroll-mt-28">
-                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} onChanged={() => void load()} />
-              </section>
-            ) : (
-              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
-                <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
-              </section>
-            )}
-
-            {rows.length > 0 && (
-              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
-                <dl className="space-y-1.5">
-                  {rows.map(([k, v]) => (
-                    <div key={k} className="flex justify-between gap-4 text-sm">
-                      <dt className="text-muted-foreground">{k}</dt>
-                      <dd className="font-semibold text-right">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
-
-            {data.state === "report_sent" && data.has_card && data.card_last4 && (
-              <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
-                <p className="text-sm">
-                  Card we&apos;ll charge: <strong>{data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••{data.card_last4}</strong>
-                  {" · "}
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link>
-                </p>
-              </div>
-            )}
-
-            {(data.state === "card_needed" || data.state === "card_failed") && (
-              <div className="text-center mb-8">
-                <Button variant="hero" size="lg" asChild>
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Save card — $0 today</Link>
-                </Button>
-              </div>
-            )}
-
-            {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">
-                {data.cleaner.photo ? (
-                  <img src={data.cleaner.photo} alt={data.cleaner.name} className="w-16 h-16 rounded-full object-cover border border-border" />
-                ) : (
-                  <span className="w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0">
-                    <User className="w-8 h-8 text-sage-foreground" aria-hidden="true" />
-                  </span>
-                )}
-                <div className="text-left">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Your cleaner</p>
-                  <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
-                  {data.cleaner.phone && (
-                    <p className="text-sm">
-                      <a className="underline" href={`tel:${data.cleaner.phone.replace(/\D/g, "")}`}>{data.cleaner.phone}</a>
-                    </p>
-                  )}
-                  <p className="text-sm text-muted-foreground">
-                    An independent cleaning professional matched to your home by Gatehouse. If your
-                    cleaner ever changes, we tell you before the visit — never a surprise stranger.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {(data.state === "confirmed" || data.state === "awaiting_confirmation") && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-2">Before your visit</h2>
-                <ul className="list-disc pl-5 space-y-1 text-sm text-foreground">
-                  <li>Tidy surfaces so the visit goes to cleaning, not sorting.</li>
-                  <li>Secure pets, or tell us below where they&apos;ll be.</li>
-                  <li>Entry: your booking choice is shown below — you can change it here and add private entry details after confirmation.</li>
-                  <li>You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.</li>
-                  <li>If anything about the arrival changes, we email you the same day.</li>
-                </ul>
-                <p className="text-sm text-muted-foreground mt-3">
-                  If we can&apos;t get in: we re-check your instructions, try to reach you, and wait
-                  before marking the visit missed. A visit we can&apos;t enter is charged as a full
-                  visit under our Terms — so clear instructions really help.
-                </p>
               </div>
             )}
 

@@ -19,9 +19,6 @@ const IncludedRooms = ({ rooms }: { rooms: Room[] }) => {
   if (isPhone) {
     return (
       <>
-        <p className="mb-3 text-left text-sm leading-relaxed text-muted-foreground">
-          Every standard clean includes all of this — tap a room to see the checklist.
-        </p>
         <Accordion type="single" collapsible className="rounded-lg border border-border bg-card px-4">
           {rooms.map(({ room, tasks }) => (
             <AccordionItem key={room} value={room}>
@@ -31,7 +28,7 @@ const IncludedRooms = ({ rooms }: { rooms: Room[] }) => {
               <AccordionContent>
                 <ul className="space-y-2 pb-1">
                   {tasks.map((task) => (
-                    <li key={task} className="flex items-start gap-2 text-sm leading-relaxed text-foreground">
+                    <li key={task} className="flex items-start gap-2 text-base leading-relaxed text-foreground">
                       <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                       <span>{task}</span>
                     </li>
@@ -52,7 +49,7 @@ const IncludedRooms = ({ rooms }: { rooms: Room[] }) => {
           <h3 className="mb-3 font-heading text-lg font-semibold text-sage-foreground md:text-xl">{room}</h3>
           <ul className="space-y-2">
             {tasks.map((task) => (
-              <li key={task} className="flex items-start gap-2 text-sm leading-relaxed text-foreground md:text-base">
+              <li key={task} className="flex items-start gap-2 text-base leading-relaxed text-foreground">
                 <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                 <span>{task}</span>
               </li>

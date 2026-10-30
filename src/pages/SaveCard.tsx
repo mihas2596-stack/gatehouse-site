@@ -256,8 +256,7 @@ const SaveCard = () => {
               <p className="mt-2 text-base leading-relaxed">
                 After your cleaning, we&apos;ll email your photo report. We charge the agreed visit
                 price when you approve it, or 24 hours after we send it if you haven&apos;t reported
-                an issue. Reporting an issue within that window pauses the charge until it&apos;s
-                resolved. Your card details are stored securely by Stripe, our payment processor —
+                an issue. Reporting an issue within that window blocks the automatic charge for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it. Your card details are stored securely by Stripe, our payment processor —
                 Gatehouse never sees your full card number.
               </p>
               <p className="mt-2 text-base leading-relaxed">

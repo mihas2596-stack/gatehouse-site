@@ -9,8 +9,8 @@
   }
   html {
     scroll-padding-top: 80px;
-    /* keep focused fields clear of the sticky mobile "Call" bar */
-    scroll-padding-bottom: calc(56px + env(safe-area-inset-bottom));
+    /* keep focused fields clear of the floating mobile action */
+    scroll-padding-bottom: calc(80px + env(safe-area-inset-bottom));
   }
   input::placeholder,
   textarea::placeholder {
@@ -392,6 +392,9 @@ body[data-menu-open="true"] .mobile-quick-actions {
 
 /* Shared page framing stays independent of section-spacing utilities. */
 .page-shell { padding-top: 88px; }
+/* Marketing pages use a static header, so their page shell needs no
+   top offset for a fixed bar. Higher specificity than .page-shell. */
+header.site-static + main .page-shell { padding-top: 0; }
 .skip-link { position: fixed; top: -100px; left: 1rem; z-index: 200; background: white; padding: .75rem 1rem; color: hsl(var(--primary)); }
 .skip-link:focus { top: .5rem; }
 a:focus-visible, button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 4px; }

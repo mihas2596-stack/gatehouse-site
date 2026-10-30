@@ -94,18 +94,27 @@ const Header = () => {
           </Link>
           <a
             href="mailto:hello@gatehousehomecleaning.com"
-            className="text-sm font-semibold text-primary underline"
+            className="flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-primary underline"
           >
-            Need help? hello@gatehousehomecleaning.com
+            Need help?<span className="hidden sm:inline">&nbsp;hello@gatehousehomecleaning.com</span>
           </a>
         </div>
       </header>
     );
   }
 
+  // Marketing pages get an ordinary, non-sticky header: the content starts
+  // at the top and the header scrolls away. Funnel and account pages keep
+  // the fixed header (their .page-shell top padding compensates for it).
+  const marketingPage =
+    location.pathname === "/" ||
+    ["/services", "/whats-included", "/faq", "/areas", "/about", "/contact"].some(
+      (p) => location.pathname === p || location.pathname.startsWith(p + "/"),
+    );
+
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-[100] bg-background transition-shadow duration-300 ${
+      className={`${marketingPage ? "site-static" : "fixed top-0 left-0 right-0 z-[100]"} bg-background transition-shadow duration-300 ${
         scrolled ? "py-0 lg:py-1" : "py-0 lg:py-2"
       }`}
       style={{

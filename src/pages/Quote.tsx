@@ -610,9 +610,6 @@ const Quote = () => {
       <section className="pt-2 pb-12 md:pt-4 md:pb-16">
         <div className="container max-w-3xl">
           <div className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
-            <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
-            <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
-
             {testMode && (
               <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
                 Test booking: prices on this page are reduced for a payment test.
@@ -625,6 +622,8 @@ const Quote = () => {
             )}
 
             {step === 1 && (<>
+            <p className="text-sm font-bold uppercase tracking-widest text-primary mb-2">Step 1 of 3</p>
+            <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <label htmlFor="q-bed" className="block text-sm font-medium mb-1.5">Bedrooms</label>
@@ -959,7 +958,7 @@ const Quote = () => {
               <p className="text-sm text-foreground mb-6">
                 Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
               </p>
-              <div className="mb-6 rounded-lg border border-border bg-background p-5 text-sm">
+              <div className="mb-6 rounded-lg border border-border bg-background p-5 text-base">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-heading text-lg font-bold">Your request</h3>
                   <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
@@ -1191,12 +1190,12 @@ const Quote = () => {
               <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
                   <h3 className="font-heading text-lg font-bold mb-2">Payment</h3>
                   <p className="text-lg leading-relaxed"><span className="font-semibold">Nothing is charged today.</span> Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm">
+                  <ul className="mt-3 list-disc space-y-2 pl-5 text-base">
                     <li><strong>Why your card now?</strong> So paying later takes one tap — approve the photo report and you’re done. No prepayment, no second checkout.</li>
                     <li><strong>Safe with Stripe.</strong> Your card details go straight to Stripe, our payment processor. We never see or store your full card number.</li>
-                    <li><strong>You stay in control.</strong> Report an issue within 24 hours and the charge stays paused while we fix it with you.</li>
+                    <li><strong>You stay in control.</strong> Report an issue within 24 hours and the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.</li>
                   </ul>
-                  <p className="mt-3 text-sm text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
+                  <p className="mt-3 text-base text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
                 </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
