@@ -16,7 +16,7 @@ export const EXTRA_TIME_NOTE =
 
 export const TIERS: { key: TierKey; label: string; rooms: string }[] = [
   { key: "S", label: "Small home", rooms: "1–2 bedrooms, up to 2 full bathrooms" },
-  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms" },
+  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms, fewer than 4 of either" },
   { key: "L", label: "Large home", rooms: "4–5 bedrooms or 4+ full bathrooms" },
 ];
 
@@ -160,8 +160,10 @@ export const scaleTestPrice = (n: number): number =>
  * Extended by owner order 2026-10-26 by 24h: now ends 2026-10-27T10:33:00Z.
  * Extended again by owner order 2026-10-26 by 48h: now ends 2026-10-29T10:33:00Z.
  * Extended again by owner order 2026-10-28 by 72h: now ends 2026-11-01T10:33:00Z.
+ * Extended again by owner order 2026-10-31: now ends 2026-11-03T10:33:00Z
+ * (owner payment testing 2026-11-01–02; values unchanged, only the window).
  */
-export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-01T10:33:00Z");
+export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-03T10:33:00Z");
 export const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 

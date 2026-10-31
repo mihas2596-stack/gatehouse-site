@@ -61,7 +61,7 @@ const SMS_DISCLOSURE =
 const SMS_CONSENT_TEXT = `${SMS_CONSENT_MAIN} ${SMS_DISCLOSURE}`;
 const PHOTO_CONSENT_MAIN =
   "I consent to photos inside my home of the cleaned rooms for my private cleaning report.";
-const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission.";
+const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms not to photograph on your visit page before the visit.";
 const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
 const Quote = () => {
@@ -310,7 +310,7 @@ const Quote = () => {
     });
     if (requireConsents) {
       if (!booking.termsConsent) errs.termsConsent = "Please agree to the Terms of Service and Privacy Policy.";
-      if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
+      if (!booking.photoConsent) errs.photoConsent = "Please agree to photos for your private report.";
     }
     return errs;
   };
@@ -334,7 +334,7 @@ const Quote = () => {
     // Step-2 validation: visit fields + the choices that live on step 2
     // (entry method, photo consent). Terms stay on step 3.
     const errs = { ...validateBooking(false), ...entryErrors() };
-    if (!booking.photoConsent) errs.photoConsent = "Please agree to the approval photo report.";
+    if (!booking.photoConsent) errs.photoConsent = "Please agree to photos for your private report.";
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
@@ -929,23 +929,10 @@ const Quote = () => {
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
                 <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
               </div>
-              <div className="mt-6 flex items-start gap-3">
-                <input
-                  id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
-                  checked={booking.photoConsent} onChange={handleBookingChange}
-                  aria-required="true" aria-invalid={!!bookingErrors.photoConsent} aria-describedby={bookingErrors.photoConsent ? "b-photo-error" : undefined}
-                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-                />
-                <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
-                  {PHOTO_CONSENT_MAIN} *
-                  <span className="mt-1 block text-sm text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
-                </label>
-              </div>
-              {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
-              <div className="mt-6 rounded-lg border border-border bg-background p-4">
-                <h3 className="font-heading text-base font-bold">Planning your visit</h3>
+              <details className="mt-6 rounded-lg border border-border bg-background p-4">
+                <summary className="cursor-pointer font-heading text-base font-bold">Planning your visit (optional)</summary>
                 <div className="mt-3">
                   <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Approximate home size — if you know it</label>
                   <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>
@@ -975,7 +962,7 @@ const Quote = () => {
                     We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
                   </p>
                 )}
-              </div>
+              </details>
               </>)}
               {step === 3 && (<>
                 <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
@@ -1012,6 +999,7 @@ const Quote = () => {
               </>)}
 
               {step === 2 && (<>
+              <h3 className="font-heading text-base font-bold mb-2">Contact details</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div>
                   <label htmlFor="b-name" className="block text-sm font-medium mb-1.5">Your name *</label>
@@ -1144,7 +1132,9 @@ const Quote = () => {
                     />
                     <p className="mt-1 text-sm text-muted-foreground">Do not put entry codes, alarm codes or key locations here. Private entry details are added after your visit is confirmed.</p>
                   </div>
+                  <p className="mt-3 text-sm font-medium text-foreground">If we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6). You can add or change private entry details on your visit page after your visit is confirmed.</p>
                 </div>
+                <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Visit date and notes</h3>
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
@@ -1182,6 +1172,23 @@ const Quote = () => {
                   <p className="mt-1.5 text-sm text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. Private entry details are added after your visit is confirmed.</p>
                 </div>
               </div>
+              <h3 className="font-heading text-base font-bold mb-2">Photo report consent</h3>
+              <div className="flex items-start gap-3">
+                <input
+                  id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
+                  checked={booking.photoConsent} onChange={handleBookingChange}
+                  aria-required="true" aria-invalid={!!bookingErrors.photoConsent} aria-describedby={bookingErrors.photoConsent ? "b-photo-error" : undefined}
+                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                />
+                <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
+                  {PHOTO_CONSENT_MAIN} *
+                  <span className="mt-1 block text-sm text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
+                </label>
+              </div>
+              {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
+              <div className="mt-6 rounded-lg border border-border bg-background p-4 text-sm">
+                <p><strong>Your price:</strong> {priceSummaryText} · Due today: $0</p>
+              </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
@@ -1189,6 +1196,7 @@ const Quote = () => {
               </>)}
 
               {step === 3 && (<>
+              <p className="mt-3 text-sm text-muted-foreground">Access reminder: if we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6).</p>
               <div className="mt-5 flex items-start gap-3">
                 <input
                   id="b-terms" name="termsConsent" type="checkbox" required ref={refs.termsConsent}

@@ -23,7 +23,7 @@ const mainService: ServiceCard = {
   serviceKey: "recurring",
   desc: "Your home cleaned on the same weekday and arrival window, every other week. The house never builds up weeks of grime, so each visit takes less time.",
   includes: [
-    "Same day and arrival window every other week",
+    "Your regular day and arrival window, every other week",
     "All rooms dusted & vacuumed",
     "Bathrooms sanitized & polished",
     "Kitchen counters & appliances wiped",
@@ -226,7 +226,7 @@ const ServiceCardBlock = ({
           {s.includes.length > 3 && (
             <Accordion type="single" collapsible>
               <AccordionItem value="included" className="border-b-0">
-                <AccordionTrigger className="font-heading text-lg font-semibold hover:no-underline pt-0">
+                <AccordionTrigger className="font-heading text-lg font-semibold hover:no-underline pt-0 min-h-[44px]">
                   {s.includes.length - 3} more included
                 </AccordionTrigger>
                 <AccordionContent>

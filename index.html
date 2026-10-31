@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <!-- Termly Consent Banner: the ResourceBlocker MUST be the first script on the page -->
-    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on" onload="onTermlyLoaded()"></script>
+    <!-- onTermlyLoaded is defined BEFORE the loader script: the loader's
+         onload handler runs as soon as it arrives (e.g. from cache), so a
+         definition placed after it races and throws "onTermlyLoaded is not
+         defined". Defining first removes the race without touching consent. -->
     <script>
       function onTermlyLoaded() {
         function changed() { document.dispatchEvent(new Event("gh-consent")); }
@@ -10,6 +13,7 @@
         Termly.on("consent", changed);
       }
     </script>
+    <script type="text/javascript" src="https://app.termly.io/resource-blocker/585a60e2-97b7-486d-8853-f739d7d40454?autoBlock=on" onload="onTermlyLoaded()"></script>
     <!-- Google Tag Manager (deferred until idle/interaction to reduce TBT) -->
     <script>
       (function(){

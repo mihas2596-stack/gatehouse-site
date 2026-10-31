@@ -19,7 +19,7 @@ const Footer = () => {
               North Atlanta, GA
             </span>
             <p className="mt-4 text-[#3D2B1F] text-sm leading-relaxed">
-              Every-other-week house cleaning. Same day, same time. Price estimate online.
+              Every-other-week house cleaning on your regular day and arrival window. Your price is based on the details you enter.
             </p>
           </div>
 

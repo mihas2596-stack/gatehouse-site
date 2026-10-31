@@ -5,7 +5,7 @@ import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import IncludedRooms from "@/components/IncludedRooms";
 import ReportShowcase from "@/components/ReportShowcase";
-import heroImage from "@/assets/expect-living-fireplace.webp";
+import heroImage from "@/assets/hero-real-bedroom.webp";
 import coversImage from "@/assets/expect-kitchen-white.webp";
 import { PRICES, TIERS , fmtPrice, globalTestCutActive, scaleTestPrice} from "@/config/calculator";
 
@@ -43,7 +43,7 @@ const howItWorks = [
 const included = [
   { room: "Kitchen", tasks: ["Counters and backsplash wiped", "Sink and fixtures cleaned", "Appliance exteriors wiped", "Floors vacuumed and mopped"] },
   { room: "Bathrooms", tasks: ["Toilets, tubs and showers cleaned", "Counters and sinks sanitized", "Mirrors polished", "Floors vacuumed and mopped"] },
-  { room: "Bedrooms", tasks: ["Furniture and surfaces dusted", "Beds neatly made", "Floors vacuumed", "Trash removed"] },
+  { room: "Bedrooms", tasks: ["Furniture and surfaces dusted", "Beds neatly made", "Floors vacuumed or mopped", "Trash removed"] },
   { room: "Living areas", tasks: ["Furniture and surfaces dusted", "Floors vacuumed and mopped", "Mirrors cleaned", "Trash removed"] },
 ];
 
@@ -55,7 +55,7 @@ const homeFaqs = [
   },
   {
     q: "How do I pay?",
-    a: "Nothing is charged today. After the visit you get a photo report: approve it to pay, or your card is charged automatically 24 hours after we send it if you haven't reported an issue. Reporting an issue blocks the automatic charge for that visit.",
+    a: "Nothing is charged today. After the visit you get a photo report: approve it to pay, or your card is charged automatically 24 hours after we send it if you haven't reported an issue. Reporting an issue blocks the automatic charge for that visit. It never resumes on its own — you approve again to pay.",
   },
   {
     q: "Do I need to be home?",
@@ -112,6 +112,9 @@ const Index = () => (
             <p className="mt-4 text-base font-medium leading-relaxed text-foreground md:text-lg">
               House cleaning in North Atlanta. One-time and deep cleaning also available.
             </p>
+            <p className="mt-3 text-sm leading-relaxed text-foreground">
+              $0 today — your card is saved, not charged. After the visit you get a photo report: approve it to pay, or it&apos;s charged automatically 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
+            </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
@@ -119,10 +122,11 @@ const Index = () => (
           <figure>
             <img
               src={heroImage}
-              alt="Living room in a freshly cleaned home (stock photo)"
+              alt="Freshly cleaned bedroom — real photo from a Gatehouse clean"
               loading="eager"
               className="h-52 w-full rounded-xl object-cover shadow-warm sm:h-64 md:h-[380px] lg:h-[440px]"
             />
+            <figcaption className="mt-2 text-xs text-muted-foreground">Real photo from a Gatehouse clean.</figcaption>
           </figure>
         </div>
       </div>
@@ -133,7 +137,7 @@ const Index = () => (
       <div className="container">
         <h2 className="mb-3 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">What a standard clean covers</h2>
         <p className="mx-auto mb-7 max-w-2xl text-center text-base leading-relaxed text-foreground">
-          Every visit covers these rooms, top to bottom. Tap a room to see its checklist.
+          Every visit covers these rooms, top to bottom. <span className="sm:hidden">Tap a room to see its checklist.</span>
         </p>
         <div className="mx-auto grid max-w-6xl grid-cols-1 items-start gap-8 lg:grid-cols-[1fr_320px]">
           <div>

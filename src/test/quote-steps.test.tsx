@@ -3,7 +3,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-02T00:00:00Z"));
+// Pinned past the global test-price window (until 2026-11-03T10:33Z,
+// extended 2026-10-31) so regular-price assertions stay deterministic.
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);
@@ -114,7 +116,7 @@ describe("quote steps", () => {
 
   it("planning lives on step 2, not step 1, and step changes land focus on the new heading", () => {
     openQuote();
-    expect(screen.queryByText("Planning your visit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Planning your visit (optional)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
     expect(screen.getByText(/Fixed when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
@@ -125,13 +127,13 @@ describe("quote steps", () => {
     // the testable half of the scroll fix (the effect scrolls the
     // heading into view, then focuses it).
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your visit" }));
-    expect(screen.getByText("Planning your visit")).toBeInTheDocument();
+    expect(screen.getByText("Planning your visit (optional)")).toBeInTheDocument();
     expect(screen.getByLabelText("Approximate home size — if you know it")).toBeInTheDocument();
     expect(screen.getByText("Any extra areas to clean?")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
     expect(screen.getByRole("heading", { name: "Your home & price" })).toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your home & price" }));
-    expect(screen.queryByText("Planning your visit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Planning your visit (optional)")).not.toBeInTheDocument();
   });
 
   it("step 3 payment block answers why the card, without the wall of text", () => {

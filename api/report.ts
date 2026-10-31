@@ -1032,7 +1032,7 @@ export default async function handler(req: Req, res: Res) {
         reply_to: "hello@gatehousehomecleaning.com",
         subject: `Issue reported — booking ${payload.bid}`,
         text:
-          `A client reported an issue from the photo report.${paymentInFlight ? " A payment was already in progress when the issue arrived, so it may still complete — the issue stays open either way; review it for a re-clean or a refund." : " The charge is PAUSED."}\n\n` +
+          `A client reported an issue from the photo report.${paymentInFlight ? " A payment was already in progress when the issue arrived, so it may still complete — the issue stays open either way; review it for a re-clean or a refund." : " The charge is PAUSED and will not resume on its own — the client approves again to pay after the fix."}\n\n` +
           `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
           `Room: ${room || "(not specified)"}\nWhat they said: ${reason || "(no description)"}\n` +
           (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`),
@@ -1050,7 +1050,7 @@ export default async function handler(req: Req, res: Res) {
             ? "We received your report — a payment was already in progress"
             : "We received your report — the charge is paused",
           text:
-            `Hi ${firstName},\n\nIssue received.${paymentInFlight ? " A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right." : " The charge is paused — nothing will be charged while we look into it."}\n` +
+            `Hi ${firstName},\n\nIssue received.${paymentInFlight ? " A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right." : " The charge is paused — nothing will be charged while we look into it, and it will not resume on its own. Once we've fixed it, you approve the report again to pay."}\n` +
             `We'll reply within one business day.\n\n` +
             (room ? `Room: ${room}\n` : "") +
             (reason ? `What you told us: ${reason}\n\n` : "\n") +

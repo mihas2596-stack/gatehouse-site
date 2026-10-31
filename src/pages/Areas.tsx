@@ -91,7 +91,7 @@ const Areas = () => {
                       to={`/areas/${n.name.toLowerCase().replace(/\s+/g, "-")}`}
                       className="inline-flex min-h-[44px] items-center rounded-full bg-card px-4 text-sm font-semibold text-primary underline"
                     >
-                      City page
+                      House cleaning in {n.name}
                     </Link>
                     <a
                       className="inline-flex min-h-[44px] items-center rounded-full bg-card px-4 text-sm font-semibold text-primary underline"
@@ -107,7 +107,7 @@ const Areas = () => {
               ))}
             </ul>
             <p className="mt-5 text-sm text-muted-foreground">
-              Every city gets the same every-other-week cleaning on a fixed day and time, at the published price.
+              Every city gets the same every-other-week cleaning on your regular day and arrival window, at the published price.
             </p>
           </div>
         </div>

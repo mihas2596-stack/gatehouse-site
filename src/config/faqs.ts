@@ -6,13 +6,13 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How much does it cost?",
     group: "Booking",
-    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. Square footage and half bathrooms help us plan your visit; they do not change the calculator price. Most homes can see an estimate online. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
+    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Extra time is billed at $45 per hour only with your approval. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
     link: { href: "/#pricing", label: "See the pricing table" },
   },
   {
     q: "How do I pay?",
     group: "Payment",
-    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If we learn the report email could not be delivered, the automatic charge does not run until the report reaches you another way.",
+    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If you report an issue, the automatic charge is blocked for that visit and never resumes on its own — you approve the report again to pay. If we learn the report email could not be delivered, the automatic charge does not run until the report reaches you another way.",
   },
   {
     q: "Is my card safe with you?",
@@ -42,7 +42,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if I'm not happy with the cleaning?",
     group: "Quality",
-    a: "Missed something on the checklist? We fix it free within 72 hours. Tap Report an issue on your photo report page — or email a photo of the missed item to hello@gatehousehomecleaning.com — within 24 hours after your photo report is sent. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
+    a: "Missed something on the checklist? We fix it free within 72 hours after you report it. Tap Report an issue on your photo report page — or email a photo of the missed item to hello@gatehousehomecleaning.com — within 24 hours after your photo report is sent. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
   },
   {
     q: "Who will be cleaning my home?",
@@ -67,6 +67,6 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if something gets damaged?",
     group: "Quality",
-    a: "Tell us within 48 hours with a photo. We'll review it with you directly.",
+    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly.",
   },
 ];

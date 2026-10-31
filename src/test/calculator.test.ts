@@ -17,6 +17,21 @@ describe("tierFor", () => {
     expect(tierFor(3, 6)).toBeNull();
     expect(tierFor(5, 5)).toBe("L");
   });
+  it("treats 4 bedrooms OR 4 full bathrooms as L, never M", () => {
+    expect(tierFor(4, 3)).toBe("L");
+    expect(tierFor(3, 4)).toBe("L");
+    expect(tierFor(4, 4)).toBe("L");
+  });
+  it("treats exactly 3 of either dimension as M", () => {
+    expect(tierFor(3, 3)).toBe("M");
+    expect(tierFor(2, 3)).toBe("M");
+    expect(tierFor(3, 2)).toBe("M");
+  });
+  it("treats fewer than 3 of both dimensions as S", () => {
+    expect(tierFor(2, 2)).toBe("S");
+    expect(tierFor(1, 2)).toBe("S");
+    expect(tierFor(2, 1)).toBe("S");
+  });
 });
 
 describe("addonsTotal", () => {
@@ -118,12 +133,12 @@ describe("fmtPrice never scales; scaling is explicit", () => {
   });
 });
 
-describe("global test-price window (owner order 2026-10-24, 48h, extended 2026-10-26 by 24h, then by 48h, then 2026-10-28 by 72h)", () => {
+describe("global test-price window (owner order 2026-10-24, 48h, extended 2026-10-26 by 24h, then by 48h, then 2026-10-28 by 72h, then 2026-10-31 by 48h)", () => {
   it("is active before the cutoff and inactive at and after it", () => {
-    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-11-01T10:33:00Z"));
+    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-11-03T10:33:00Z"));
     expect(globalTestCutActive(Date.parse("2026-10-24T13:33:00Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-11-01T10:32:59Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-11-01T10:33:00Z"))).toBe(false);
-    expect(globalTestCutActive(Date.parse("2026-11-02T00:00:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-11-03T10:32:59Z"))).toBe(true);
+    expect(globalTestCutActive(Date.parse("2026-11-03T10:33:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-11-04T00:00:00Z"))).toBe(false);
   });
 });

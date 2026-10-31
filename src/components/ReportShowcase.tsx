@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, ThumbsUp, Flag, Camera, RotateCcw, ChevronDown } from "lucide-react";
+import { CheckCircle2, ThumbsUp, Flag, RotateCcw, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type DemoState = "idle" | "approved" | "issue";
@@ -22,12 +22,7 @@ const reportRooms = [
 function RoomCard({ name, checks }: { name: string; checks: string[] }) {
   return (
     <div className="rounded-lg border border-border/70 bg-background p-3">
-      <div className="flex items-center gap-3">
-        <span className="flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md bg-peach/50 text-muted-foreground">
-          <Camera className="h-4 w-4" aria-hidden="true" />
-          <span className="text-xs font-medium uppercase tracking-wide">Photo</span>
-        </span>
-        <div className="min-w-0">
+      <div className="min-w-0">
           <p className="text-base font-semibold text-sage-foreground">{name}</p>
           <ul className="mt-1 space-y-0.5">
             {checks.map((check) => (
@@ -37,7 +32,6 @@ function RoomCard({ name, checks }: { name: string; checks: string[] }) {
               </li>
             ))}
           </ul>
-        </div>
       </div>
     </div>
   );
@@ -60,7 +54,7 @@ const ReportShowcase = () => {
             See a sample report
           </h2>
           <p className="mt-3 text-center text-base leading-relaxed text-foreground">
-            This is what lands in your inbox after every visit — photos and the checklist, room by room.
+            This is what lands in your inbox after every visit — the room-by-room checklist, plus photos of the cleaned rooms.
           </p>
 
           <div className="mt-6 rounded-xl border border-border bg-card p-4">
@@ -77,6 +71,7 @@ const ReportShowcase = () => {
                 <RoomCard key={room.name} name={room.name} checks={room.checks} />
               ))}
             </div>
+            <p className="mt-3 text-sm text-muted-foreground">In a real report, every item is marked ✓ Done or ○ Not done, with a note for anything not done.</p>
 
             {!expanded ? (
               <Button
@@ -137,7 +132,7 @@ const ReportShowcase = () => {
                       Demo only — no payment was taken.
                     </p>
                     <p className="mt-0.5 text-sm leading-snug text-muted-foreground">
-                      In a real report, flagging an issue blocks the automatic charge for that visit. Missed checklist items are re-cleaned free within 72 hours.
+                      In a real report, flagging an issue blocks the automatic charge for that visit. Missed checklist items are re-cleaned free within 72 hours after you report them. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
                     </p>
                     <button
                       type="button"
