@@ -16,14 +16,13 @@ No secrets, no real personal data, no private tokens in this file.
 
 ## Verified version (this handover)
 
-- Last verified commit on `main` before this handover: `0b3ce6fc`
-  (mobile homepage, 03.11.2026).
-- Local work prepared after it and NOT yet deployed at the time of writing:
-  round-2 mobile client/cleaner path fixes (H/Q/A/C/K) + this audit's owner
-  fixes (Open-issue-from-email, bounced-report queue state, proposed-date
-  confirm default, owner search, funnel events). The deploy commit for that
-  batch must be added here when it lands — do not ship code, production and
-  this note as three different versions.
+- Deployed and live-verified commit on `main`: `e72ae94c` (03.11.2026) —
+  round-2 mobile client/cleaner path fixes (H/Q/A/C/K) + owner ops audit
+  (Open-issue-from-email, bounced-report queue state, proposed-date
+  confirm default, owner search, funnel events) + this handover note.
+  Live check after deploy: API probe healthy (invalid_link / 401s, no
+  module failures) and the live homepage + /quote render the new copy.
+- Previous verified commit: `0b3ce6fc` (mobile homepage, 03.11.2026).
 
 ## Install, run, build, test
 
@@ -241,9 +240,8 @@ No secrets, no real personal data, no private tokens in this file.
 
 ## Uncommitted changes and unfinished tasks (at handover time)
 
-- See "Verified version" above: the round-2 + audit batch is prepared
-  locally and must be pushed as one explicit path list, then verified per
-  "Deploy and rollback", then this file's commit line updated.
+- See "Verified version" above: the round-2 + audit batch is deployed as
+  `e72ae94c` and live-verified per "Deploy and rollback".
 - Standing owner decisions still waiting (not to be assumed): Terms
   package, test-prices "test complete", Chenika inactive marking + the
   17.10 Instagram carousel fate, live dispute-email test, staging test keys.
