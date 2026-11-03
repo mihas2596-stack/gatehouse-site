@@ -81,7 +81,7 @@ const ReportShowcase = () => {
                 onClick={() => setExpanded(true)}
                 aria-expanded="false"
               >
-                View sample report <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                Show all rooms <ChevronDown className="h-4 w-4" aria-hidden="true" />
               </Button>
             ) : (
               <>

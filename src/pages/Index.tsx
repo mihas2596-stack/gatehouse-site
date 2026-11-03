@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 import { Helmet } from "react-helmet-async";
 import { Link } from "react-router-dom";
@@ -24,19 +25,19 @@ const biweeklyRows = TIERS.map(({ key, rooms }) => ({
 
 const howItWorks = [
   {
-    n: "1",
+    n: "01",
     title: "See your price",
-    text: "Answer a few questions about your home. Your price appears instantly — no phone call needed.",
+    text: "Tell us about your home to see your price online.",
   },
   {
-    n: "2",
-    title: "We confirm and clean",
-    text: "We confirm your date, arrival window and cleaner by email. A request is not a confirmed visit until we confirm it.",
+    n: "02",
+    title: "Request your visit",
+    text: "We’ll email you to confirm your date, arrival window, and cleaner.",
   },
   {
-    n: "3",
-    title: "Review your report",
-    text: "After the visit, you get photos and the checklist, room by room.",
+    n: "03",
+    title: "Review your clean",
+    text: "Get your photos and checklist. Approve to pay, or report an issue.",
   },
 ];
 
@@ -69,7 +70,14 @@ const homeFaqs = [
 
 const sectionClass = "border-b border-border/60 py-8 md:py-10";
 
-const Index = () => (
+const Index = () => {
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const sampleToggleRef = useRef<HTMLButtonElement>(null);
+  const closeSample = () => {
+    setSampleOpen(false);
+    sampleToggleRef.current?.focus();
+  };
+  return (
   <div className="bg-background">
     {/* While the owner-ordered global test window is active, the
         homepage prices below are scaled — say so, like /quote does.
@@ -112,12 +120,10 @@ const Index = () => (
             <p className="mt-4 text-base font-medium leading-relaxed text-foreground md:text-lg">
               House cleaning in North Atlanta. One-time and deep cleaning also available.
             </p>
-            <p className="mt-3 text-sm leading-relaxed text-foreground">
-              $0 today — your card is saved, not charged. After the visit you get a photo report: approve it to pay, or it&apos;s charged automatically 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
-            </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
+            <p className="mt-2 text-sm text-muted-foreground">No card needed to see your price.</p>
           </div>
           <figure>
             <img
@@ -132,47 +138,16 @@ const Index = () => (
       </div>
     </section>
 
-    {/* 2. WHAT A STANDARD CLEAN COVERS */}
-    <section className={`${sectionClass} bg-background`}>
-      <div className="container">
-        <h2 className="mb-3 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">What a standard clean covers</h2>
-        <p className="mx-auto mb-7 max-w-2xl text-center text-base leading-relaxed text-foreground">
-          Every visit covers these rooms, top to bottom. <span className="sm:hidden">Tap a room to see its checklist.</span>
-        </p>
-        <div className="mx-auto grid max-w-6xl grid-cols-1 items-start gap-8 lg:grid-cols-[1fr_320px]">
-          <div>
-            {/* Columns on tablet+, accordion on phones — rendered once */}
-            <IncludedRooms rooms={included} />
-            <p className="mt-6 text-left text-base leading-relaxed text-foreground">
-              Optional extras — inside the oven or fridge, inside cabinets, interior windows, extra pet-hair work — are priced on the What&apos;s Included page.
-            </p>
-            <Button asChild variant="outline" size="lg" className="mt-5 rounded-full">
-              <Link to="/whats-included">See the full checklist</Link>
-            </Button>
-          </div>
-          <figure className="hidden lg:block">
-            <img
-              src={coversImage}
-              alt="Illustrative photo of a kitchen"
-              loading="lazy"
-              className="h-full max-h-[420px] w-full rounded-xl object-cover shadow-warm"
-            />
-            <figcaption className="mt-2 text-xs text-muted-foreground">Illustrative photo.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
-
-    {/* 3. HOW IT WORKS — three steps, one payment block. */}
-    <section className={`${sectionClass} bg-background`}>
+    {/* 2. HOW IT WORKS — three numbered steps, sample on demand, pay memo. */}
+    <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
       <div className="container">
         <div className="mx-auto max-w-2xl">
-          <h2 className="mb-7 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">How it works</h2>
-          <ol className="space-y-6">
+          <h2 className="mb-6 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">How it works</h2>
+          <ol className="space-y-5">
             {howItWorks.map(({ n, title, text }) => (
               <li key={n} className="flex items-start gap-4">
                 <span
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary font-heading text-lg font-bold text-primary-foreground"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary font-heading text-base font-bold text-primary-foreground"
                   aria-hidden="true"
                 >
                   {n}
@@ -184,29 +159,96 @@ const Index = () => (
               </li>
             ))}
           </ol>
-          <div className="mt-8 rounded-xl border-2 border-primary/40 bg-primary/5 p-5">
-            <h3 className="font-heading text-lg font-bold text-sage-foreground">How payment works</h3>
-            <p className="mt-2 text-base leading-relaxed text-foreground">
-              <strong>Nothing is charged today.</strong> Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.
-            </p>
-            <p className="mt-2 text-base leading-relaxed text-foreground">
-              Report an issue and the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.
-            </p>
-            <p className="mt-2 text-base leading-relaxed text-foreground">
-              Your card is processed by Stripe. We never see or store your full card number.
-            </p>
-            <p className="mt-3 border-t border-primary/20 pt-3 text-base leading-relaxed text-foreground">
-              Something missed? We fix it free within 72 hours — email a photo to{" "}
-              <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline break-all">hello@gatehousehomecleaning.com</a>{" "}
-              within 24 hours after your photo report is sent.
-            </p>
+          <div className="mt-6">
+            <Button
+              ref={sampleToggleRef}
+              variant="outline"
+              size="sm"
+              className="min-h-[44px] rounded-full"
+              aria-expanded={sampleOpen}
+              aria-controls="home-sample-report"
+              onClick={() => setSampleOpen((v) => !v)}
+            >
+              {sampleOpen ? "Hide sample report" : "View sample report"}
+            </Button>
+          </div>
+          {sampleOpen && (
+            <div id="home-sample-report" className="mt-6">
+              <ReportShowcase />
+              <div className="mt-4 text-center">
+                <Button variant="outline" size="sm" className="min-h-[44px] rounded-full" onClick={closeSample}>
+                  Close sample report
+                </Button>
+              </div>
+            </div>
+          )}
+          {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
+          <div className="mt-8 border-t border-border pt-6">
+            <h3 className="font-heading text-lg font-bold text-sage-foreground">When you pay</h3>
+            <dl className="mt-3 space-y-4">
+              <div>
+                <dt className="font-semibold text-sage-foreground">At booking</dt>
+                <dd className="mt-0.5 text-base leading-relaxed text-foreground">Save your card. You pay $0.</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-sage-foreground">After your clean</dt>
+                <dd className="mt-0.5 text-base leading-relaxed text-foreground">Review your photo report. Approve it to pay.</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-sage-foreground">After 24 hours</dt>
+                <dd className="mt-0.5 text-base leading-relaxed text-foreground">If you haven’t approved or reported an issue, we charge your card automatically 24 hours after we send the report.</dd>
+              </div>
+            </dl>
+            <details className="mt-5 rounded-lg border border-border bg-card px-4 py-3">
+              <summary className="cursor-pointer text-base font-semibold text-sage-foreground">What if something was missed?</summary>
+              <p className="mt-2 text-base leading-relaxed text-foreground">
+                Email a photo to{" "}
+                <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline break-all">hello@gatehousehomecleaning.com</a>{" "}
+                within 24 hours after your photo report is sent. Reporting an issue within that window blocks the automatic charge for this visit. We fix it free within 72 hours after you report it. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
+              </p>
+            </details>
           </div>
         </div>
       </div>
     </section>
 
-    {/* 4. SAMPLE REPORT */}
-    <ReportShowcase />
+    {/* 4. WHAT'S INCLUDED — price guide, then a compact pointer on phones. */}
+    <section className={`${sectionClass} bg-background`}>
+      <div className="container">
+        <p className="mx-auto max-w-2xl text-center text-base leading-relaxed text-foreground">
+          Every-other-week visits from {fmtPrice(disp(PRICES.recurring.S))} per visit. Your exact price depends on your home.
+        </p>
+        <h2 className="mb-3 mt-6 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">What&apos;s included in each visit</h2>
+        <div className="mx-auto max-w-2xl text-center sm:hidden">
+          <p className="text-base leading-relaxed text-foreground">We clean your kitchen, bathrooms, bedrooms, and living areas.</p>
+          <Link to="/whats-included" className="mt-3 inline-flex min-h-[44px] items-center font-semibold text-primary underline">
+            View the room-by-room checklist →
+          </Link>
+        </div>
+        <div className="hidden sm:block">
+          <div className="mx-auto grid max-w-6xl grid-cols-1 items-start gap-8 lg:grid-cols-[1fr_320px]">
+            <div>
+              <IncludedRooms rooms={included} />
+              <p className="mt-6 text-left text-base leading-relaxed text-foreground">
+                Optional extras — inside the oven or fridge, inside cabinets, interior windows, extra pet-hair work — are priced on the What&apos;s Included page.
+              </p>
+              <Button asChild variant="outline" size="lg" className="mt-5 rounded-full">
+                <Link to="/whats-included">See the full checklist</Link>
+              </Button>
+            </div>
+            <figure className="hidden lg:block">
+              <img
+                src={coversImage}
+                alt="Illustrative photo of a kitchen"
+                loading="lazy"
+                className="h-full max-h-[420px] w-full rounded-xl object-cover shadow-warm"
+              />
+              <figcaption className="mt-2 text-xs text-muted-foreground">Illustrative photo.</figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
 
     {/* 5. HOW OUR PRICING WORKS */}
     <section id="pricing" className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
@@ -289,6 +331,7 @@ const Index = () => (
       </div>
     </section>
   </div>
-);
+  );
+};
 
 export default Index;
