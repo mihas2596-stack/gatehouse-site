@@ -1569,6 +1569,18 @@ export default async function handler(req: Req, res: Res) {
         logErr("dispute", "blocked: already paid, needs refund flow");
         return json(409, { ok: false, error: "already_paid" });
       }
+      // Audit fix (§4): an email issue used to have no path into the
+      // system at all — the panel had no button for it, so the timer
+      // kept running while the complaint sat in the inbox. The panel
+      // now opens issues through this action, so it must be safe to
+      // press twice: an already-open issue returns success without a
+      // second journal event or a second client email.
+      const alreadyOpen = row
+        ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
+        : state === "issue_open";
+      if (alreadyOpen) {
+        return json(200, { ok: true, state: "issue_open", already_open: true, email_sent: false });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "issue_open",
         "metadata[gh_issue_open]": "1",
@@ -1579,8 +1591,32 @@ export default async function handler(req: Req, res: Res) {
         await logEvent(row.id, bookingId, "owner", "issue_opened", { reason: (parsed.data.reason ?? "").slice(0, 200) });
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
       }
-      log("dispute", { booking: bookingId });
-      return json(200, { ok: true, state: "issue_open" });
+      // The client must learn the email complaint was accepted: the
+      // confirmation mirrors the /report issue flow, including the
+      // payment-in-flight caveat (a charge already moving may still
+      // complete; the issue then becomes a re-clean-or-refund case).
+      const paymentInFlight = state === "payment_pending";
+      const emailSent = await sendShortClientEmail({
+        secretKey: STRIPE_SECRET_KEY,
+        customer,
+        bookingId,
+        subject: paymentInFlight
+          ? "We received your report — a payment was already in progress"
+          : "We received your report — the charge is paused",
+        heading: "Issue received",
+        lines: paymentInFlight
+          ? [
+              "A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right.",
+              "We'll reply within one business day.",
+            ]
+          : [
+              "The charge is paused — nothing will be charged while we look into it, and it will not resume on its own. Once we've fixed it, you approve the report again to pay.",
+              "We'll reply within one business day.",
+            ],
+        buttonLabel: "View my visit",
+      });
+      log("dispute", { booking: bookingId, emailSent });
+      return json(200, { ok: true, state: "issue_open", email_sent: emailSent });
     }
 
     if (action === "resolve") {

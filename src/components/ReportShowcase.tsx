@@ -1,34 +1,69 @@
 import { useState } from "react";
-import { CheckCircle2, ThumbsUp, Flag, RotateCcw, ChevronDown } from "lucide-react";
+import { CheckCircle2, Circle, ThumbsUp, Flag, RotateCcw, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import bedroomPhoto from "@/assets/hero-real-bedroom.webp";
 
 type DemoState = "idle" | "approved" | "issue";
 
-const reportRooms = [
+type DemoCheck = { label: string; done: boolean; note?: string };
+
+// One room carries a real Gatehouse photo to show the room → photo →
+// status → note shape of a real report; the other rooms honestly say
+// where their photos appear in a real report. Nothing here is a real
+// visit: the whole block is marked Sample/Demo throughout.
+const reportRooms: { name: string; photo?: { src: string; alt: string; caption: string }; checks: DemoCheck[] }[] = [
+  {
+    name: "Bedroom",
+    photo: { src: bedroomPhoto, alt: "Freshly cleaned bedroom — real photo from a Gatehouse clean", caption: "Real photo from a Gatehouse clean (sample)." },
+    checks: [
+      { label: "Surfaces dusted", done: true },
+      { label: "Bed neatly made", done: true },
+      { label: "Trash removed", done: false, note: "Sample note: left as shown in this example." },
+    ],
+  },
   {
     name: "Kitchen",
-    checks: ["Counters and backsplash wiped", "Sink and fixtures cleaned", "Floors vacuumed and mopped"],
+    checks: [
+      { label: "Counters and backsplash wiped", done: true },
+      { label: "Sink and fixtures cleaned", done: true },
+      { label: "Floors vacuumed and mopped", done: true },
+    ],
   },
   {
     name: "Bathroom",
-    checks: ["Toilet and shower cleaned", "Mirror polished", "Floors vacuumed and mopped"],
-  },
-  {
-    name: "Bedroom",
-    checks: ["Surfaces dusted", "Bed neatly made", "Trash removed"],
+    checks: [
+      { label: "Toilet and shower cleaned", done: true },
+      { label: "Mirror polished", done: true },
+      { label: "Floors vacuumed and mopped", done: true },
+    ],
   },
 ];
 
-function RoomCard({ name, checks }: { name: string; checks: string[] }) {
+function RoomCard({ name, photo, checks }: { name: string; photo?: { src: string; alt: string; caption: string }; checks: DemoCheck[] }) {
   return (
     <div className="rounded-lg border border-border/70 bg-background p-3">
       <div className="min-w-0">
           <p className="text-base font-semibold text-sage-foreground">{name}</p>
-          <ul className="mt-1 space-y-0.5">
+          {photo ? (
+            <figure className="mt-2">
+              <img src={photo.src} alt={photo.alt} loading="lazy" className="h-40 w-full rounded-lg object-cover" />
+              <figcaption className="mt-1 text-xs text-muted-foreground">{photo.caption}</figcaption>
+            </figure>
+          ) : (
+            <p className="mt-1 text-sm text-muted-foreground">In a real report, this room&apos;s photos appear here.</p>
+          )}
+          <ul className="mt-2 space-y-1">
             {checks.map((check) => (
-              <li key={check} className="flex items-start gap-1.5 text-sm leading-snug text-foreground">
-                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
-                <span>{check}</span>
+              <li key={check.label} className="text-sm leading-snug text-foreground">
+                <span className="flex items-start gap-1.5">
+                  {check.done ? (
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  ) : (
+                    <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span>{check.label} — <strong>{check.done ? "Done" : "Not done"}</strong></span>
+                </span>
+                {check.note && <span className="mt-0.5 block pl-5 text-sm text-muted-foreground">{check.note}</span>}
               </li>
             ))}
           </ul>
@@ -54,7 +89,7 @@ const ReportShowcase = () => {
             See a sample report
           </h2>
           <p className="mt-3 text-center text-base leading-relaxed text-foreground">
-            This is what lands in your inbox after every visit — the room-by-room checklist, plus photos of the cleaned rooms.
+            This is the shape of the report you get after every visit — rooms, photos, and a checklist marked Done or Not done, with a note for anything not done.
           </p>
 
           <div className="mt-6 rounded-xl border border-border bg-card p-4">
@@ -66,9 +101,9 @@ const ReportShowcase = () => {
             </div>
 
             <div className="space-y-2">
-              <RoomCard name={reportRooms[0].name} checks={reportRooms[0].checks} />
+              <RoomCard name={reportRooms[0].name} photo={reportRooms[0].photo} checks={reportRooms[0].checks} />
               {expanded && reportRooms.slice(1).map((room) => (
-                <RoomCard key={room.name} name={room.name} checks={room.checks} />
+                <RoomCard key={room.name} name={room.name} photo={room.photo} checks={room.checks} />
               ))}
             </div>
             <p className="mt-3 text-sm text-muted-foreground">In a real report, every item is marked ✓ Done or ○ Not done, with a note for anything not done.</p>

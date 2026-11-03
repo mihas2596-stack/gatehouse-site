@@ -439,6 +439,9 @@ const bookingErrors = (d: z.infer<typeof ContactSchema>): Record<string, string>
   if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
   if (digits.length !== 10) errors.phone = "Enter a 10-digit US phone number.";
   if (!SERVICE_ZIPS.has((d.zip || "").trim())) errors.zip = "Enter a ZIP in our North Atlanta service area.";
+  // We serve Georgia only: a non-GA state next to a GA ZIP is inconsistent data.
+  if (d.state && d.state.trim() && d.state.trim().toUpperCase() !== "GA")
+    errors.state = "We currently serve Georgia only — please enter GA.";
   if (!d.address || d.address.trim().length < 5) errors.address = "Enter your street address.";
   if (!d.date || !validServiceDate(d.date) || d.date < earliestServiceDate()) errors.date = "Choose a valid preferred date at least 3 days ahead.";
   if (d.terms_consent !== true) errors.terms_consent = "Please agree to the Terms of Service and Privacy Policy.";

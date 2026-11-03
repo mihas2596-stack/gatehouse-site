@@ -51,7 +51,7 @@ export function entrySummaryLabel(
   detail: EntryDetailChoice | null | undefined,
 ): string {
   if (!method) return "To be arranged";
-  if (method === "decide_later") return "To be arranged";
+  if (method === "decide_later") return "We’ll help you arrange it";
   if (method === "arrange_before" && detail) return `${ENTRY_METHOD_LABEL[method]} (${ENTRY_DETAIL_LABEL[detail]})`;
   return ENTRY_METHOD_LABEL[method];
 }

@@ -17,4 +17,13 @@ describe('consent-aware measurement', () => {
     trackFunnel('gh_lead_submit', { form_type: 'quote', service_type: 'deep', frequency: 'onetime' });
     expect(target.dataLayer).toEqual([{ event: 'gh_lead_submit', form_type: 'quote', service_type: 'deep', frequency: 'onetime' }]);
   });
+  it('queues the review and card-saved stages without personal data', () => {
+    target.Termly = { getConsentState: () => ({ analytics: true }) };
+    trackFunnel('gh_quote_review', { form_type: 'quote' });
+    trackFunnel('gh_card_saved', { form_type: 'quote' });
+    expect(target.dataLayer).toEqual([
+      { event: 'gh_quote_review', form_type: 'quote' },
+      { event: 'gh_card_saved', form_type: 'quote' },
+    ]);
+  });
 });

@@ -11,15 +11,18 @@ export const isMarketingRoute = (pathname: string): boolean =>
 
 /**
  * One compact floating action. It shows only while no in-content main
- * action ([data-main-cta]) is on screen, hides while the menu is open and
- * while a form field is focused (onscreen keyboard), and never renders on
- * funnel/account pages. Help stays available through the menu and footer.
+ * action ([data-main-cta]) is on screen, hides while the menu is open,
+ * while a form field is focused (onscreen keyboard), and while the home
+ * sample report is open (its checklist would scroll underneath the pill),
+ * and never renders on funnel/account pages. Help stays available through
+ * the menu and footer.
  */
 const MobileStickyCTA = () => {
   const { pathname } = useLocation();
   const [ctaVisible, setCtaVisible] = useState(false);
   const [fieldFocused, setFieldFocused] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sampleOpen, setSampleOpen] = useState(false);
 
   useEffect(() => {
     if (!isMarketingRoute(pathname)) return;
@@ -44,10 +47,13 @@ const MobileStickyCTA = () => {
     const onFocusOut = () => setFieldFocused(false);
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
-    const syncMenu = () => setMenuOpen(document.body.dataset.menuOpen === "true");
+    const syncMenu = () => {
+      setMenuOpen(document.body.dataset.menuOpen === "true");
+      setSampleOpen(document.body.dataset.sampleOpen === "true");
+    };
     syncMenu();
     const mo = new MutationObserver(syncMenu);
-    mo.observe(document.body, { attributes: true, attributeFilter: ["data-menu-open"] });
+    mo.observe(document.body, { attributes: true, attributeFilter: ["data-menu-open", "data-sample-open"] });
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
@@ -56,7 +62,7 @@ const MobileStickyCTA = () => {
   }, []);
 
   if (!isMarketingRoute(pathname)) return null;
-  if (ctaVisible || fieldFocused || menuOpen) return null;
+  if (ctaVisible || fieldFocused || menuOpen || sampleOpen) return null;
 
   return (
     <nav

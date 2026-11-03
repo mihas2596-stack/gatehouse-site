@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 import { Helmet } from "react-helmet-async";
 import { Link } from "react-router-dom";
@@ -73,6 +73,12 @@ const sectionClass = "border-b border-border/60 py-8 md:py-10";
 const Index = () => {
   const [sampleOpen, setSampleOpen] = useState(false);
   const sampleToggleRef = useRef<HTMLButtonElement>(null);
+  // Tell the floating action to stand down while the sample is open:
+  // its checklist otherwise scrolls underneath the pill.
+  useEffect(() => {
+    document.body.dataset.sampleOpen = sampleOpen ? "true" : "false";
+    return () => { delete document.body.dataset.sampleOpen; };
+  }, [sampleOpen]);
   const closeSample = () => {
     setSampleOpen(false);
     sampleToggleRef.current?.focus();

@@ -4,6 +4,7 @@ import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
+import { trackFunnel } from "@/lib/measurement";
 
 type SubmitStatus = "idle" | "sending" | "error";
 type VerifyState =
@@ -57,7 +58,13 @@ const SaveCard = () => {
       .then((data: { verified?: boolean; status?: string; booking?: BookingSummary | null }) => {
         const b = data.booking ?? null;
         setBooking(b);
-        if (data.verified && data.status === "saved") setVerify({ kind: "saved", booking: b });
+        if (data.verified && data.status === "saved") {
+          setVerify({ kind: "saved", booking: b });
+          // Audit fix (§10): gh_lead_submit fires on request acceptance,
+          // not on card save — the funnel conflated the two. This event
+          // fires only on server-verified save (never on ?saved=1 alone).
+          trackFunnel("gh_card_saved", { form_type: "quote" });
+        }
         else if (data.status === "pending") setVerify({ kind: "pending", booking: b });
         else if (data.status === "failed") setVerify({ kind: "failed", booking: b });
         else setVerify({ kind: "unknown", booking: b });

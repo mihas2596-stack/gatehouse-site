@@ -131,10 +131,12 @@ export function ReportChecklistView({ checklist }: { checklist: ReportChecklistD
 export function ReportContent({
   photoItems,
   checklist,
+  excludedRooms,
   renderPhoto,
 }: {
   photoItems: ReportPhotoItem[];
   checklist?: ReportChecklistData | null;
+  excludedRooms?: string[];
   renderPhoto: (p: ReportPhotoItem, i: number) => ReactNode;
 }) {
   const grouped = (photoItems ?? []).reduce<Record<string, ReportPhotoItem[]>>((acc, p) => {
@@ -143,10 +145,22 @@ export function ReportContent({
     return acc;
   }, {});
   const rooms = Object.entries(grouped);
+  const shown = new Set(rooms.map(([r]) => r.toLowerCase()));
+  const excluded = (excludedRooms ?? [])
+    .map((r) => r.trim())
+    .filter((r) => r && !shown.has(r.toLowerCase()));
   return (
     <>
       {rooms.length === 0 && (
         <p className="text-sm text-muted-foreground mb-3">No photos in this report yet.</p>
+      )}
+      {excluded.length > 0 && (
+        <div className="mb-4">
+          <h3 className="font-semibold mb-2">Not photographed</h3>
+          <p className="text-sm text-muted-foreground">
+            You asked us not to photograph: {excluded.join(", ")}. No photos were taken in these rooms.
+          </p>
+        </div>
       )}
       {rooms.map(([room, items]) => (
         <div key={room} className="mb-4">

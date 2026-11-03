@@ -65,6 +65,8 @@ const Cleaner = () => {
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [missing, setMissing] = useState<string[]>([]);
+  // K06: visible autosave status — "Saved" only after the server confirms.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const saveTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
@@ -108,11 +110,25 @@ const Cleaner = () => {
       setChecklist(next);
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
-        void post({ action: "checklist", checklist: next });
+        setSaveState("saving");
+        void post({ action: "checklist", checklist: next })
+          .then((r) => setSaveState(r.ok ? "saved" : "failed"))
+          .catch(() => setSaveState("failed"));
       }, 600);
     },
     [post],
   );
+
+  const retrySave = () => {
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    setSaveState("saving");
+    void post({ action: "checklist", checklist })
+      .then((r) => setSaveState(r.ok ? "saved" : "failed"))
+      .catch(() => setSaveState("failed"));
+  };
 
   const seenFiles = useRef<Set<string>>(new Set());
 
@@ -340,10 +356,18 @@ const Cleaner = () => {
           )}
         </div>
 
+        {!locked && saveState !== "idle" && (
+          <p className="text-xs text-muted-foreground mt-4" role="status">
+            {saveState === "saving" ? "Saving…" : saveState === "saved" ? "All changes saved." : (
+              <>Not saved — <button type="button" className="underline font-semibold" onClick={retrySave}>Retry</button></>
+            )}
+          </p>
+        )}
+
         {data.confirmed && data.cancelled !== true && data.report_status !== "submitted" && data.report_status !== "sent" && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
             <p className="text-sm font-semibold">Entry not arranged yet</p>
-            <p className="text-sm text-muted-foreground">Check with the owner before going — do not head to a visit without settled entry.</p>
+            <p className="text-sm text-muted-foreground">Check with the owner before going — do not head to a visit without settled entry. Call or text Nick at <a className="underline" href="tel:+17705258599">(770) 525-8599</a> or email <a className="underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>
           </div>
         )}
 
@@ -456,13 +480,14 @@ const Cleaner = () => {
         )}
 
         {!locked &&
-          checklist.rooms.map((room) => {
+          checklist.rooms.map((room, roomIdx) => {
             const roomPhotos = photos.filter((p) => p.room === room.name);
             const afterCount = roomPhotos.filter((p) => p.kind === "after").length;
+            const noPhotoHere = (v.no_photo_zones ?? "").split(",").map((z) => z.trim()).includes(room.name);
             return (
-              <div key={room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="font-heading text-xl font-bold">{room.name}</h2>
+              <details key={room.name} open={roomIdx === 0} className="rounded-xl border border-border bg-card p-4 mt-4">
+                <summary className="flex items-center justify-between cursor-pointer list-none">
+                  <span className="font-heading text-xl font-bold">{room.name}</span>
                   <span className="flex items-center gap-2">
                     {afterCount > 0 ? (
                       <span className="text-[11px] bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">After photo ✓</span>
@@ -473,8 +498,11 @@ const Cleaner = () => {
                     )}
                     <span className="text-xs text-muted-foreground">{afterCount} photo{afterCount === 1 ? "" : "s"}</span>
                   </span>
-                </div>
-                <div className="space-y-2 mb-3">
+                </summary>
+                {noPhotoHere && afterCount === 0 && (
+                  <p className="text-sm text-destructive mt-2">This room is on the client&apos;s do-not-photograph list — use the reason field below instead of a photo.</p>
+                )}
+                <div className="space-y-2 mb-3 mt-2">
                   {room.items.map((item, idx) => (
                     <label key={idx} className="flex items-start gap-3 text-sm cursor-pointer">
                       <input
@@ -619,7 +647,7 @@ const Cleaner = () => {
                 {missing.includes(room.name) && (
                   <p className="text-sm text-destructive mt-2" role="alert">This room still needs a photo or a reason.</p>
                 )}
-              </div>
+              </details>
             );
           })}
 
@@ -655,11 +683,27 @@ const Cleaner = () => {
                 Photos are still uploading — Finish will unlock when they are done.
               </p>
             )}
+            {(() => {
+              const missingRooms = checklist.rooms.filter((r) => {
+                const a = photos.filter((p) => p.room === r.name && p.kind === "after").length;
+                return a === 0 && !r.skip_reason;
+              }).map((r) => r.name);
+              const uploading = Object.values(uploads).filter((u) => u.status === "working").length;
+              return (
+                <div className="rounded-xl border border-border bg-card p-4 mt-4 text-sm" role="status">
+                  <p className="font-semibold mb-1">Before you finish</p>
+                  <p>Rooms ready: {checklist.rooms.length - missingRooms.length} of {checklist.rooms.length}</p>
+                  {missingRooms.length > 0 && <p className="text-destructive">Still need a photo or a reason: {missingRooms.join(", ")}</p>}
+                  {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
+                  {missingRooms.length === 0 && uploading === 0 && <p>Everything is ready — Finish will send the report.</p>}
+                </div>
+              );
+            })()}
             <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              Sending sends the report to the owner for review — they share it with the client after checking it. Your draft saves automatically — you can close this page and come back.
+              Finish sends the report to the client right away. If there is an open issue or a sending problem, the owner reviews it first instead. Your draft saves automatically — you can close this page and come back.
             </p>
           </>
         )}

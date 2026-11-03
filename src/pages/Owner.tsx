@@ -172,6 +172,8 @@ const Owner = () => {
   const [stripeState, setStripeState] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [returnNote, setReturnNote] = useState("");
+  const [issueReason, setIssueReason] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
   const [acting, setActing] = useState("");
@@ -347,7 +349,10 @@ const Owner = () => {
       setCleanerChanging(false);
       setChangeCleanerId("");
     }
-    setConfirmDate(v.visit_date ?? "");
+    // Audit fix (§5): when the client proposed a date, confirming
+    // defaults to the proposed date — the owner no longer re-types it
+    // from the banner above (re-typing invited a wrong-date confirm).
+    setConfirmDate(v.proposed_pending && v.proposed_date ? v.proposed_date : (v.visit_date ?? ""));
     setConfirmWindow(v.window ?? "");
     if (!rosterLoaded) void loadRoster();
     try {
@@ -806,6 +811,11 @@ const Owner = () => {
     { key: "all", label: "All visits", empty: "No visits yet." },
   ];
   const filteredVisits = listedVisits.filter((v) => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      const hay = `${v.client_name ?? ""} ${v.address ?? ""} ${v.booking_id ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     if (filter === "all") return true;
     if (filter === "cancelled") return v.status === "cancelled";
     if (filter === "completed") return v.status === "paid";
@@ -892,6 +902,14 @@ const Owner = () => {
             {rosterMsg && <p className="text-sm mt-3" role="status">{rosterMsg}</p>}
           </details>
 
+                  <input
+                    type="search"
+                    className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm mb-3"
+                    placeholder="Search by client, address, or booking…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    aria-label="Search visits"
+                  />
                   <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter visits">
             {FILTERS.map((f) => (
               <button
@@ -1007,6 +1025,32 @@ const Owner = () => {
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
+                {!v.issue_open && (v.report_status === "sent" || v.report_status === "submitted") && v.status !== "paid" && v.status !== "cancelled" && (
+                  <div className="mt-3">
+                    <div className="flex flex-wrap gap-2">
+                      <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What did the client report by email? (optional)" value={issueReason} onChange={(e) => setIssueReason(e.target.value)} aria-label="Issue reported by email" />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acting !== ""}
+                        onClick={() => {
+                          if (!window.confirm("Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email.")) return;
+                          void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
+                            setIssueReason("");
+                            setActionMsg(j["already_open"] === true
+                              ? "Issue was already open — nothing changed, no second email sent."
+                              : j["email_sent"] === true
+                                ? "Issue opened — automatic charging is blocked for this visit, and the client got a confirmation email."
+                                : "Issue opened — automatic charging is blocked for this visit, but the confirmation email was NOT delivered — contact the client manually.");
+                          });
+                        }}
+                      >
+                        Open issue from email
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">Use this when the client reported a problem by email instead of the report page. It blocks automatic charging at once — an email sitting in the inbox alone does not.</p>
+                  </div>
+                )}
                 {v.issue_open && (
                   <div className="flex flex-wrap gap-2 mt-2 items-center">
                     {openIssue && (
@@ -1270,7 +1314,7 @@ const Owner = () => {
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
-                      <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.visit_date ?? ""); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
+                      <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.proposed_pending && v.proposed_date ? v.proposed_date : (v.visit_date ?? "")); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
                         Change
                       </Button>
                     </div>

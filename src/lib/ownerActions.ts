@@ -20,6 +20,7 @@ export type AttentionVisit = {
   issue_open?: boolean;
   entry_agreed?: boolean;
   visit_date?: string | null;
+  report_bounced?: boolean;
 };
 
 export type AttentionItem = { label: string; focus: FocusBlock };
@@ -87,6 +88,9 @@ export const nextActionFor = (v: AttentionVisit, paymentFailed: boolean): string
   if (v.report_status === "submitted") return "Review the report";
   if (paymentFailed) return "Retry the payment";
   if (v.issue_open) return "Resolve the customer issue";
+  // A bounced report never reached the client: "waiting for review"
+  // would be a lie — the next step is a re-send, not patience.
+  if (v.report_bounced) return "Resend the report";
   if (v.report_status === "sent") return "Waiting for the customer’s review";
   if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
   return "No action needed";
@@ -114,6 +118,7 @@ export const attentionItems = (v: AttentionVisit): AttentionItem[] => {
   else if (needsReview) items.push({ label: "Open: needs review", focus: "schedule" });
   else if (!v.visit_confirmed) items.push({ label: "Open to confirm the date", focus: "schedule" });
   if (v.report_status === "submitted") items.push({ label: "Open to review the report", focus: "report" });
+  if (v.report_bounced) items.push({ label: "Open: report delivery failed", focus: "report" });
   if (v.issue_open) items.push({ label: "Open to resolve the issue", focus: "report" });
   if (v.payment_failed) items.push({ label: "Open: payment failed", focus: "payment" });
   // Entry signal: a confirmed visit within 2 days whose entry method is

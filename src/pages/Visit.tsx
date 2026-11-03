@@ -6,7 +6,7 @@ import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
 import { fmtDateUS } from "@/lib/formatDate";
-import { toVisitMethod, entrySummaryLabel, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
+import { toVisitMethod, entrySummaryLabel, entryChoiceSettled, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
 
 type VisitStateName =
   | "invalid_link"
@@ -89,6 +89,7 @@ type ReportData = {
   receipt_sent?: boolean;
   issue_reason?: string;
   issue_room?: string;
+  no_photo_zones?: string[];
   error?: string;
 };
 
@@ -144,6 +145,9 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
         onChanged();
         if (j.error === "report_changed") {
           setErr("This report was updated since you opened it — please review the latest version before approving. No charge was made.");
+        }
+        if (j.error === "payment_processing") {
+          setErr("Processing payment — a charge for this visit is already in progress. Please wait a moment and refresh; you won't be charged twice.");
         }
       } else {
         setErr("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
@@ -236,7 +240,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-                  {busy ? "Working…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
+                  {busy ? "Processing payment…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
                 </Button>
                 <Button variant="outline" asChild>
                   <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Change card</Link>
@@ -257,19 +261,20 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
               )}
               <div className="flex flex-wrap gap-2">
                 <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-                  {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
+                  {busy ? "Processing payment…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
                 </Button>
                 <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
                   Report an issue
                 </Button>
               </div>
+              <p className="mt-2 text-sm text-muted-foreground">Approving charges your saved card.</p>
             </>
           )}
         </div>
       )}
       {rep.state === "issue_open" && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
-          Issue received — the automatic charge is blocked for this visit.
+          Issue reported — automatic payment is blocked for this visit.
           {rep.issue_reason ? <> You told us: “{rep.issue_reason}”.</> : null}
         </p>
       )}
@@ -281,6 +286,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       <ReportContent
         photoItems={rep.photo_items ?? []}
         checklist={rep.checklist}
+        excludedRooms={rep.no_photo_zones ?? []}
         renderPhoto={(p) => (
           <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`}>
             <figure>
@@ -302,12 +308,15 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       {canAct && rep.state === "awaiting" && (
         <div className="flex flex-wrap gap-2">
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-            {busy ? "Working…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
+            {busy ? "Processing payment…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
           </Button>
           <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
             Report an issue
           </Button>
         </div>
+      )}
+      {canAct && rep.state === "awaiting" && (
+        <p className="mt-2 text-sm text-muted-foreground">Approving charges your saved card.</p>
       )}
       {canAct && rep.state === "awaiting" && (
         <p className="mt-2 text-sm text-muted-foreground">Not happy? Report an issue — the automatic charge is blocked until you approve again.</p>
@@ -334,7 +343,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
             placeholder="e.g. Kitchen"
           />
           <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}>
-            {busy ? "Working…" : "Send issue — block auto-charge"}
+            {busy ? "Sending…" : "Send issue — block auto-charge"}
           </Button>
         </div>
       )}
@@ -666,13 +675,9 @@ const Visit = () => {
 
             {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">
-                {data.cleaner.photo ? (
-                  <img src={data.cleaner.photo} alt={data.cleaner.name} className="w-16 h-16 rounded-full object-cover border border-border" />
-                ) : (
-                  <span className="w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0">
-                    <User className="w-8 h-8 text-sage-foreground" aria-hidden="true" />
-                  </span>
-                )}
+                <span className="w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0">
+                  <User className="w-8 h-8 text-sage-foreground" aria-hidden="true" />
+                </span>
                 <div className="text-left">
                   <p className="text-sm uppercase tracking-wide text-muted-foreground">Your cleaner</p>
                   <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
@@ -686,6 +691,13 @@ const Visit = () => {
                     cleaner ever changes, we tell you before the visit — never a surprise stranger.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {!data.cleaner && data.state === "confirmed" && (
+              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                <h2 className="font-heading text-lg font-bold mb-2">Your cleaner</h2>
+                <p className="text-sm text-foreground">Your cleaner hasn&apos;t been assigned yet — we&apos;ll email you when they&apos;re confirmed, before your visit.</p>
               </div>
             )}
 
@@ -719,6 +731,11 @@ const Visit = () => {
                 <h2 className="font-heading text-lg font-bold mb-3">
                   How would you like to arrange entry?
                 </h2>
+                {!entryChoiceSettled(data.entry_choice?.method as EntryMethodChoice | null) && !data.entry?.method && (
+                  <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm" role="status">
+                    Entry not settled yet — Nick will email you to help arrange entry before your visit. You can also choose an option below.
+                  </p>
+                )}
                 <p className="text-sm text-muted-foreground mb-3">
                   You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.
                 </p>
@@ -815,6 +832,9 @@ const Visit = () => {
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Entry</h2>
                 <p className="text-sm text-foreground">You will arrange entry here after your visit is confirmed and your cleaner is assigned. Nothing secret is needed before then.</p>
+                {data.entry_choice?.method === "decide_later" && (
+                  <p className="mt-2 text-sm text-foreground">You chose to decide later — Nick will email you to help arrange entry before your visit.</p>
+                )}
               </div>
             )}
             {manageable && (

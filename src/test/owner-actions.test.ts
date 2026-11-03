@@ -91,6 +91,20 @@ describe("live visits keep their pipeline actions", () => {
   });
 });
 
+describe("bounced report is a re-send task, not 'waiting for review'", () => {
+  it("sent + bounced → Resend the report + delivery-failed item", () => {
+    const v = { ...base, status: "report_sent", visit_confirmed: true, cleaner_name: "Taylor Allen", report_status: "sent", report_bounced: true };
+    expect(nextActionFor(v, false)).toBe("Resend the report");
+    expect(attentionItems(v)).toEqual([{ label: "Open: report delivery failed", focus: "report" }]);
+  });
+
+  it("sent + delivered → still waiting for review", () => {
+    const v = { ...base, status: "report_sent", visit_confirmed: true, cleaner_name: "Taylor Allen", report_status: "sent" };
+    expect(nextActionFor(v, false)).toBe("Waiting for the customer’s review");
+    expect(attentionItems(v)).toEqual([]);
+  });
+});
+
 describe("no raw machine values leak into owner UI", () => {
   it("maps Stripe-side states to plain words", () => {
     expect(stripeLabel("awaiting_card")).toBe("Waiting for card");

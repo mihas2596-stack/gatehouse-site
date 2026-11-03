@@ -612,6 +612,10 @@ export default async function handler(req: Req, res: Res) {
         booking,
         photos: items.map((p) => p.url),
         photo_items: items,
+        // Rooms the client asked not to photograph (comma-separated in
+        // gh_no_photo_zones) — the client report labels them explicitly
+        // instead of silently omitting them.
+        no_photo_zones: (meta["gh_no_photo_zones"] ?? "").split(",").map((z) => z.trim()).filter(Boolean),
         amount: Number.isFinite(amountCents) && amountCents > 0 ? money(String(amountCents)) : null,
         amount_cents: Number.isFinite(amountCents) && amountCents > 0 ? amountCents : null,
         report_sent_at: sentAt,

@@ -285,7 +285,10 @@ const Quote = () => {
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? "" : "Enter a valid email, like name@example.com.";
     if (field === "address") return value.trim().length < 5 ? "Enter your street address." : "";
     if (field === "city") return value.trim().length < 2 ? "Enter your city." : "";
-    if (field === "state") return value.trim().length < 2 ? "Enter your state." : "";
+    if (field === "state") {
+      if (!value.trim()) return "Enter your state.";
+      return value.trim().toUpperCase() === "GA" ? "" : "We currently serve Georgia only — please enter GA.";
+    }
     if (field === "date") {
       if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${minDate}.`;
       return "";
@@ -346,6 +349,11 @@ const Quote = () => {
       return;
     }
     setStep(3);
+    // Audit fix (§10): gh_quote_review was declared but never fired,
+    // so "reached review" was unmeasurable. Fired once per entry here
+    // (goToStep3 is the only path into step 3 besides Back/Edit, which
+    // only setStep without re-validating).
+    trackFunnel("gh_quote_review", { form_type: "quote" });
   };
   const priceSummaryText = isLargeHome
     ? "Custom quote — we confirm your price with you before confirming your visit, and before anything is charged"
@@ -601,11 +609,15 @@ const Quote = () => {
       />
       <section className="py-4 md:py-6 bg-warm-gradient">
         <div className="container max-w-3xl text-center">
-          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-3">
+          <h1 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-3xl md:text-[44px] font-bold mb-3 scroll-mt-24 outline-none">
             A clear <span className="text-gradient-gold">price</span> for your home
           </h1>
           <p className="text-muted-foreground text-lg">
-            No email needed to see your price.
+            {step === 1
+              ? "No contact details needed."
+              : step === 2
+                ? "Tell us when you'd like us to come — we'll confirm your date separately, and nothing is charged today."
+                : "Check everything, then save your card — $0 today."}
           </p>
           <div className="mt-5 max-w-md mx-auto">
             <p className="text-center text-sm font-semibold" aria-current="step">
@@ -642,35 +654,8 @@ const Quote = () => {
             )}
 
             {step === 1 && (<>
-            <h2 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-6 scroll-mt-24 outline-none">Your home &amp; price</h2>
+            <p className="text-sm text-muted-foreground mb-6">Bedrooms, full bathrooms, ZIP, service type and frequency set your price. Half bathrooms help us plan — they don&apos;t change it.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label htmlFor="q-bed" className="block text-sm font-medium mb-1.5">Bedrooms</label>
-                <select id="q-bed" value={bedrooms} onChange={(e) => setBedrooms(Number(e.target.value))} className={selectClass}>
-                  {BEDROOM_CHOICES.map((n) => (
-                    <option key={n} value={n}>{n} {n === 1 ? "bedroom" : "bedrooms"}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="q-fullba" className="block text-sm font-medium mb-1.5">Full bathrooms</label>
-                <select id="q-fullba" value={fullBaths} onChange={(e) => setFullBaths(Number(e.target.value))} className={selectClass}>
-                  {FULL_BATH_CHOICES.map((n) => (
-                    <option key={n} value={n}>{n} {n === 1 ? "full bathroom" : "full bathrooms"}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
-                <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
-                  {HALF_BATH_CHOICES.map((n) => (
-                    <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
-                  ))}
-                </select>
-              </div>
-
               <div className="md:col-span-2">
                 <label htmlFor="q-zip" className="block text-sm font-medium mb-1.5">ZIP code (service area check)</label>
                 <input
@@ -696,6 +681,24 @@ const Quote = () => {
                     </span>
                   )}
                 </p>
+              </div>
+
+              <div>
+                <label htmlFor="q-bed" className="block text-sm font-medium mb-1.5">Bedrooms</label>
+                <select id="q-bed" value={bedrooms} onChange={(e) => setBedrooms(Number(e.target.value))} className={selectClass}>
+                  {BEDROOM_CHOICES.map((n) => (
+                    <option key={n} value={n}>{n} {n === 1 ? "bedroom" : "bedrooms"}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="q-fullba" className="block text-sm font-medium mb-1.5">Full bathrooms</label>
+                <select id="q-fullba" value={fullBaths} onChange={(e) => setFullBaths(Number(e.target.value))} className={selectClass}>
+                  {FULL_BATH_CHOICES.map((n) => (
+                    <option key={n} value={n}>{n} {n === 1 ? "full bathroom" : "full bathrooms"}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="md:col-span-2">
@@ -804,7 +807,7 @@ const Quote = () => {
             {service === "standard" && (
               <fieldset className="mt-6">
                 <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? *</legend>
-                <p className="text-sm text-muted-foreground mb-2">This determines whether your first visit needs a deep clean — and what it costs. If it does, the price above shows the deep-clean first visit and the regular price after it, before you book.</p>
+                <p className="text-sm text-muted-foreground mb-2">If you answer No, your first visit is a deep clean — the price below shows the deep-clean first visit and the regular price after it, before you book.</p>
                 <div className="flex flex-wrap gap-x-5 gap-y-1">
                   {(["yes", "no"] as const).map((v) => (
                     <label key={v} className="flex items-center gap-2 text-sm min-h-[44px]">
@@ -815,6 +818,16 @@ const Quote = () => {
                 </div>
               </fieldset>
             )}
+
+            <div className="mt-6">
+              <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
+              <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
+                {HALF_BATH_CHOICES.map((n) => (
+                  <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-sm text-muted-foreground">Planning only — half bathrooms don&apos;t change your price.</p>
+            </div>
 
             <p className="mt-6 text-sm text-foreground">
               Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
@@ -898,7 +911,8 @@ const Quote = () => {
                 </>
               )}
 
-              <p className="text-sm text-muted-foreground mt-3">Fixed when you send your request. Nothing is charged today. {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
+              <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>
+              <p className="text-sm text-muted-foreground mt-2">Fixed when you send your request. Nothing is charged today. {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
 
               <Button
                 type="button"
@@ -927,7 +941,7 @@ const Quote = () => {
               </p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
+                <p className="text-muted-foreground mt-1">{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
               </div>
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
@@ -975,17 +989,20 @@ const Quote = () => {
                   <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
                 </div>
                 <dl className="mt-3 space-y-2">
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-right">{fullAddress || "—"}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-right">{priceSummaryText}</dd></div>
-                  <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-right">$0</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-left sm:text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-left sm:text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-left sm:text-right">{fullAddress || "—"}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-left sm:text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
+                  {entryMethod === "decide_later" && (
+                    <p className="mt-1 text-sm text-foreground">Nick will email you before your visit to help arrange entry. You don&apos;t need to share a door code now.</p>
+                  )}
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-left sm:text-right">$0</dd></div>
                 </dl>
                 <details className="mt-4">
                   <summary className="cursor-pointer text-sm font-semibold text-primary">View all details</summary>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
-                    <dt className="font-semibold">Home</dt><dd>{SIZE_BAND_LABEL[sizeBand]}, {bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
+                    <dt className="font-semibold">Home</dt><dd>{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                     <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
@@ -1052,89 +1069,7 @@ const Quote = () => {
                     <span className="mt-1 block text-sm text-muted-foreground">{SMS_DISCLOSURE}</span>
                   </label>
                 </div>
-                <div>
-                  <label htmlFor="b-address" className="block text-sm font-medium mb-1.5">Street address *</label>
-                  <input
-                    id="b-address" name="address" type="text" ref={refs.address} required autoComplete="street-address" maxLength={200}
-                    value={booking.address} onChange={handleBookingChange} onBlur={handleBookingBlur}
-                    aria-invalid={!!bookingErrors.address} aria-describedby={bookingErrors.address ? "b-address-error" : undefined}
-                    placeholder="Street number and street name"
-                    className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
-                </div>
-                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-5">
-                  <div>
-                    <label htmlFor="b-city" className="block text-sm font-medium mb-1.5">City *</label>
-                    <input
-                      id="b-city" name="city" type="text" ref={refs.city} required autoComplete="address-level2"
-                      value={booking.city} onChange={handleBookingChange} onBlur={handleBookingBlur}
-                      aria-required="true" aria-invalid={!!bookingErrors.city} aria-describedby={bookingErrors.city ? "b-city-error" : undefined}
-                      placeholder="Sugar Hill"
-                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    {bookingErrors.city && <p id="b-city-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.city}</p>}
-                  </div>
-                  <div>
-                    <label htmlFor="b-state" className="block text-sm font-medium mb-1.5">State *</label>
-                    <input
-                      id="b-state" name="state" type="text" ref={refs.state} required autoComplete="address-level1" maxLength={2}
-                      value={booking.state} onChange={handleBookingChange} onBlur={handleBookingBlur}
-                      aria-required="true" aria-invalid={!!bookingErrors.state} aria-describedby={bookingErrors.state ? "b-state-error" : undefined}
-                      placeholder="GA"
-                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    {bookingErrors.state && <p id="b-state-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.state}</p>}
-                  </div>
-                  <div>
-                    <label htmlFor="b-apt" className="block text-sm font-medium mb-1.5">Apartment / unit (optional)</label>
-                    <input
-                      id="b-apt" name="apt" type="text" autoComplete="address-line2"
-                      value={booking.apt} onChange={handleBookingChange}
-                      placeholder="Apt 4"
-                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                  </div>
-                </div>
-                <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
-                  <p id="entry-label" className="block text-sm font-medium mb-1">How would you like to arrange entry? *</p>
-                  <p className="text-sm text-muted-foreground mb-3">You’re welcome to be home for your cleaning. Choose what works best for you.</p>
-                  <div role="radiogroup" aria-labelledby="entry-label" className="flex flex-col gap-1">
-                    {ENTRY_METHODS.map((m) => (
-                      <label key={m} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
-                        <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
-                        {ENTRY_METHOD_LABEL[m]}
-                      </label>
-                    ))}
-                  </div>
-                  {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
-                  {entryMethod === "arrange_before" && (
-                    <div className="mt-3">
-                      <p id="entry-detail-label" className="block text-sm font-medium mb-1">How will you arrange entry?</p>
-                      <div role="radiogroup" aria-labelledby="entry-detail-label" className="flex flex-col gap-1">
-                        {ENTRY_DETAILS.map((d) => (
-                          <label key={d} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
-                            <input id={`entry-detail-${d}`} type="radio" name="entryDetail" value={d} checked={entryDetail === d} onChange={() => { setEntryDetail(d); setBookingErrors((p) => ({ ...p, entryDetail: "" })); }} className="h-5 w-5" />
-                            {ENTRY_DETAIL_LABEL[d]}
-                          </label>
-                        ))}
-                      </div>
-                      {bookingErrors.entryDetail && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryDetail}</p>}
-                      <p className="mt-2 text-sm text-muted-foreground">No entry codes are needed now. You can add private entry details after your visit is confirmed.</p>
-                    </div>
-                  )}
-                  <div className="mt-3">
-                    <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
-                    <input
-                      id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
-                      placeholder="e.g. Park in the driveway, gate intercom at the front"
-                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    <p className="mt-1 text-sm text-muted-foreground">Do not put entry codes, alarm codes or key locations here. Private entry details are added after your visit is confirmed.</p>
-                  </div>
-                  <p className="mt-3 text-sm font-medium text-foreground">If we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6). You can add or change private entry details on your visit page after your visit is confirmed.</p>
-                </div>
-                <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Visit date and notes</h3>
+                <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your preferred visit</h3>
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
@@ -1171,8 +1106,96 @@ const Quote = () => {
                   />
                   <p className="mt-1.5 text-sm text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. Private entry details are added after your visit is confirmed.</p>
                 </div>
+                <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your home address</h3>
+                <div>
+                  <label htmlFor="b-address" className="block text-sm font-medium mb-1.5">Street address *</label>
+                  <input
+                    id="b-address" name="address" type="text" ref={refs.address} required autoComplete="street-address" maxLength={200}
+                    value={booking.address} onChange={handleBookingChange} onBlur={handleBookingBlur}
+                    aria-invalid={!!bookingErrors.address} aria-describedby={bookingErrors.address ? "b-address-error" : undefined}
+                    placeholder="Street number and street name"
+                    className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
+                </div>
+                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-5">
+                  <div>
+                    <label htmlFor="b-city" className="block text-sm font-medium mb-1.5">City *</label>
+                    <input
+                      id="b-city" name="city" type="text" ref={refs.city} required autoComplete="address-level2"
+                      value={booking.city} onChange={handleBookingChange} onBlur={handleBookingBlur}
+                      aria-required="true" aria-invalid={!!bookingErrors.city} aria-describedby={bookingErrors.city ? "b-city-error" : undefined}
+                      placeholder="Sugar Hill"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {bookingErrors.city && <p id="b-city-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.city}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="b-state" className="block text-sm font-medium mb-1.5">State *</label>
+                    <input
+                      id="b-state" name="state" type="text" ref={refs.state} required autoComplete="address-level1" maxLength={2}
+                      value={booking.state} onChange={handleBookingChange} onBlur={handleBookingBlur}
+                      aria-required="true" aria-invalid={!!bookingErrors.state} aria-describedby={bookingErrors.state ? "b-state-error" : undefined}
+                      placeholder="GA"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {bookingErrors.state && <p id="b-state-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.state}</p>}
+                  </div>
+                  <details className="rounded-lg">
+                    <summary className="cursor-pointer text-sm font-medium text-foreground min-h-[44px] flex items-center">Apartment / unit (optional)</summary>
+                    <input
+                      id="b-apt" name="apt" type="text" autoComplete="address-line2" aria-label="Apartment / unit (optional)"
+                      value={booking.apt} onChange={handleBookingChange}
+                      placeholder="Apt 4"
+                      className="mt-1 w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </details>
+                </div>
+                <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
+                  <p id="entry-label" className="block text-sm font-medium mb-1">How would you like to arrange entry? *</p>
+                  <p className="text-sm text-muted-foreground mb-3">You’re welcome to be home for your cleaning. Choose what works best for you.</p>
+                  <div role="radiogroup" aria-labelledby="entry-label" className="flex flex-col gap-1">
+                    {ENTRY_METHODS.map((m) => (
+                      <label key={m} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                        <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
+                        {ENTRY_METHOD_LABEL[m]}
+                      </label>
+                    ))}
+                  </div>
+                  {entryMethod === "decide_later" && (
+                    <p className="mt-3 text-sm text-foreground">You can decide later. Nick will email you to help arrange entry before your visit. You don&apos;t need to share a door code now.</p>
+                  )}
+                  {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
+                  {entryMethod === "arrange_before" && (
+                    <div className="mt-3">
+                      <p id="entry-detail-label" className="block text-sm font-medium mb-1">How will you arrange entry?</p>
+                      <div role="radiogroup" aria-labelledby="entry-detail-label" className="flex flex-col gap-1">
+                        {ENTRY_DETAILS.map((d) => (
+                          <label key={d} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                            <input id={`entry-detail-${d}`} type="radio" name="entryDetail" value={d} checked={entryDetail === d} onChange={() => { setEntryDetail(d); setBookingErrors((p) => ({ ...p, entryDetail: "" })); }} className="h-5 w-5" />
+                            {ENTRY_DETAIL_LABEL[d]}
+                          </label>
+                        ))}
+                      </div>
+                      {bookingErrors.entryDetail && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryDetail}</p>}
+                      <p className="mt-2 text-sm text-muted-foreground">No entry codes are needed now. You can add private entry details after your visit is confirmed.</p>
+                    </div>
+                  )}
+                  <div className="mt-3">
+                    <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
+                    <input
+                      id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
+                      placeholder="e.g. Park in the driveway, gate intercom at the front"
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <p className="mt-1 text-sm text-muted-foreground">Do not put entry codes, alarm codes or key locations here. Private entry details are added after your visit is confirmed.</p>
+                  </div>
+                  <p className="mt-3 text-sm font-medium text-foreground">If we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6). You can add or change private entry details on your visit page after your visit is confirmed.</p>
+                </div>
+
               </div>
               <h3 className="font-heading text-base font-bold mb-2">Photo report consent</h3>
+              <p className="text-sm text-foreground mb-3">Photos let you check every room after we leave. They go only into your private report.</p>
               <div className="flex items-start gap-3">
                 <input
                   id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
@@ -1187,7 +1210,17 @@ const Quote = () => {
               </div>
               {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
               <div className="mt-6 rounded-lg border border-border bg-background p-4 text-sm">
-                <p><strong>Your price:</strong> {priceSummaryText} · Due today: $0</p>
+                <p><strong>Your price:</strong></p>
+                {service === "standard" && breakdown ? (
+                  <>
+                    <p className="mt-1">First visit: {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}</p>
+                    {isRecurring && <p className="mt-1">Then: {fmt$(breakdown.recurring_total)} per visit, every other week</p>}
+                    {!isRecurring && <p className="mt-1">One-time visit</p>}
+                  </>
+                ) : (
+                  <p className="mt-1">{priceSummaryText}</p>
+                )}
+                <p className="mt-1"><strong>Due today: $0</strong></p>
               </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
@@ -1196,6 +1229,15 @@ const Quote = () => {
               </>)}
 
               {step === 3 && (<>
+              <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
+              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
+              <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
+                  <h3 className="font-heading text-lg font-bold mb-2">Payment</h3>
+                  <p className="text-base leading-relaxed"><strong>Today: $0.</strong> <span className="font-semibold">Nothing is charged today.</span> Your card is saved through Stripe — we never see or store your full card number.</p>
+                  <p className="mt-3 text-base leading-relaxed"><strong>After cleaning:</strong> you get a photo report. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</p>
+                  <p className="mt-3 text-base leading-relaxed"><strong>If something is wrong:</strong> report an issue within 24 hours after we send the report and the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.</p>
+                  <p className="mt-3 text-base text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
+                </div>
               <p className="mt-3 text-sm text-muted-foreground">Access reminder: if we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6).</p>
               <div className="mt-5 flex items-start gap-3">
                 <input
@@ -1212,23 +1254,6 @@ const Quote = () => {
                 </label>
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
-
-
-
-
-
-              <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
-              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
-              <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
-                  <h3 className="font-heading text-lg font-bold mb-2">Payment</h3>
-                  <p className="text-lg leading-relaxed"><span className="font-semibold">Nothing is charged today.</span> Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-base">
-                    <li><strong>Why your card now?</strong> So paying later takes one tap — approve the photo report and you’re done. No prepayment, no second checkout.</li>
-                    <li><strong>Safe with Stripe.</strong> Your card details go straight to Stripe, our payment processor. We never see or store your full card number.</li>
-                    <li><strong>You stay in control.</strong> Report an issue within 24 hours and the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.</li>
-                  </ul>
-                  <p className="mt-3 text-base text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
-                </div>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
                 <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="flex-1 min-h-[48px]">
