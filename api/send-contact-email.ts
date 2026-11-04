@@ -863,12 +863,12 @@ export default async function handler(req: Req, res: Res) {
     }
 
     const entryMethodLabel = (method: string, detail?: string): string => {
-      const base: Record<string, string> = {
+      const base = ({
         home: "I'll be home to let the cleaner in",
         other_person: "Someone else will let the cleaner in",
         arrange_before: "I'll arrange entry before the visit",
         decide_later: "I'll decide later — please contact me",
-      }[method] ?? method;
+      } as Record<string, string>)[method] ?? method;
       if (method === "arrange_before" && detail) {
         const d = ({ door_code: "Door code / smart lock", lockbox: "Lockbox", other: "Other arrangement" } as Record<string, string>)[detail];
         return d ? `${base} (${d})` : base;
