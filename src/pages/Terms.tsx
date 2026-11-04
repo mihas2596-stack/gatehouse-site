@@ -21,7 +21,7 @@ const Terms = () => {
         <p className="mb-6 font-semibold">
           Effective Date: May 15, 2026
           <br />
-          Last Updated: September 17, 2026
+          Last Updated: November 3, 2026
         </p>
 
         <p className="mb-8">
@@ -114,7 +114,7 @@ const Terms = () => {
           <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide. If the home differs materially from those details, extra time is billed at $45 per hour and starts only with your approval — we explain why and agree the maximum charge with you first.
         </p>
         <p className="mb-4">
-          <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. Your card is charged the visit price when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue. If you report an issue within that window — a missed item on the checklist, a question about the amount, or damage you believe we caused — automatic charging stays paused while we review it with you; before any charge resumes, we will tell you the outcome and the amount. The free re-clean in Section 7 applies only to missed checklist items. The 24-hour period runs from when we send the report; if our email provider confirms the report email was undelivered, automatic charging is paused and the period does not run until we send the report to you another way. Payments are processed by Stripe.
+          <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. Your card is charged the visit price when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue. If you report an issue within that window — a missed item on the checklist, a question about the amount, or damage you believe we caused — automatic charging is blocked for that visit and never resumes on its own, even after the issue is closed. Once we have reviewed the issue with you and told you the outcome and amount, you must approve the report again to pay. The free re-clean in Section 7 applies only to missed checklist items. The 24-hour period runs from when we send the report; if our email provider confirms the report email was undelivered, automatic charging is paused and the period does not run until we send the report to you another way. Payments are processed by Stripe.
         </p>
         <p className="mb-4">
           <strong>5.3 Late Payment.</strong> Unpaid amounts may accrue a late fee of 1.5% per month or the maximum amount permitted by Georgia law, whichever is less. We may suspend Services for accounts with outstanding balances.
@@ -136,12 +136,12 @@ const Terms = () => {
           </li>
         </ul>
         <p className="mb-8">
-          To cancel or reschedule, email us.
+          To cancel or request a new date, use your visit page or email us. A requested new date is not confirmed until we confirm availability with you.
         </p>
 
         <h2 id="terms-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">7. Service Concerns</h2>
         <p className="mb-8">
-          Missed something on the checklist? Tell us by email with a photo within 24 hours after your photo report is sent. We fix it free within 72 hours.
+          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us with a photo, within 24 hours after your photo report is sent. We fix missed checklist items free within 72 hours after you report the issue.
         </p>
 
         <h2 id="terms-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">8. Client Responsibilities</h2>

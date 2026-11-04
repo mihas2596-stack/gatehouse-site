@@ -6,7 +6,7 @@
 // even though the server rejects those actions for cancelled visits
 // with 409. Queue, row, and card must agree, so these tests pin the
 // shared rule in src/lib/ownerActions.ts.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { attentionItems, nextActionFor, stripeLabel } from "@/lib/ownerActions";
 
 const base = {
@@ -106,6 +106,16 @@ describe("bounced report is a re-send task, not 'waiting for review'", () => {
 });
 
 describe("no raw machine values leak into owner UI", () => {
+  it("shows the same urgent entry task in the row and attention queue", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-03T12:00:00Z"));
+    const visit = { ...base, status: "confirmed", visit_confirmed: true, request_approved: true, cleaner_name: "Test Cleaner", visit_date: "2026-11-04" };
+    expect(nextActionFor(visit, false)).toBe("Arrange entry with the client");
+    expect(attentionItems(visit)).toEqual([{ label: "Open: entry not agreed", focus: "summary" }]);
+    const finished = { ...visit, report_status: "sent", status: "report_sent" };
+    expect(nextActionFor(finished, false)).toBe("Waiting for the customer’s review");
+    expect(attentionItems(finished)).toEqual([]);
+    vi.restoreAllMocks();
+  });
   it("maps Stripe-side states to plain words", () => {
     expect(stripeLabel("awaiting_card")).toBe("Waiting for card");
     expect(stripeLabel("card_ready")).toBe("Card ready");

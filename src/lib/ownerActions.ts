@@ -25,6 +25,13 @@ export type AttentionVisit = {
 
 export type AttentionItem = { label: string; focus: FocusBlock };
 
+const needsEntry = (v: AttentionVisit): boolean => {
+  if (!v.visit_confirmed || v.status === "cancelled" || v.status === "paid" || v.entry_agreed || !v.visit_date) return false;
+  if (v.report_status === "submitted" || v.report_status === "sent") return false;
+  const days = (Date.parse(`${v.visit_date}T12:00:00Z`) - Date.now()) / (24 * 3600 * 1000);
+  return days >= -1 && days <= 2;
+};
+
 // Plain-words visit status for badges and headers — the owner should
 // never have to translate internal row statuses.
 export const visitLabel = (s: string): string => {
@@ -91,6 +98,7 @@ export const nextActionFor = (v: AttentionVisit, paymentFailed: boolean): string
   // A bounced report never reached the client: "waiting for review"
   // would be a lie — the next step is a re-send, not patience.
   if (v.report_bounced) return "Resend the report";
+  if (needsEntry(v)) return "Arrange entry with the client";
   if (v.report_status === "sent") return "Waiting for the customer’s review";
   if (v.report_status === "none" || v.report_status === "draft" || v.report_status === "returned") return "Waiting for the cleaner’s report";
   return "No action needed";
@@ -124,10 +132,6 @@ export const attentionItems = (v: AttentionVisit): AttentionItem[] => {
   // Entry signal: a confirmed visit within 2 days whose entry method is
   // not agreed yet — the owner sees it here, and the cron sends the
   // client one reminder (deduped by journal event).
-  if (v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid" && !v.entry_agreed && v.visit_date) {
-    const d = new Date(`${v.visit_date}T12:00:00Z`).getTime();
-    const days = Number.isNaN(d) ? 99 : (d - Date.now()) / (24 * 3600 * 1000);
-    if (days >= -1 && days <= 2) items.push({ label: "Open: entry not agreed", focus: "summary" });
-  }
+  if (needsEntry(v)) items.push({ label: "Open: entry not agreed", focus: "summary" });
   return items;
 };

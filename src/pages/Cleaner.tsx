@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Camera, CheckCircle, AlertTriangle, Loader2, Trash2, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { ReportChecklistView } from "@/components/ReportContent";
+import { createAutosaveQueue, type AutosaveState } from "@/lib/autosaveQueue";
+import { photoBlocked } from "@/lib/photoPolicy";
 
 type ChecklistItem = { label: string; done: boolean };
 type ChecklistRoom = { name: string; items: ChecklistItem[]; skip_reason?: string };
@@ -66,32 +68,7 @@ const Cleaner = () => {
   const [submitError, setSubmitError] = useState("");
   const [missing, setMissing] = useState<string[]>([]);
   // K06: visible autosave status — "Saved" only after the server confirms.
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
-  const saveTimer = useRef<number | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      // C1: preserve the owner/QA preview flag (?pv=1) on every load, so a
-      // preview reload never creates a cleaner_link_opened event.
-      const pv = searchParams.get("pv");
-      const qs = `ct=${encodeURIComponent(ct)}${pv === "1" ? "&pv=1" : ""}`;
-      const r = await fetch(`/api/cleaner?${qs}`);
-      const j = (await r.json()) as CleanerView;
-      if (!j.ok) {
-        setError(j.error ?? "load_failed");
-        return;
-      }
-      setData(j);
-      setChecklist(j.checklist ?? { rooms: [] });
-      setPhotos(j.photos ?? []);
-    } catch {
-      setError("load_failed");
-    }
-  }, [ct, searchParams]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const [saveState, setSaveState] = useState<AutosaveState>("idle");
 
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -104,35 +81,55 @@ const Cleaner = () => {
     },
     [ct],
   );
+  const saver = useMemo(() => createAutosaveQueue<Checklist>(
+    async (next) => (await post({ action: "checklist", checklist: next })).ok,
+    setSaveState,
+  ), [post]);
+  useEffect(() => { saver.activate(); return () => saver.dispose(); }, [saver]);
+
+  const load = useCallback(async () => {
+    const startedAtRevision = saver.revision();
+    try {
+      // C1: preserve the owner/QA preview flag (?pv=1) on every load, so a
+      // preview reload never creates a cleaner_link_opened event.
+      const pv = searchParams.get("pv");
+      const qs = `ct=${encodeURIComponent(ct)}${pv === "1" ? "&pv=1" : ""}`;
+      const r = await fetch(`/api/cleaner?${qs}`);
+      const j = (await r.json()) as CleanerView;
+      if (!j.ok) {
+        setError(j.error ?? "load_failed");
+        return;
+      }
+      setData(j);
+      // Photo uploads refresh the page data too. A response started before
+      // an edit must not replace the cleaner's newer local checklist.
+      if (!saver.isDirty() && saver.revision() === startedAtRevision) {
+        setChecklist(j.checklist ?? { rooms: [] });
+      }
+      setPhotos(j.photos ?? []);
+    } catch {
+      setError("load_failed");
+    }
+  }, [ct, searchParams, saver]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const saveChecklist = useCallback(
     (next: Checklist) => {
       setChecklist(next);
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => {
-        setSaveState("saving");
-        void post({ action: "checklist", checklist: next })
-          .then((r) => setSaveState(r.ok ? "saved" : "failed"))
-          .catch(() => setSaveState("failed"));
-      }, 600);
+      saver.schedule(next);
     },
-    [post],
+    [saver],
   );
 
-  const retrySave = () => {
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
-    setSaveState("saving");
-    void post({ action: "checklist", checklist })
-      .then((r) => setSaveState(r.ok ? "saved" : "failed"))
-      .catch(() => setSaveState("failed"));
-  };
+  const retrySave = () => { void saver.flush(); };
 
   const seenFiles = useRef<Set<string>>(new Set());
 
   const uploadPhoto = async (room: string, kind: "after" | "before", file: File) => {
+    if (photoBlocked(data?.visit.no_photo_zones, room)) return;
     const tempId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const signature = `${room}|${kind}|${file.name}|${file.size}|${file.lastModified}`;
     if (seenFiles.current.has(signature)) {
@@ -149,6 +146,7 @@ const Cleaner = () => {
     try {
       const blob = await convertToJpeg(file);
       const sign = await post({ action: "photo_sign", room, kind });
+      if (sign.error === "photo_not_allowed") throw new Error("The client asked for no photos in this room. Use the reason field instead.");
       if (!sign.ok || typeof sign["upload_url"] !== "string" || typeof sign["storage_path"] !== "string") {
         throw new Error("Couldn't start the upload. Check your connection and retry.");
       }
@@ -165,6 +163,7 @@ const Cleaner = () => {
         storage_path: sign["storage_path"],
       });
       if (!reg.ok) {
+        if (reg.error === "photo_not_allowed") throw new Error("The client asked for no photos in this room. Use the reason field instead.");
         if (reg.error === "invalid_photo_file") {
           throw new Error("That file isn't a usable photo (JPG/PNG/HEIC, up to 15 MB). Please pick another one.");
         }
@@ -227,14 +226,9 @@ const Cleaner = () => {
     try {
       // Flush the debounced checklist save first, so the submitted report
       // contains the latest edits (no debounce/autosave race).
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-        const saved = await post({ action: "checklist", checklist });
-        if (!saved.ok) {
-          setSubmitError("Couldn't save your latest checklist edits — please try again.");
-          return;
-        }
+      if (!await saver.flush()) {
+        setSubmitError("Couldn't save your latest checklist edits — please try again.");
+        return;
       }
       const r = await post({ action: "submit", checklist });
       if (r.ok) {
@@ -483,16 +477,18 @@ const Cleaner = () => {
           checklist.rooms.map((room, roomIdx) => {
             const roomPhotos = photos.filter((p) => p.room === room.name);
             const afterCount = roomPhotos.filter((p) => p.kind === "after").length;
-            const noPhotoHere = (v.no_photo_zones ?? "").split(",").map((z) => z.trim()).includes(room.name);
+            const noPhotoHere = photoBlocked(v.no_photo_zones, room.name);
             return (
               <details key={room.name} open={roomIdx === 0} className="rounded-xl border border-border bg-card p-4 mt-4">
-                <summary className="flex items-center justify-between cursor-pointer list-none">
+                <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer list-none">
                   <span className="font-heading text-xl font-bold">{room.name}</span>
-                  <span className="flex items-center gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
                     {afterCount > 0 ? (
                       <span className="text-[11px] bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">After photo ✓</span>
                     ) : room.skip_reason ? (
                       <span className="text-[11px] bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Skipped — reason given</span>
+                    ) : noPhotoHere ? (
+                      <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">No photos — add a reason</span>
                     ) : (
                       <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Needs an after photo</span>
                     )}
@@ -504,7 +500,7 @@ const Cleaner = () => {
                 )}
                 <div className="space-y-2 mb-3 mt-2">
                   {room.items.map((item, idx) => (
-                    <label key={idx} className="flex items-start gap-3 text-sm cursor-pointer">
+                    <label key={idx} className="flex min-h-[44px] items-center gap-3 text-sm cursor-pointer">
                       <input
                         type="checkbox"
                         className="mt-0.5 h-5 w-5 accent-primary"
@@ -538,7 +534,7 @@ const Cleaner = () => {
                       <button
                         type="button"
                         aria-label="Remove photo"
-                        className="absolute right-1 top-1 bg-black/60 text-white rounded p-1"
+                        className="absolute right-1 top-1 flex min-h-[44px] min-w-[44px] items-center justify-center bg-black/60 text-white rounded p-1"
                         onClick={() => void deletePhoto(p)}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -559,19 +555,19 @@ const Cleaner = () => {
                     <div key={tempId} className="mb-2 flex items-start gap-2">
                       <p className="text-sm text-destructive flex-1" role="alert">{u.error}</p>
                       {u.file && (
-                        <button type="button" className="text-sm underline shrink-0" onClick={() => retryUpload(tempId)}>
+                        <button type="button" className="min-h-[44px] px-2 text-sm underline shrink-0" onClick={() => retryUpload(tempId)}>
                           Retry
                         </button>
                       )}
-                      <button type="button" className="text-sm text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
+                      <button type="button" className="min-h-[44px] px-2 text-sm text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
                         Dismiss
                       </button>
                     </div>
                   ))}
 
-                <div className="flex gap-2">
+                {!noPhotoHere && <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="flex-1">
-                    <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take BEFORE photo
                     </span>
                     <input
@@ -579,7 +575,7 @@ const Cleaner = () => {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
-                      disabled={busy}
+                      disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) void uploadPhoto(room.name, "before", f);
@@ -588,7 +584,7 @@ const Cleaner = () => {
                     />
                   </label>
                   <label className="flex-1">
-                    <span className="flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-sm font-medium cursor-pointer">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-sm font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take AFTER photo
                     </span>
                     <input
@@ -596,7 +592,7 @@ const Cleaner = () => {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
-                      disabled={busy}
+                      disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) void uploadPhoto(room.name, "after", f);
@@ -604,8 +600,8 @@ const Cleaner = () => {
                       }}
                     />
                   </label>
-                  <label className="flex-1">
-                    <span className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                  <label className="col-span-2 sm:col-span-1">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
                       <ImagePlus className="w-4 h-4" /> Gallery (after)
                     </span>
                     <input
@@ -613,7 +609,7 @@ const Cleaner = () => {
                       accept="image/*"
                       multiple
                       className="hidden"
-                      disabled={busy}
+                      disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const files = Array.from(e.target.files ?? []);
                         for (const f of files) void uploadPhoto(room.name, "after", f);
@@ -621,7 +617,7 @@ const Cleaner = () => {
                       }}
                     />
                   </label>
-                </div>
+                </div>}
 
                 {afterCount === 0 && (
                   <div className="mt-3">

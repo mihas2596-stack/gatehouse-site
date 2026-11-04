@@ -3,6 +3,8 @@ import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
+import { photoBlocked } from "@/lib/photoPolicy";
+import { cleanerJobMessage } from "@/lib/cleanerMessage";
 import {
   attentionItems,
   nextActionFor,
@@ -24,6 +26,7 @@ type Visit = {
   window: string | null;
   address: string | null;
   access_notes: string | null;
+  no_photo_zones?: string | null;
   amount_cents: number | null;
   status: string;
   report_status: string;
@@ -139,6 +142,7 @@ const EVENT_LABELS: Record<string, string> = {
 // Detail keys that must never render in Activity (defense in depth —
 // events should not carry them, but the panel never displays them).
 const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
+type OwnerFilter = "attention" | "upcoming" | "completed" | "cancelled" | "all";
 
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
@@ -174,6 +178,7 @@ const Owner = () => {
   const [returnNote, setReturnNote] = useState("");
   const [issueReason, setIssueReason] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState<OwnerFilter>("attention");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
   const [acting, setActing] = useState("");
@@ -343,6 +348,7 @@ const Owner = () => {
       setManualCopy(null);
       setPublishMsg("");
       setReturnNote("");
+      setIssueReason("");
       setScheduleEditing(false);
       setAltDate("");
       setAssignCleanerId("");
@@ -358,6 +364,7 @@ const Owner = () => {
     try {
       const r = await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
+      if (selectedIdRef.current !== v.id) return;
       if (j.ok && j.visit) {
         setSelected(j.visit);
         setPhotos(j.photos ?? []);
@@ -375,9 +382,10 @@ const Owner = () => {
       // (ops carries the detail fields). Reading ops.state always yielded
       // undefined, so the Stripe line never updated.
       const sj = (await sr.json()) as { ok: boolean; state?: string };
+      if (selectedIdRef.current !== v.id) return;
       if (sj.ok && sj.state) setStripeState(sj.state);
     } catch {
-      setActionMsg("Couldn't load the visit details.");
+      if (selectedIdRef.current === v.id) setActionMsg("Couldn't load the visit details.");
     }
   };
 
@@ -395,10 +403,12 @@ const Owner = () => {
   // unknown outcome the panel re-reads state before any retry, so a
   // repeat cannot create a second action.
   const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void) => {
+    const actionVisitId = selectedIdRef.current;
     setActing(label);
     setActionMsg(`${label}: working…`);
     try {
       const j = await act(payload);
+      if (selectedIdRef.current !== actionVisitId) { void loadList(); return; }
       if (j.ok) {
         setActionMsg(`${label}: done.`);
         after?.(j);
@@ -408,9 +418,14 @@ const Owner = () => {
           if (fresh) void openVisit(fresh);
         }
       } else {
-        setActionMsg(`${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+        setActionMsg(j["issue_blocked"] === true
+          ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
+          : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+        void loadList();
+        if (selected) void openVisit(selected);
       }
     } catch {
+      if (selectedIdRef.current !== actionVisitId) return;
       setActionMsg(`${label}: couldn't reach the server — the action may or may not have run. Reloading the visit before you retry.`);
       void loadList();
       if (selected) {
@@ -425,6 +440,10 @@ const Owner = () => {
 
   const ownerUpload = async (files: FileList | null) => {
     if (!selected || !files || files.length === 0) return;
+    if (photoBlocked(selected.no_photo_zones, ownerRoom)) {
+      setActionMsg("The client asked not to photograph this room. Add a skip reason instead.");
+      return;
+    }
     setActing("Owner upload");
     setActionMsg("Owner upload: working…");
     try {
@@ -481,9 +500,7 @@ const Owner = () => {
 
   const cleanerMessage = (url: string): string => {
     if (!selected) return url;
-    const when = `${fmtVisitDate(selected.visit_date)}${selected.window ? `, ${selected.window}` : ""}`;
-    const where = selected.address ? ` at ${selected.address}` : "";
-    return `Hi! Here is your Gatehouse job link for ${when}${where}:\n${url}\n\nOpen it on your phone — no app needed. For each room: take a “before” photo before you start and an “after” photo when you finish, check off the list, then submit the report. If a room can't be photographed, write the reason in the room's field. Thank you!`;
+    return cleanerJobMessage(selected, url);
   };
 
   const openShare = (kind: "wa" | "sms", text: string, phone: string | null) => {
@@ -793,8 +810,6 @@ const Owner = () => {
   // Task-centered filters — one list, no duplicated queues. "Needs
   // attention" is the shared attentionItems rule (plus bounced reports,
   // which need a re-send); "Upcoming" is the active pipeline.
-  type OwnerFilter = "attention" | "upcoming" | "completed" | "cancelled" | "all";
-  const [filter, setFilter] = useState<OwnerFilter>("attention");
   const isAttention = (v: Visit): boolean => attentionItems(v).length > 0 || v.report_bounced;
   const filterCounts: Record<OwnerFilter, number> = {
     attention: listedVisits.filter(isAttention).length,
@@ -1003,7 +1018,7 @@ const Owner = () => {
 
           return (
             <div>
-              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; setSelected(null); }}>
+              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; selectedIdRef.current = null; setSelected(null); }}>
                 ← Back to visits
               </button>
               {/* Action feedback lives here, at the top of the detail —
@@ -1040,8 +1055,8 @@ const Owner = () => {
                             setActionMsg(j["already_open"] === true
                               ? "Issue was already open — nothing changed, no second email sent."
                               : j["email_sent"] === true
-                                ? "Issue opened — automatic charging is blocked for this visit, and the client got a confirmation email."
-                                : "Issue opened — automatic charging is blocked for this visit, but the confirmation email was NOT delivered — contact the client manually.");
+                                ? "Issue opened — automatic charging is blocked for this visit. The confirmation email was accepted for sending; delivery is not yet confirmed."
+                                : "Issue opened — automatic charging is blocked for this visit, but the confirmation email could not be sent — contact the client manually.");
                           });
                         }}
                       >
@@ -1405,7 +1420,7 @@ const Owner = () => {
                         <Button variant="outline" onClick={() => void runAction("Propose another time", { action: "decline_date", booking_id: v.booking_id, alt_dates: altDate ? [altDate] : [] }, (j) => {
                           setActionMsg(j["email_sent"] === true
                             ? "Propose another time: done. The client was emailed the alternative date."
-                            : "Propose another time: saved, but the email was NOT delivered — contact the client manually.");
+                            : "Propose another time: saved, but the email could not be sent — contact the client manually.");
                         })}>
                           Propose another time
                         </Button>
@@ -1516,7 +1531,7 @@ const Owner = () => {
                             setPublishMsg(
                               j["email_sent"] === true
                                 ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
-                                : "Published and saved, but the customer email was NOT delivered — the review period is paused. Check the report email status and publish again to retry.",
+                                : "Published and saved, but the customer email could not be sent — the review period is paused. Check the report email status and publish again to retry.",
                             );
                           });
                         }}
@@ -1577,6 +1592,7 @@ const Owner = () => {
                   <summary className="text-sm underline text-muted-foreground cursor-pointer">More</summary>
                   <div className="mt-3 border-t border-border pt-3">
                     <p className="text-sm font-medium mb-2">Upload photos on behalf of cleaner</p>
+                    {v.no_photo_zones && <p className="text-sm text-destructive mb-2">Do not photograph: {v.no_photo_zones}</p>}
                     <div className="flex flex-wrap gap-2 items-center">
                       <select className="border border-border rounded-lg px-2 py-2 bg-background text-sm" value={ownerRoom} onChange={(e) => setOwnerRoom(e.target.value)}>
                         {[...rooms.map((r) => r.name), "Other areas"].map((r) => (
@@ -1594,6 +1610,7 @@ const Owner = () => {
                           accept="image/*"
                           multiple
                           className="hidden"
+                          disabled={acting !== "" || photoBlocked(v.no_photo_zones, ownerRoom)}
                           onChange={(e) => {
                             void ownerUpload(e.target.files);
                             e.target.value = "";
