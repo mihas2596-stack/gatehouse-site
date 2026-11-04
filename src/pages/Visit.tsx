@@ -494,6 +494,8 @@ const Visit = () => {
   const fee = data?.cancel_fee_cents ?? 0;
   const manageable =
     data && ["awaiting_confirmation", "confirmed", "date_declined"].includes(data.state);
+  const cardChoiceNeeded = Boolean(data?.has_card && !data.card_confirmed
+    && (data.state === "awaiting_confirmation" || data.state === "confirmed"));
 
   const rows: Array<[string, string]> = [];
   if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
@@ -554,9 +556,11 @@ const Visit = () => {
         {!loading && data && data.state !== "invalid_link" && data.state !== "transient_error" && (
           <div>
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4 text-center">
-              {STATE_HEADLINE[data.state] ?? "Your visit"}
+              {cardChoiceNeeded && data.state === "awaiting_confirmation"
+                ? "Request received — confirm your card"
+                : STATE_HEADLINE[data.state] ?? "Your visit"}
             </h1>
-            {data.has_card && !data.card_confirmed && (data.state === "awaiting_confirmation" || data.state === "confirmed") && (
+            {cardChoiceNeeded && (
               <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mb-6 text-left">
                 <p className="font-semibold mb-1">Use your card on file for this booking?</p>
                 <p className="text-sm text-foreground mb-3">
@@ -592,7 +596,7 @@ const Visit = () => {
                 your card ($0 today). We confirm your date after that, within one business day.
               </p>
             )}
-            {data.state === "awaiting_confirmation" && (
+            {data.state === "awaiting_confirmation" && !cardChoiceNeeded && (
               <p className="text-lg text-foreground mb-6 text-center">
                 Your card is saved and nothing is charged. Your requested date is{" "}
                 <strong>not confirmed yet</strong> — we check it and reply within one business day.
@@ -620,7 +624,7 @@ const Visit = () => {
                 Your saved card stays on file for future bookings — email us any time to have it removed.
               </p>
             )}
-            {data.state === "awaiting_confirmation" && (
+            {data.state === "awaiting_confirmation" && !cardChoiceNeeded && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <p className="text-foreground font-semibold mb-1">Next step is ours.</p>
                 <p className="text-sm text-muted-foreground">
