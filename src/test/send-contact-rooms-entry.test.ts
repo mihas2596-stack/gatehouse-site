@@ -99,6 +99,21 @@ const roomNames = () =>
   ((inserts[0]?.["checklist"] as { rooms?: { name: string }[] } | undefined)?.rooms ?? []).map((rm) => rm.name);
 
 describe("send-contact rooms and entry", () => {
+  it("customer email shows readable request details and the complete payment rule", async () => {
+    const r = await call(base());
+    expect(r.code).toBe(200);
+    const email = (resendCalls as Row[]).find((m) => JSON.stringify(m.to).includes("test@example.com"))!;
+    expect(email).toBeDefined();
+    expect(email.text).toContain("Friday, January 15, 2027");
+    expect(email.text).toContain("11 AM–2 PM ET");
+    expect(email.text).toContain("Frequency: Every other week");
+    expect(email.html).toContain("<br>Arrival preference:");
+    expect(email.html).toContain("24 hours after we send the report");
+    expect(email.html).toContain("closing the issue does not restart it");
+    expect(email.html).toContain("Save my card — $0 today");
+    expect(String(email.html).match(/<table /g)).toHaveLength(1);
+  });
+
   it("generates one room per bedroom/bathroom plus extra zones, and stores the entry choice", async () => {
     const r = await call(base());
     expect(r.code).toBe(200);
