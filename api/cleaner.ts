@@ -29,6 +29,8 @@ import {
   tokenHashEquals,
 } from "./_db.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
+import { photoBlocked } from "./_photo_policy.js";
+import { reportEmail } from "./_email_copy.js";
 import { cleanerEntryView, deleteAccess, loadAccess } from "./_visit_access.js";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 
@@ -63,6 +65,7 @@ type VisitRow = {
   report_status: string;
   report_bounced?: boolean | null;
   issue_open?: boolean | null;
+  issue_ever?: boolean | null;
   amount_cents?: number | null;
   client_email?: string | null;
   entry_method?: string | null; entry_detail?: string | null; entry_notes?: string | null;
@@ -341,8 +344,6 @@ function encryptBookingPayload(secret: string, payload: BookingPayload): string 
   return `v2.${Buffer.concat([iv, tag, ct]).toString("base64url")}`;
 }
 
-const escHtml = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Publish a finished report straight to the client: the row moves to
  * report_sent, the 24h Terms clock starts from the publish time, and
@@ -422,12 +423,17 @@ async function publishReportToClient(
       ts: Math.floor(Date.now() / 1000),
     });
     const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
-    const priceLine = ` Your card is charged $${(amountCents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`;
     const deadline = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       weekday: "short", month: "short", day: "numeric",
       hour: "numeric", minute: "2-digit", timeZoneName: "short",
     }).format(new Date(Date.parse(sentAt) + 24 * 3600 * 1000));
+    const renderedReportEmail = reportEmail({
+      firstName, link,
+      amount: `$${(amountCents / 100).toFixed(2).replace(/\.00$/, "")}`,
+      deadline, autoChargeBlocked: visit.issue_ever === true || visit.issue_open === true ||
+        meta["gh_issue_ever"] === "1" || (await dbSelect<{ id: number }>("gh_events", `visit_id=eq.${visit.id}&event=eq.issue_opened&limit=1`)).length > 0,
+    });
     try {
       const resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -440,19 +446,8 @@ async function publishReportToClient(
           to: [custEmail],
           reply_to: "hello@gatehousehomecleaning.com",
           subject: "Your cleaning report is ready",
-          text:
-            `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
-            `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
-            `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
-          html:
-            `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
-            `<p>Hi ${escHtml(firstName)},</p>` +
-            `<p><strong>Your cleaning is done — your photo report is ready.</strong></p>` +
-            `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.</p>` +
-            `<p>If we don't hear from you by <strong>${escHtml(deadline)}</strong>, your card is charged automatically, as agreed in the Terms.</p>` +
-            `<p><a href="${escHtml(link)}" style="display:inline-block;background:#1a56db;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">View report</a></p>` +
-            `<p style="font-size:13px;color:#555;">If the button doesn't work, use the link in the plain-text version of this email.</p>` +
-            `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+          text: renderedReportEmail.text,
+          html: renderedReportEmail.html,
         }),
         signal: AbortSignal.timeout(15000),
       });
@@ -570,11 +565,12 @@ export default async function handler(req: Req, res: Res) {
       if (!checklist) return json(400, { ok: false, error: "invalid_checklist" });
       // Keep the server-stamped submission time out of cleaner control.
       if (visit.checklist?.submitted_at) checklist.submitted_at = visit.checklist.submitted_at;
-      const ok = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
+      const changed = await dbUpdateCount("gh_visits", `id=eq.${visit.id}&report_status=in.(none,draft,returned)`, {
         checklist,
         report_status: visit.report_status === "none" ? "draft" : visit.report_status,
       });
-      if (!ok) return json(502, { ok: false, error: "db_error" });
+      if (changed < 0) return json(502, { ok: false, error: "db_error" });
+      if (changed === 0) return json(409, { ok: false, error: "report_locked" });
       return json(200, { ok: true });
     }
 
@@ -585,6 +581,7 @@ export default async function handler(req: Req, res: Res) {
       if (!room || (!rooms.includes(room) && room !== "Other areas")) {
         return json(400, { ok: false, error: "invalid_room" });
       }
+      if (photoBlocked(visit.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
       const objectPath = `visits/${visit.id}/${roomSlug(room)}/${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}.jpg`;
@@ -600,6 +597,7 @@ export default async function handler(req: Req, res: Res) {
       if (!room || !storagePath.startsWith(`visits/${visit.id}/`)) {
         return json(400, { ok: false, error: "invalid_photo" });
       }
+      if (photoBlocked(visit.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
       // Server-side validation of the uploaded bytes (type + size): the
       // client uploads straight to Storage, so this is the first point
       // the server sees the file. Anything else is removed again.
