@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
 import { mintOwnerLoginToken } from "./_owner_auth.js";
+import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -503,12 +504,9 @@ export function emailButton(href: string, label: string): string {
 }
 
 // Canonical payment explanation (Terms 5.2 model): viewing photos is never
-// required for the automatic charge; an unresolved problem pauses it.
+// required for automatic charging; any reported issue permanently blocks it.
 export function paymentExplainer(amount: string): string {
-  // Custom-quote bookings have no amount yet — never print a placeholder
-  // dash where the price belongs.
-  const amt = amount && amount !== "—" ? `payment of ${amount}` : "the agreed payment";
-  return `$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve ${amt}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.`;
+  return paymentEmailCopy(amount);
 }
 
 async function sendEmail(apiKey: string, payload: Record<string, unknown>, idempotencyKey?: string) {
@@ -881,7 +879,7 @@ export default async function handler(req: Req, res: Res) {
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
     // Owner order 2026-10-24: every request email carries a one-click owner
-    // panel login (ol token, 30 min) so the cabinet reaches the owner inbox
+    // panel login (ol token, 24h) so the cabinet reaches the owner inbox
     // the moment a client books — no key copy needed. If the link expired,
     // the /owner "Send login link" button issues a fresh one.
     const ownerLoginLink = isQuote && process.env["ADMIN_TOKEN"]
@@ -894,7 +892,7 @@ export default async function handler(req: Req, res: Res) {
         </div>
         ${isQuote && ownerLoginLink ? `
         <div style="background:#EEF6EE;border:1px solid #7FB069;border-radius:6px;padding:14px 18px;margin-bottom:18px;">
-          <p style="margin:0 0 10px;font-weight:bold;color:#2E5E2E;">Owner panel — one-click login (valid 30 minutes, no key needed)</p>
+          <p style="margin:0 0 10px;font-weight:bold;color:#2E5E2E;">Owner panel — one-click login (valid 24 hours, no key needed)</p>
           <a href="${ownerLoginLink}" style="display:inline-block;background:#7FB069;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;">Open owner panel</a>
         </div>` : ""}
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
@@ -954,12 +952,13 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
 
         // Parse "Professionally cleaned in last 3 months: Yes/No" from the message summary.
         const cleanedMatch = /Professionally cleaned in last 3 months:\s*(Yes|No)/i.exec(message || "");
-        const cleanedRecently = cleanedMatch ? cleanedMatch[1].toLowerCase() === "yes" : true;
+        const cleanedRecently = typeof parsed.data.cleaned_recently === "boolean"
+          ? parsed.data.cleaned_recently : cleanedMatch ? cleanedMatch[1].toLowerCase() === "yes" : true;
 
         // Home details and service label for the customer.
         const baths = bathrooms ? String(bathrooms).replace(/\.0$/, "") : "";
         const homeDetails = `${bedrooms || "?"} bed / ${baths || "?"} bath`;
-        const firstVisitDeep = service === "Standard" && !cleanedRecently;
+        const firstVisitDeep = (parsed.data.service_key === "standard" || service === "Standard") && !cleanedRecently;
         const serviceLabel = firstVisitDeep ? "First visit: Deep clean" : (service || "Standard");
         const deepPara = firstVisitDeep
           ? `\nBecause the home hasn't been professionally cleaned in the last 3 months, the first visit is a deep clean. Regular visits after that cost less.\n`
@@ -1012,7 +1011,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
           : "";
         const hasPrice = Boolean(serverFirst || price);
         const requestLines =
-          `Requested date: ${date || "flexible"}${time ? ` · ${time}` : ""}\nService: ${serviceLabel}\nHome: ${homeDetails} · ZIP ${zip || ""}\n\n${hasPrice
+          `Requested date: ${date ? emailDate(date) : "To be confirmed"}\nArrival preference: ${emailArrivalWindow(time || "flexible")}\nService: ${serviceLabel}\nFrequency: ${parsed.data.frequency === "onetime" ? "One-time" : "Every other week"}\nHome: ${homeDetails} · ZIP ${zip || ""}\n\n${hasPrice
             ? `Quoted price: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.`
             : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
         const explainer = paymentExplainer(priceDisplay);
@@ -1029,6 +1028,7 @@ Request received — your visit is not confirmed yet. We'll confirm your cleaner
 ${requestLines}
 ${testNote}${deepPara}
 One step left: confirm your saved card for THIS booking, or add a different card. A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.
+${scopeNote ? `\n${scopeNote}\n` : ""}
 
 Your visit page — confirm your card, see your status, your cleaner, reschedule or cancel:
 ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
@@ -1064,30 +1064,27 @@ Nick
 Gatehouse Home Cleaning
 
 hello@gatehousehomecleaning.com`;
-        const esc = escapeHtml;
-        const htmlBody = !isQuote ? undefined : cardOnFile ? `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">
-<p>Hi ${esc(firstName)},</p>
-<p><strong>Request received — your visit is not confirmed yet.</strong> We&apos;ll confirm your cleaner and arrival window by ${esc(deadline)}.</p>
-<p>${esc(requestLines).replace(/\\n/g, "<br>")}</p>
-${testNote ? `<p>${esc(testNote.trim())}</p>` : ""}
-<p><strong>One step left:</strong> confirm your saved card for this booking, or add a different card. A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.</p>
-${emailButton(visitUrl ?? "https://www.gatehousehomecleaning.com/visit", "View my visit")}
-<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>
-<p>${esc(explainer)}</p>
-<p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p>
-</div>` : `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">
-<p>Hi ${esc(firstName)},</p>
-<p><strong>Request received — your visit is not confirmed yet.</strong></p>
-<p><strong>Next step: save your card to continue.</strong> We never see your card number (Stripe handles it securely).</p>
-${emailButton(saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card", "Save your card — $0 today")}
-<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>
-<p>${esc(requestLines).replace(/\\n/g, "<br>")}</p>
-${testNote ? `<p>${esc(testNote.trim())}</p>` : ""}
-<p>We'll confirm your cleaner and arrival window by ${esc(deadline)}. Your final confirmation comes in a separate email.</p>
-${scopeNote ? `<p>${esc(scopeNote)}</p>` : ""}
-<p>${esc(explainer)}</p>
-<p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p>
-</div>`;
+        const htmlBody = !isQuote ? undefined : emailDocument({
+          firstName,
+          heading: "Request received — your visit is not confirmed yet",
+          paragraphs: [
+            cardOnFile
+              ? "Next step: choose your saved card for this booking, or add a different card. A card saved earlier is never used for a new booking without your say-so."
+              : "Next step: save your card through Stripe. We never see or store your full card number.",
+            requestLines,
+            testNote.trim(),
+            deepPara.trim(),
+            `We'll confirm your cleaner and arrival window by ${deadline}. Your final confirmation comes in a separate email.`,
+            scopeNote,
+            explainer,
+          ],
+          action: {
+            url: cardOnFile
+              ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
+              : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
+            label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
+          },
+        });
 
         const auto = await sendEmail(RESEND_API_KEY, {
           from: FROM_AUTO,
