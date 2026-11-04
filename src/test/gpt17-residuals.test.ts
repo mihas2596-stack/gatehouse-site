@@ -38,8 +38,12 @@ let photos: Row[];
 let customers: Cust[];
 let piCalls: Array<{ booking: string; version: string; amount: string; id: string; ok: boolean; idemKey?: string; pm?: string }>;
 let resendSubjects: string[];
+let resendBodies: Row[];
 let evSeq: number;
 let patchFail: boolean;
+let issuePatchFail: boolean;
+let issueEventFail: boolean;
+let publishBeforeChecklistWrite: boolean;
 
 function res(code: number, body: unknown) {
   return { ok: code >= 200 && code < 300, status: code, json: async () => body, text: async () => JSON.stringify(body) };
@@ -194,6 +198,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
   if (host === "api.resend.com") {
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
     resendSubjects.push(String(body.subject ?? ""));
+    resendBodies.push(body);
     return res(200, { id: `email_${resendSubjects.length}` });
   }
 
@@ -214,6 +219,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
     if (method === "POST") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
+        if (issueEventFail && body.event === "issue_opened") return res(500, { error: { message: "journal unavailable" } });
         evSeq += 1;
         const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
         evts.push(inserted);
@@ -231,6 +237,8 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       // must succeed first, so the test exercises a lost paid-write
       // (RA11) rather than a lost claim.
       if (patchFail && body.status === "paid") return res(500, { error: { message: "db down" } });
+      if (issuePatchFail && body.issue_open === true) return res(500, { error: { message: "db down" } });
+      if (publishBeforeChecklistWrite && body.checklist && body.report_status === "draft") rows[0].report_status = "sent";
       const matched = applyFilters(rows, u);
       for (const target of matched) Object.assign(target, body);
       const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -361,7 +369,7 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   rows = []; evts = []; photos = []; customers = [];
-  piCalls = []; resendSubjects = []; evSeq = 0; patchFail = false;
+  piCalls = []; resendSubjects = []; resendBodies = []; evSeq = 0; patchFail = false; issuePatchFail = false; issueEventFail = false; publishBeforeChecklistWrite = false;
   vi.stubGlobal("fetch", vi.fn(fetchMock));
 });
 
@@ -374,6 +382,91 @@ const PHOTOS = [
 ];
 
 describe("GPT-17 residuals", () => {
+  it.each(["cleaner", "owner"])("%s report email respects a past issue and the pinned visit amount", async (sender) => {
+    const ct = confirmedWorld();
+    rows[0]["issue_ever"] = true;
+    rows[0]["issue_open"] = false;
+    rows[0]["checklist"] = checklist();
+    // A newer price on a shared customer must never leak into this visit's email.
+    customers[0].metadata["gh_first_price_cents"] = "99900";
+    if (sender === "cleaner") {
+      await CL({ ct, action: "submit", checklist: checklist() });
+    } else {
+      rows[0]["report_status"] = "submitted";
+      await BA({ action: "send_report", booking_id: BID, photos: PHOTOS });
+    }
+    const email = resendBodies.find((body) => body.subject === "Your cleaning report is ready");
+    expect(email).toBeDefined();
+    expect(email?.text).toContain("charges your card $200 immediately");
+    expect(email?.text).not.toContain("$999");
+    expect(email?.text).toContain("Automatic charging is blocked for this visit");
+    expect(email?.text).not.toContain("charged automatically 24 hours");
+    expect(email?.text).not.toContain("Review by");
+  });
+
+  it("a paid visit cannot be called paused when shared customer metadata is stale", async () => {
+    sentWorld(); rows[0].status = "paid";
+    const r = await BA({ action: "dispute", booking_id: BID, reason: "After payment" });
+    expect(r.code).toBe(409);
+    expect(r.body.error).toBe("already_paid");
+    expect(resendSubjects).toHaveLength(0);
+    expect(rows[0].issue_open).toBe(false);
+  });
+  it("a delayed checklist request cannot reopen a report published while the request was in flight", async () => {
+    const ct = confirmedWorld(); rows[0].report_status = "draft"; rows[0].checklist = checklist();
+    publishBeforeChecklistWrite = true;
+    const r = await CL({ ct, action: "checklist", checklist: checklist() });
+    expect(r.code).toBe(409);
+    expect(r.body.error).toBe("report_locked");
+    expect(rows[0].report_status).toBe("sent");
+  });
+  it("owner complaint fails closed when its durable payment block cannot be stored", async () => {
+    sentWorld(); issuePatchFail = true;
+    const r = await BA({ action: "dispute", booking_id: BID, reason: "Missed shelf" });
+    expect(r.code).toBe(502);
+    expect(r.body.ok).toBe(false);
+    expect(rows[0].issue_ever).toBe(false);
+    expect(evts.filter((e) => e.event === "issue_opened")).toHaveLength(0);
+    expect(resendSubjects).toHaveLength(0);
+  });
+
+  it("keeps the permanent block if the complaint journal fails, without falsely emailing success", async () => {
+    sentWorld(); issueEventFail = true;
+    const r = await BA({ action: "dispute", booking_id: BID, reason: "Missed shelf" });
+    expect(r.code).toBe(502);
+    expect(r.body.issue_blocked).toBe(true);
+    expect(rows[0].issue_open).toBe(true);
+    expect(rows[0].issue_ever).toBe(true);
+    expect(resendSubjects).toHaveLength(0);
+  });
+
+  it("two concurrent owner complaints create one journal event and one confirmation email", async () => {
+    sentWorld();
+    const results = await Promise.all([
+      BA({ action: "dispute", booking_id: BID, reason: "Missed shelf" }),
+      BA({ action: "dispute", booking_id: BID, reason: "Missed shelf" }),
+    ]);
+    expect(results.map((r) => r.code)).toEqual([200, 200]);
+    expect(results.filter((r) => r.body.already_open === true)).toHaveLength(1);
+    expect(rows[0].issue_ever).toBe(true);
+    expect(evts.filter((e) => e.event === "issue_opened")).toHaveLength(1);
+    expect(resendSubjects).toHaveLength(1);
+  });
+
+  it.each(["photo_sign", "photo_register"])("cleaner %s rejects a client-excluded room", async (action) => {
+    const ct = confirmedWorld(); rows[0].no_photo_zones = "  kitchen, Bedrooms "; rows[0].checklist = checklist();
+    const r = await CL({ ct, action, room: "Kitchen", storage_path: `visits/${ROW_ID}/kitchen/test.jpg` });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("photo_not_allowed");
+  });
+
+  it.each(["owner_photo_sign", "owner_photo_register"])("owner %s cannot bypass a client-excluded room", async (action) => {
+    confirmedWorld(); rows[0].no_photo_zones = "Kitchen";
+    const r = await BA({ action, booking_id: BID, room: "Kitchen", storage_path: `visits/${ROW_ID}/kitchen/test.jpg` });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("photo_not_allowed");
+  });
+
   it("P06: approve on a cancelled visit is rejected, no charge", async () => {
     sentWorld();
     rows[0]["status"] = "cancelled";
