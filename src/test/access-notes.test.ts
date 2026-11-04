@@ -105,8 +105,8 @@ describe("entry instructions separation", () => {
     const emails = callsTo("api.resend.com").map((c) => JSON.parse(String(c[1]?.body)) as Record<string, unknown>);
     const customer = emails.find((e) => String(e.subject).includes("Request received"));
     expect(customer).toBeTruthy();
-    expect(String(customer?.html)).toContain("Save your card — $0 today");
-    expect(String(customer?.text)).toContain("charged automatically after the stated 24-hour review period");
+    expect(String(customer?.html)).toContain("Save my card — $0 today");
+    expect(String(customer?.text)).toContain("charged automatically 24 hours after we send the report");
     expect(String(customer?.text)).not.toContain("once you've seen the photo report");
     expect(String(customer?.text)).toContain("at 6:00 PM ET");
   });
@@ -114,8 +114,8 @@ describe("entry instructions separation", () => {
 
 describe("payment explainer", () => {
   it("never prints a placeholder dash as the amount", () => {
-    expect(paymentExplainer("—")).toContain("approve the agreed payment");
-    expect(paymentExplainer("")).toContain("approve the agreed payment");
-    expect(paymentExplainer("$149")).toContain("approve payment of $149");
+    expect(paymentExplainer("—")).toContain("charges your card the agreed visit amount immediately");
+    expect(paymentExplainer("")).toContain("charges your card the agreed visit amount immediately");
+    expect(paymentExplainer("$149")).toContain("charges your card $149 immediately");
   });
 });
