@@ -47,7 +47,7 @@ type VisitData = {
   access_notes?: string;
   entry?: { available: boolean; method: string | null; note: string; has_secret: boolean; expires_at: string | null } | null;
   entry_available?: boolean;
-  entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
+  entry_choice?: { method: EntryMethodChoice | null; detail: EntryDetailChoice | null; notes: string | null } | null;
   no_photo_zones?: string;
   has_card?: boolean;
   card_brand?: string;
