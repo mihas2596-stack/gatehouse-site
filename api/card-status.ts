@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
+import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
 // one email, so its metadata can describe a DIFFERENT booking than the one
@@ -320,12 +321,7 @@ function confirmDeadlineLabel(from = new Date()): string {
   return "the end of the next business day";
 }
 
-function emailButton(href: string, label: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0;"><tr><td style="background:#8B5E3C;border-radius:8px;"><a href="${href}" style="display:inline-block;padding:13px 26px;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;text-decoration:none;">${label}</a></td></tr></table>`;
-}
 
-const escHtml = (v: string): string =>
-  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // One-time "card saved" email. Guarded by gh_card_email_sent on the Stripe
 // customer: a claim is written before sending and cleared on failure, so
@@ -404,28 +400,15 @@ async function maybeSendCardSavedEmail(
     visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
   }
   const deadline = confirmDeadlineLabel();
-  const explainer = price
-    ? `$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment of ${price}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.`
-    : "$0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.";
-  const text =
-    `Hi ${firstName},\n\n` +
-    `Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${deadline}.\n\n` +
-    `Your request: ${service}${price ? ` \u2014 first visit ${price}` : ""}${date ? ` \u00b7 requested date ${date}` : ""}.\n\n` +
-    `${explainer}\n\n` +
-    "To report a problem after the cleaning, open the report link and tap \"Report an issue\" — the charge stays paused while we review it with you.\n\n" +
-    "Your visit page \u2014 status, your cleaner, reschedule or cancel:\n" +
-    `${visitUrl}\n\n` +
-    "Nick\n\nGatehouse Home Cleaning\n\nhello@gatehousehomecleaning.com";
-  const html =
-    `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
-    `<p>Hi ${escHtml(firstName)},</p>` +
-    `<p><strong>Your card is saved. $0 was charged today. Your requested visit is awaiting confirmation. We'll confirm your cleaner and arrival window by ${escHtml(deadline)}.</strong></p>` +
-    `<p>Your request: ${escHtml(service)}${price ? ` \u2014 first visit ${escHtml(price)}` : ""}${date ? ` \u00b7 requested date ${escHtml(date)}` : ""}.</p>` +
-    `<p>${escHtml(explainer)}</p>` +
-    `<p>To report a problem after the cleaning, open the report link and tap "Report an issue" — the charge stays paused while we review it with you.</p>` +
-    emailButton(visitUrl, "View my visit") +
-    `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
-    `<p>Nick<br>Gatehouse Home Cleaning<br>hello@gatehousehomecleaning.com</p></div>`;
+  const explainer = paymentEmailCopy(price);
+  const requestSummary = `Service: ${service}${price ? `\nFirst visit: ${price}` : ""}${date ? `\nRequested date: ${emailDate(date)}` : ""}`;
+  const nextStep = `Your requested visit is not confirmed yet. Next step is ours: we'll confirm your cleaner and arrival window by ${deadline}.`;
+  const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${nextStep}\n\n${requestSummary}\n\n${explainer}\n\nView my visit:\n${visitUrl}\n\nQuestions? Reply to this email.\n\nNick\nGatehouse Home Cleaning\n`;
+  const html = emailDocument({
+    firstName, heading: "Card saved — $0 charged today",
+    paragraphs: [nextStep, requestSummary, explainer],
+    action: { url: visitUrl, label: "View my visit" },
+  });
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
