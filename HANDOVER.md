@@ -14,7 +14,52 @@ No secrets, no real personal data, no private tokens in this file.
   scratch files). Never commit a whole worktree. Ship only an explicit list
   of paths, and verify `git status` shows exactly those files.
 
-## Verified version (this handover)
+## QA fix batch — 03.11.2026
+
+- Based on `3c43c83e`; the previous production verification is recorded
+  below. This section describes source changes, not proof of deployment.
+  Confirm the current main commit's Vercel status and live probes before
+  calling this batch deployed.
+- Owner login hook order fixed; visit/detail/action responses cannot replace
+  a newly selected customer, and complaint drafts reset between customers.
+- Cleaner checklist writes are serialized. Finish waits for them; a photo
+  refresh does not overwrite unsaved edits, and a late checklist write
+  cannot reopen a published report. The saving status includes the debounce.
+- Client-excluded room uploads are blocked in the cleaner and owner editors
+  and in both upload APIs. Matching ignores case and surrounding whitespace;
+  free-text instructions still require the cleaner's judgment.
+- On phones, cleaner camera controls use two columns with a separate gallery
+  row; restricted rooms omit camera controls. Room badges wrap, checklist
+  labels and small/icon buttons have 44px touch targets.
+- Owner-registered complaints use a conditional durable row write before
+  success notifications. Database failures do not email false success;
+  journal failures retain the permanent payment block. Concurrent owner
+  complaints send one confirmation. A paid row is never called paused.
+- Terms §5.2, §6 and §7 aligned with the existing payment/cancel/report rules
+  after the owner's approval. No price, payment amount or recurrence policy
+  changed. Existing owner login lifetime remains 24 hours; the quote email
+  and expiry test now describe that lifetime accurately.
+- Live QA created one clearly named `QA Full Journey — DO NOT DISPATCH`
+  request. Client and owner emails arrived. Stripe checkout was LIVE, so no
+  real card was saved/selected and no charge or paid end-to-end pass was run.
+  Staging with Stripe test mode remains necessary.
+- The live read-only check found a card-choice UX contradiction: an old card
+  was available, not yet confirmed for this booking, but /visit also said
+  "Next step is ours." The client page now makes the customer's card choice
+  the next action and only shows the owner-waiting message after that choice.
+- Customer emails use readable US dates, Atlanta arrival windows, one primary
+  button, and separated request details. Payment text states immediate approval
+  charging and the 24h clock from report sending. A reissued report after any
+  issue does not announce an automatic charge. Manual cleaner job messages
+  explain entry, no-photo rooms, saved changes and the Finish action. No new
+  automatic cleaner email channel was added. API photo restrictions import a
+  pure api-local helper so Vercel functions do not depend on src/ imports.
+- Local verification: 60 test files / 1019 tests pass, TypeScript check,
+  production build, prerender of 18 pages and the generated HTML checks pass.
+  The owner explicitly authorized publishing this batch and email fixes.
+  Live deployment and a paid end-to-end run are not claimed here.
+
+## Previously verified production version
 
 - Deployed and live-verified commit on `main`: `e72ae94c` (03.11.2026) —
   round-2 mobile client/cleaner path fixes (H/Q/A/C/K) + owner ops audit
@@ -200,11 +245,9 @@ No secrets, no real personal data, no private tokens in this file.
    (28.10); verification now rests on references + the first paid booking.
 3. No insurance, no EIN yet; the Whitlock quote draft (~$18k/yr contractor
    payouts) is unsent — the owner fills in tenure and sends it himself.
-4. Terms package pending the owner's separate yes: §5.2 final wording
-   (auto-charge "never resumes on its own"), §6 cancel via visit page
-   (currently says email only; FAQ already says visit page or email), §7
-   "or tap Report an issue on your report page" + 72h counted from the
-   complaint. Do not edit Terms without that yes.
+4. Terms wording updated in the 03.11.2026 QA fix batch with the owner's
+   approval: §5.2 never resumes automatically after an issue, §6 visit-page
+   cancellation/date requests, §7 report-page issues + 72h from the issue.
 5. Recurring automation missing (see above) — owner decision needed.
 6. Email-issue human latency (see above).
 7. P03: Termly consent banner not verified live — only from the owner's
@@ -242,6 +285,6 @@ No secrets, no real personal data, no private tokens in this file.
 
 - See "Verified version" above: the round-2 + audit batch is deployed as
   `e72ae94c` and live-verified per "Deploy and rollback".
-- Standing owner decisions still waiting (not to be assumed): Terms
-  package, test-prices "test complete", Chenika inactive marking + the
+- Standing owner decisions still waiting (not to be assumed):
+  test-prices "test complete", Chenika inactive marking + the
   17.10 Instagram carousel fate, live dispute-email test, staging test keys.
