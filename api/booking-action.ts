@@ -32,6 +32,8 @@ import {
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
+import { photoBlocked } from "./_photo_policy.js";
+import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy, reportEmail } from "./_email_copy.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
@@ -754,6 +756,7 @@ type BookingRow = {
   report_bounced: boolean | null; report_status: string | null;
   visit_date: string | null; window: string | null;
   service?: string | null;
+  no_photo_zones?: string | null;
   // Synced on every issue transition (client issue, dispute, resolve,
   // resend, client approval); PostgREST returns them even though the
   // lite type used to omit them.
@@ -944,9 +947,6 @@ async function sendConfirmationEmail(args: {
     : "";
   const serviceLine = args.service ? `\nService: ${args.service}.` : "";
   const cleanerLine = args.cleaner ? `\nCleaner: ${args.cleaner}.` : "";
-  const amountLine = args.cents !== null
-    ? ` of $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")}`
-    : "";
   // The booking entry choice (row column, pre-migration rows read null
   // and keep the generic paragraph). Never includes codes or details.
   const entryLine = args.entryMethod === "home"
@@ -958,15 +958,17 @@ async function sendConfirmationEmail(args: {
         : args.entryMethod === "decide_later"
           ? `\nEntry: you asked us to contact you about entry — we'll be in touch before the visit. You can also choose on your visit page (link below).\n\n`
           : `\nArrange entry for your visit: on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.\n\n`;
-  const entryHtml = args.entryMethod === "home"
-    ? `<p><strong>Entry:</strong> you'll be home to let the cleaner in — no codes needed.</p>`
-    : args.entryMethod === "other_person"
-      ? `<p><strong>Entry:</strong> someone else will meet the cleaner — no codes needed.</p>`
-      : args.entryMethod === "arrange_before"
-        ? `<p><strong>Entry:</strong> you chose to arrange entry before the visit — please add your private entry details on your visit page (link below). No entry details are in this email.</p>`
-        : args.entryMethod === "decide_later"
-          ? `<p><strong>Entry:</strong> you asked us to contact you about entry — we'll be in touch before the visit. You can also choose on your visit page (link below).</p>`
-          : `<p><strong>Arrange entry for your visit:</strong> on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.</p>`;
+  const details = `Date: ${emailDate(args.date)}\nArrival window: ${emailArrivalWindow(args.win)}${serviceLine}${cleanerLine}${priceLine}`;
+  const paragraphs = [
+    details,
+    entryLine.trim(),
+    paymentEmailCopy(args.cents !== null ? `$${(args.cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""),
+    "Need to change or cancel? Use your visit page or reply to this email — free up to 48 hours before your visit, $25 after that.",
+  ];
+  const renderedConfirmation = {
+    text: `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\n${paragraphs.join("\n\n")}\n\nView my visit:\n${args.visitLink}\n\nNick\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`,
+    html: emailDocument({ firstName: args.firstName, heading: "Your cleaning is confirmed", paragraphs, action: { url: args.visitLink, label: "View my visit" } }),
+  };
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -978,24 +980,9 @@ async function sendConfirmationEmail(args: {
         from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
         to: [args.to],
         reply_to: "hello@gatehousehomecleaning.com",
-        subject: `Your cleaning is confirmed — ${args.date}`,
-        text:
-          `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\nDate: ${args.date}\nArrival window: ${args.win}.${serviceLine}${cleanerLine}${priceLine}\n\n` +
-          `How payment works: $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.\n\n` +
-          entryLine +
-          `Your visit page — status, your cleaner, reschedule or cancel:\n${args.visitLink}\n\n` +
-          "Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.\n\nNick\n\nGatehouse Home Cleaning\n",
-        html:
-          `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
-          `<p>Hi ${escHtml(args.firstName)},</p>` +
-          `<p><strong>Your cleaning is confirmed.</strong></p>` +
-          `<p>Date: ${escHtml(args.date)}<br>Arrival window: ${escHtml(args.win)}${serviceLine ? `<br>${escHtml(serviceLine.replace(/^\n/, ""))}` : ""}${cleanerLine ? `<br>${escHtml(cleanerLine.replace(/^\n/, ""))}` : ""}${priceLine ? `<br>${escHtml(priceLine.replace(/^\n/, ""))}` : ""}</p>` +
-          `<p><strong>How payment works:</strong> $0 charged today. After your cleaning, we'll email you a link to your photo report. You can review the photos and approve payment${amountLine}. If you don't report a problem, your saved card will be charged automatically after the stated 24-hour review period.</p>` +
-          emailButton(args.visitLink, "View my visit") +
-          `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
-          entryHtml +
-          `<p>Need to change or cancel? Email hello@gatehousehomecleaning.com — free up to 48 hours before your visit, $25 after that.</p>` +
-          `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+        subject: `Your cleaning is confirmed — ${emailDate(args.date)}`,
+        text: renderedConfirmation.text,
+        html: renderedConfirmation.html,
       }),
       signal: AbortSignal.timeout(15000),
     });
@@ -1565,7 +1552,7 @@ export default async function handler(req: Req, res: Res) {
     if (action === "dispute") {
       // A dispute after a completed charge cannot just block: the money has
       // moved. It needs a refund flow, not a state flip.
-      if (state === "paid") {
+      if (state === "paid" || row?.status === "paid") {
         logErr("dispute", "blocked: already paid, needs refund flow");
         return json(409, { ok: false, error: "already_paid" });
       }
@@ -1581,16 +1568,28 @@ export default async function handler(req: Req, res: Res) {
       if (alreadyOpen) {
         return json(200, { ok: true, state: "issue_open", already_open: true, email_sent: false });
       }
+      if (row) {
+        // Claim the transition in the authoritative visit row before any
+        // success email or shared Stripe metadata update. The conditional
+        // write also gives concurrent owner requests a single winner.
+        const claimed = await dbUpdateCount("gh_visits",
+          `id=eq.${row.id}&or=(issue_open.is.null,issue_open.eq.false)`,
+          { issue_open: true, issue_ever: true });
+        if (claimed < 0) return json(502, { ok: false, error: "db_error" });
+        if (claimed === 0) {
+          return json(200, { ok: true, state: "issue_open", already_open: true, email_sent: false });
+        }
+        const recorded = await logEventStrict(row.id, bookingId, "owner", "issue_opened", { reason: (parsed.data.reason ?? "").slice(0, 200) });
+        // Never undo issue_ever on a later failure: it is the permanent
+        // financial block, including after the journal's retention window.
+        if (!recorded) return json(502, { ok: false, error: "issue_audit_failed", issue_blocked: true });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "issue_open",
         "metadata[gh_issue_open]": "1",
         "metadata[gh_issue_ever]": "1",
         "metadata[gh_issue_reason]": (parsed.data.reason ?? "").slice(0, 200),
       });
-      if (row) {
-        await logEvent(row.id, bookingId, "owner", "issue_opened", { reason: (parsed.data.reason ?? "").slice(0, 200) });
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
-      }
       // The client must learn the email complaint was accepted: the
       // confirmation mirrors the /report issue flow, including the
       // payment-in-flight caveat (a charge already moving may still
@@ -1982,15 +1981,16 @@ export default async function handler(req: Req, res: Res) {
             ts: Math.floor(Date.now() / 1000),
           });
           const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
-          const cents = amountCents;
-          const priceLine = Number.isFinite(cents) && cents > 0
-            ? ` Your card is charged $${(cents / 100).toFixed(2).replace(/\.00$/, "")} once you approve.`
-            : "";
           const deadline = new Intl.DateTimeFormat("en-US", {
             timeZone: "America/New_York",
             weekday: "short", month: "short", day: "numeric",
             hour: "numeric", minute: "2-digit", timeZoneName: "short",
           }).format(new Date(Date.parse(sentAt) + 24 * 3600 * 1000));
+          const renderedReportEmail = reportEmail({
+            firstName, link,
+            amount: `$${(amountCents / 100).toFixed(2).replace(/\.00$/, "")}`,
+            deadline, autoChargeBlocked: row ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).ever : meta["gh_issue_ever"] === "1",
+          });
           try {
             const resp = await fetch("https://api.resend.com/emails", {
               method: "POST",
@@ -2003,19 +2003,8 @@ export default async function handler(req: Req, res: Res) {
                 to: [custEmail],
                 reply_to: "hello@gatehousehomecleaning.com",
                 subject: "Your cleaning report is ready",
-                text:
-                  `Hi ${firstName},\n\nYour cleaning is done — your photo report is ready:\n\n${link}\n\n` +
-                  `Open it to check every room.${priceLine} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.\n\n` +
-                  `If we don't hear from you by ${deadline}, your card is charged automatically, as agreed in the Terms.\n\nNick\n\nGatehouse Home Cleaning\n`,
-                html:
-                  `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.55;">` +
-                  `<p>Hi ${escHtml(firstName)},</p>` +
-                  `<p><strong>Your cleaning is done — your photo report is ready.</strong></p>` +
-                  `<p>Open it to check every room.${escHtml(priceLine)} If something isn't right, tap "Report an issue" on that page — the charge stays paused while we make it right.</p>` +
-                  `<p>If we don't hear from you by <strong>${escHtml(deadline)}</strong>, your card is charged automatically, as agreed in the Terms.</p>` +
-                  emailButton(link, "View report") +
-                  `<p style="font-size:13px;color:#555;">If the button doesn&apos;t work, use the link in the plain-text version of this email.</p>` +
-                  `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+                text: renderedReportEmail.text,
+                html: renderedReportEmail.html,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -2776,6 +2765,7 @@ export default async function handler(req: Req, res: Res) {
       if (action === "owner_photo_sign") {
         const room = typeof body["room"] === "string" ? (body["room"] as string).slice(0, 60) : "";
         if (!room) return json(400, { ok: false, error: "invalid_room" });
+        if (photoBlocked(row.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
         const slug = room.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "room";
         const objectPath = `visits/${row.id}/${slug}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
         const signed = await storageSignUpload(objectPath);
@@ -2789,6 +2779,7 @@ export default async function handler(req: Req, res: Res) {
         if (!room || !storagePath.startsWith(`visits/${row.id}/`)) {
           return json(400, { ok: false, error: "invalid_photo" });
         }
+        if (photoBlocked(row.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
         const info = await storageObjectInfo(storagePath);
         if (!info) return json(502, { ok: false, error: "storage_error" });
         if (!ALLOWED_PHOTO_TYPES.includes(info.contentType) || info.size <= 0 || info.size > MAX_PHOTO_BYTES) {
