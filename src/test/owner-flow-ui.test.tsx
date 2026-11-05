@@ -10,6 +10,8 @@ const visits = ["Casey Alpha", "Casey Beta"].map((name, i) => ({
   status: "report_sent", report_status: "sent", cleaner_name: "Test Cleaner",
   issue_open: false, issue_ever: false, report_bounced: false, is_test: false,
   visit_confirmed: true, entry_agreed: true, checklist: { rooms: [] },
+  cleaner_link_issued: true, cleaner_link_active: true, cleaner_link_reusable: true,
+  cleaner_link_expires: "2099-01-01T00:00:00Z",
 }));
 
 beforeEach(() => {
@@ -33,6 +35,55 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const open = () => render(<HelmetProvider><Owner /></HelmetProvider>);
 
 describe("owner login and visit switching", () => {
+  it("returns an expired session to email login without requiring a storage reset", async () => {
+    sessionStorage.setItem("gh_owner_session", "expired-session");
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, json: async () => ({ ok: false, error: "unauthorized" }) } as Response);
+    open();
+    expect(await screen.findByRole("button", { name: "Send login link to my email" })).toBeInTheDocument();
+    expect(sessionStorage.getItem("gh_owner_session")).toBeNull();
+  });
+
+  it("discards a cleaner link that arrives after switching customers", async () => {
+    sessionStorage.setItem("gh_owner_session", "test-owner-session");
+    const normal = vi.mocked(fetch).getMockImplementation()!;
+    let resolveLink!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.action === "get_cleaner_link") return new Promise<Response>((resolve) => { resolveLink = resolve; });
+      return normal(url, init);
+    });
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: /Casey Alpha/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "View link & message" }));
+    fireEvent.click(screen.getByRole("button", { name: "← Back to visits" }));
+    fireEvent.click(screen.getByRole("button", { name: /Casey Beta/ }));
+    await act(async () => resolveLink({ ok: true, json: async () => ({ ok: true, url: "https://example.com/alpha-private-job" }) } as Response));
+    expect(screen.getByRole("heading", { name: "Casey Beta" })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("https://example.com/alpha-private-job")).not.toBeInTheDocument();
+  });
+
+  it("never places a previous customer's delayed payment link into the clipboard", async () => {
+    sessionStorage.setItem("gh_owner_session", "test-owner-session");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const normal = vi.mocked(fetch).getMockImplementation()!;
+    let resolveLink!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.action === "client_link") return new Promise<Response>((resolve) => { resolveLink = resolve; });
+      return normal(url, init);
+    });
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: /Casey Alpha/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy client link (visit + payment)" }));
+    fireEvent.click(screen.getByRole("button", { name: "← Back to visits" }));
+    fireEvent.click(screen.getByRole("button", { name: /Casey Beta/ }));
+    await act(async () => resolveLink({ ok: true, json: async () => ({ ok: true, url: "https://example.com/alpha-private-payment" }) } as Response));
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
   it("opens the visit list after an emailed login without a reload or hook-order crash", async () => {
     window.history.replaceState({}, "", "/owner?ol=test-login-link");
     open();

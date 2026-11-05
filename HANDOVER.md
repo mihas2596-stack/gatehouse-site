@@ -16,6 +16,29 @@ No secrets, no real personal data, no private tokens in this file.
 
 ## QA fix batch — 03.11.2026
 
+### QA follow-up — 05.11.2026
+
+- Verified remote `main` at `f4e944309515a3f7101a51e60679ac5043bf8842`
+  with a successful Vercel deployment status. The November 4 release package
+  is present; its two differing files contain subsequent TypeScript fixes.
+- Reproduced and fixed delayed owner-link responses crossing between selected
+  customers (including clipboard and manual-copy fallbacks), preview/share
+  callbacks, and upload completion reopening the previous customer. Selection
+  epochs also discard responses after leaving and reopening the same visit.
+- An expired owner session now returns to email login and clears rejected
+  stored credentials. An old list response cannot invalidate a newer login.
+- Validation: 60 test files / 1022 tests pass (three new regression cases),
+  `tsc --noEmit -p tsconfig.app.json`, production build, 18-page prerender and
+  HTML checks pass. The repository root `tsc --noEmit` alone checks no source
+  files because the root config only contains project references.
+- Live owner-login email delivered and opened the panel; homepage and quote
+  steps 1–2 inspected. This is not a complete live client/cleaner/payment cycle.
+  No new booking, card save, charge or real cleaner dispatch was performed.
+  Full card/charge QA, mobile private-page QA and all email variants remain
+  unverified. Test prices and existing operational limits below still apply.
+- This section records source verification; confirm the deployment of this
+  follow-up separately before describing its fixes as live.
+
 - Based on `3c43c83e`; the previous production verification is recorded
   below. This section describes source changes, not proof of deployment.
   Confirm the current main commit's Vercel status and live probes before
