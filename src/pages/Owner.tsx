@@ -146,6 +146,8 @@ type OwnerFilter = "attention" | "upcoming" | "completed" | "cancelled" | "all";
 
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
   const [verifyingLogin, setVerifyingLogin] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
@@ -227,6 +229,9 @@ const Owner = () => {
   const linkSeqRef = useRef(0);
   const linkSessionRef = useRef<{ visitId: string; url: string; seq: number } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const visitEpochRef = useRef(0);
+  const operationSeqRef = useRef(0);
+  const isCurrentVisit = (id: string | null, epoch: number) => selectedIdRef.current === id && visitEpochRef.current === epoch;
   const pendingFocusRef = useRef<FocusBlock | null>(null);
 
   const headers = useCallback(
@@ -270,13 +275,26 @@ const Owner = () => {
     try {
       const r = await fetch("/api/owner?view=list", { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string };
+      if (tokenRef.current !== token) return;
       if (!j.ok) {
+        if (j.error === "unauthorized") {
+          try { sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
+          tokenRef.current = "";
+          selectedIdRef.current = null;
+          visitEpochRef.current++;
+          setToken("");
+          setSelected(null);
+          setRoster([]);
+          setRosterLoaded(false);
+          linkSessionRef.current = null;
+        }
         setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
         setVisits([]);
       } else {
         setVisits(j.visits ?? []);
       }
     } catch {
+      if (tokenRef.current !== token) return;
       setError("Network error while loading visits.");
     }
     setLoading(false);
@@ -291,6 +309,7 @@ const Owner = () => {
     try {
       const r = await fetch("/api/owner?view=roster", { headers: headers() });
       const j = (await r.json()) as { ok: boolean; cleaners?: RosterCleaner[] };
+      if (tokenRef.current !== token) return;
       if (j.ok) {
         setRoster(j.cleaners ?? []);
         setRosterLoaded(true);
@@ -325,6 +344,8 @@ const Owner = () => {
   const openVisit = async (v: Visit, focus?: FocusBlock) => {
     scrolledIdRef.current = null;
     const sameVisit = selectedIdRef.current === v.id;
+    if (!sameVisit) visitEpochRef.current++;
+    const visitEpoch = visitEpochRef.current;
     selectedIdRef.current = v.id;
     if (focus) pendingFocusRef.current = focus;
     setSelected(v);
@@ -364,7 +385,7 @@ const Owner = () => {
     try {
       const r = await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
-      if (selectedIdRef.current !== v.id) return;
+      if (!isCurrentVisit(v.id, visitEpoch)) return;
       if (j.ok && j.visit) {
         setSelected(j.visit);
         setPhotos(j.photos ?? []);
@@ -382,10 +403,10 @@ const Owner = () => {
       // (ops carries the detail fields). Reading ops.state always yielded
       // undefined, so the Stripe line never updated.
       const sj = (await sr.json()) as { ok: boolean; state?: string };
-      if (selectedIdRef.current !== v.id) return;
+      if (!isCurrentVisit(v.id, visitEpoch)) return;
       if (sj.ok && sj.state) setStripeState(sj.state);
     } catch {
-      if (selectedIdRef.current === v.id) setActionMsg("Couldn't load the visit details.");
+      if (isCurrentVisit(v.id, visitEpoch)) setActionMsg("Couldn't load the visit details.");
     }
   };
 
@@ -404,11 +425,13 @@ const Owner = () => {
   // repeat cannot create a second action.
   const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void) => {
     const actionVisitId = selectedIdRef.current;
+    const actionEpoch = visitEpochRef.current;
+    const operation = ++operationSeqRef.current;
     setActing(label);
     setActionMsg(`${label}: working…`);
     try {
       const j = await act(payload);
-      if (selectedIdRef.current !== actionVisitId) { void loadList(); return; }
+      if (!isCurrentVisit(actionVisitId, actionEpoch)) { void loadList(); return; }
       if (j.ok) {
         setActionMsg(`${label}: done.`);
         after?.(j);
@@ -425,7 +448,7 @@ const Owner = () => {
         if (selected) void openVisit(selected);
       }
     } catch {
-      if (selectedIdRef.current !== actionVisitId) return;
+      if (!isCurrentVisit(actionVisitId, actionEpoch)) return;
       setActionMsg(`${label}: couldn't reach the server — the action may or may not have run. Reloading the visit before you retry.`);
       void loadList();
       if (selected) {
@@ -433,13 +456,16 @@ const Owner = () => {
         if (fresh) void openVisit(fresh);
       }
     } finally {
-      setActing("");
+      if (operationSeqRef.current === operation) setActing("");
     }
   };
 
 
   const ownerUpload = async (files: FileList | null) => {
     if (!selected || !files || files.length === 0) return;
+    const uploadVisit = selected;
+    const uploadEpoch = visitEpochRef.current;
+    const operation = ++operationSeqRef.current;
     if (photoBlocked(selected.no_photo_zones, ownerRoom)) {
       setActionMsg("The client asked not to photograph this room. Add a skip reason instead.");
       return;
@@ -448,7 +474,9 @@ const Owner = () => {
     setActionMsg("Owner upload: working…");
     try {
       for (const f of Array.from(files)) {
+        if (!isCurrentVisit(uploadVisit.id, uploadEpoch)) return;
         const blob = await convertToJpeg(f);
+        if (!isCurrentVisit(uploadVisit.id, uploadEpoch)) return;
         const sign = await act({ action: "owner_photo_sign", booking_id: selected.booking_id, room: ownerRoom, kind: ownerKind });
         if (!sign.ok || typeof sign["upload_url"] !== "string" || typeof sign["storage_path"] !== "string") {
           throw new Error("sign failed");
@@ -468,12 +496,15 @@ const Owner = () => {
         });
         if (!reg.ok) throw new Error(typeof reg.error === "string" ? reg.error : "register failed");
       }
-      setActionMsg("Owner upload: done.");
-      void openVisit(selected);
+      if (isCurrentVisit(uploadVisit.id, uploadEpoch)) {
+        setActionMsg("Owner upload: done.");
+        void openVisit(uploadVisit);
+      }
     } catch (err) {
-      setActionMsg(`Owner upload: ${err instanceof Error ? err.message : "failed"}`);
+      if (isCurrentVisit(uploadVisit.id, uploadEpoch)) setActionMsg(`Owner upload: ${err instanceof Error ? err.message : "failed"}`);
+    } finally {
+      if (operationSeqRef.current === operation) setActing("");
     }
-    setActing("");
   };
 
   // Record a freshly issued link, guarded by sequence: the sequence is
@@ -517,7 +548,12 @@ const Owner = () => {
   // legacy one that cannot be re-fetched.
   const loadCleanerLink = async (): Promise<{ url: string } | { error: string }> => {
     if (!selected) return { error: "no_visit" };
-    const j = await act({ action: "get_cleaner_link", booking_id: selected.booking_id });
+    const epoch = visitEpochRef.current;
+    const seq = linkSeqRef.current;
+    let j: Awaited<ReturnType<typeof act>>;
+    try { j = await act({ action: "get_cleaner_link", booking_id: selected.booking_id }); }
+    catch { return { error: "failed" }; }
+    if (!isCurrentVisit(selected.id, epoch) || linkSeqRef.current !== seq) return { error: "stale" };
     if (j.ok && typeof j["url"] === "string") return { url: j["url"] as string };
     const session = linkSessionRef.current;
     if (session && session.visitId === selected.id) return { url: session.url };
@@ -525,11 +561,16 @@ const Owner = () => {
   };
 
   const copyCleanerLink = async () => {
+    const visitId = selectedIdRef.current;
+    const epoch = visitEpochRef.current;
     setCleanerCopyStatus("");
     setManualCopy(null);
     const res = await loadCleanerLink();
+    if (!isCurrentVisit(visitId, epoch) || ("error" in res && res.error === "stale")) return;
     if ("url" in res) {
-      if (await copyText(res.url)) {
+      const copied = await copyText(res.url);
+      if (!isCurrentVisit(visitId, epoch)) return;
+      if (copied) {
         setCleanerCopyStatus("Cleaner link copied.");
       } else {
         setManualCopy({ text: res.url, label: "Cleaner link — copy it manually:", owner: "cleaner" });
@@ -549,12 +590,15 @@ const Owner = () => {
   };
 
   const toggleViewLink = async () => {
+    const visitId = selectedIdRef.current;
+    const epoch = visitEpochRef.current;
     if (viewLinkOpen) {
       setViewLinkOpen(false);
       return;
     }
     setViewLinkError("");
     const res = await loadCleanerLink();
+    if (!isCurrentVisit(visitId, epoch) || ("error" in res && res.error === "stale")) return;
     if ("url" in res) {
       setViewLinkUrl(res.url);
       setViewLinkOpen(true);
@@ -569,12 +613,19 @@ const Owner = () => {
 
   const copyClientLink = async () => {
     if (!selected) return;
+    const visitId = selected.id;
+    const epoch = visitEpochRef.current;
     setClientCopyStatus("");
     setManualCopy(null);
-    const j = await act({ action: "client_link", booking_id: selected.booking_id });
+    let j: Awaited<ReturnType<typeof act>>;
+    try { j = await act({ action: "client_link", booking_id: selected.booking_id }); }
+    catch { if (isCurrentVisit(visitId, epoch)) setClientCopyStatus("Couldn’t load the client link — try again."); return; }
+    if (!isCurrentVisit(visitId, epoch)) return;
     if (j.ok && typeof j["url"] === "string") {
       const url = j["url"] as string;
-      if (await copyText(url)) {
+      const copied = await copyText(url);
+      if (!isCurrentVisit(visitId, epoch)) return;
+      if (copied) {
         setClientCopyStatus("Client link copied.");
       } else {
         setManualCopy({ text: url, label: "Client link — copy it manually:", owner: "client" });
@@ -589,7 +640,12 @@ const Owner = () => {
     // Opens the live client page for viewing only: no client action is
     // taken from a preview (no approve, issue, cancel, or reschedule).
     if (!selected) return;
-    const j = await act({ action: "preview_link", booking_id: selected.booking_id });
+    const visitId = selected.id;
+    const epoch = visitEpochRef.current;
+    let j: Awaited<ReturnType<typeof act>>;
+    try { j = await act({ action: "preview_link", booking_id: selected.booking_id }); }
+    catch { if (isCurrentVisit(visitId, epoch)) setActionMsg("Couldn't load the client preview — try again."); return; }
+    if (!isCurrentVisit(visitId, epoch)) return;
     if (j.ok && typeof j["visit_url"] === "string") {
       window.open(j["visit_url"] as string, "_blank");
     } else {
@@ -1002,7 +1058,9 @@ const Owner = () => {
           // Load the current link, then run fn with it; failures surface
           // in the cleaner status line (never a false "Copied").
           const withLink = async (fn: (url: string) => void) => {
+            const epoch = visitEpochRef.current;
             const res = await loadCleanerLink();
+            if (!isCurrentVisit(v.id, epoch) || ("error" in res && res.error === "stale")) return;
             if ("url" in res) fn(res.url);
             else if (res.error === "link_not_reusable") setCleanerCopyStatus("This link can’t be re-fetched. Create a reusable access link below.");
             else if (res.error === "link_expired") setCleanerCopyStatus("This link has expired. Replace it below.");
@@ -1018,7 +1076,7 @@ const Owner = () => {
 
           return (
             <div>
-              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; selectedIdRef.current = null; setSelected(null); }}>
+              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; selectedIdRef.current = null; visitEpochRef.current++; setSelected(null); }}>
                 ← Back to visits
               </button>
               {/* Action feedback lives here, at the top of the detail —
@@ -1259,8 +1317,12 @@ const Owner = () => {
                                 variant="outline"
                                 size="sm"
                                 onClick={async () => {
-                                  if (await copyText(cleanerMessage(viewLinkUrl))) setCleanerCopyStatus("Cleaner message copied.");
-                                  else { setManualCopy({ text: cleanerMessage(viewLinkUrl), label: "Message — copy it manually:", owner: "cleaner" }); setCleanerCopyStatus("Copy failed — copy the message manually below."); }
+                                  const epoch = visitEpochRef.current;
+                                  const message = cleanerMessage(viewLinkUrl);
+                                  const copied = await copyText(message);
+                                  if (!isCurrentVisit(v.id, epoch)) return;
+                                  if (copied) setCleanerCopyStatus("Cleaner message copied.");
+                                  else { setManualCopy({ text: message, label: "Message — copy it manually:", owner: "cleaner" }); setCleanerCopyStatus("Copy failed — copy the message manually below."); }
                                 }}
                               >
                                 Copy message
