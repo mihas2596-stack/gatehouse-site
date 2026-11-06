@@ -18,7 +18,7 @@ const Privacy = () => {
           Privacy Policy
         </h1>
 
-        <p className="mb-6 font-semibold">Last updated September 17, 2026</p>
+        <p className="mb-6 font-semibold">Last updated November 6, 2026</p>
 
         <p className="mb-6">
           This Privacy Notice for Gatehouse Home Cleaning ("we," "us," or "our"), describes how and why we might access, collect, store, use, and/or share ("process") your personal information when you use our services ("Services"), including when you:
@@ -55,7 +55,7 @@ const Privacy = () => {
             <strong>What personal information do we process?</strong> We may process personal information depending on how you interact with us and the Services, the choices you make, and the products and features you use.
           </p>
           <p>
-            <strong>Do we process any sensitive personal information?</strong> We do not process sensitive personal information.
+            <strong>Do we process any sensitive personal information?</strong> We collect only information needed for your request and visit. Private home photos and optional entry instructions need particular care; see sections 15–17.
           </p>
           <p>
             <strong>Do we collect any information from third parties?</strong> We do not collect any information from third parties.
@@ -104,7 +104,7 @@ const Privacy = () => {
         </h2>
         <p className="mb-4 font-semibold">Personal information you disclose to us:</p>
         <p className="mb-4">
-          We collect personal information that you voluntarily provide to us when you express an interest in obtaining information about us or our products and Services. The personal information we collect may include: names, phone numbers, email addresses, mailing addresses. We do not process sensitive information.
+          We collect personal information that you voluntarily provide to us when you express an interest in obtaining information about us or our products and Services. The personal information we collect may include: names, phone numbers, email addresses, mailing addresses. Payment card details are handled by Stripe. Home photos and optional entry instructions are described in sections 15–17.
         </p>
         <p className="mb-4 font-semibold">Information automatically collected:</p>
         <p className="mb-4">
@@ -286,7 +286,7 @@ const Privacy = () => {
           15. PHOTOS OF YOUR HOME</h2>
         <p className="mb-8">
           After each visit the cleaner takes photos of the cleaned rooms for your photo report. We use them only to show
-          you the work and to handle questions about the visit. We keep them for 90 days and do not publish them without
+          you the work and to handle questions about the visit. Published report photos are kept for 90 days after the report is sent. Unpublished photos are kept for up to 90 days after upload. We do not publish them without
           your written permission.
         </p>
 
@@ -300,7 +300,7 @@ const Privacy = () => {
           17. ACCESS CODES AND KEYS</h2>
         <p className="mb-8">
           Door codes, gate codes and key instructions are used only to access your home for booked visits and are shared
-          only with the cleaner assigned to your visit.
+          only with the cleaner assigned to your visit. Entry details are encrypted. Access ends when the visit is finished or cancelled; details are deleted no later than the visit date plus two days. Changing the cleaner revokes the previous cleaner’s access.
         </p>
       </div>
     </div>
