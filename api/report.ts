@@ -1047,7 +1047,7 @@ export default async function handler(req: Req, res: Res) {
       // Client: the confirmation promised on the page.
       if (customer.email) {
         await sendMail({
-          from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+          from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
           to: [customer.email],
           reply_to: "hello@gatehousehomecleaning.com",
           subject: paymentInFlight
@@ -1058,7 +1058,7 @@ export default async function handler(req: Req, res: Res) {
             `We'll reply within one business day.\n\n` +
             (room ? `Room: ${room}\n` : "") +
             (reason ? `What you told us: ${reason}\n\n` : "\n") +
-            `You can check the status any time on your report page — the same link as before.\n\nNick\n\nGatehouse Home Cleaning\n`,
+            `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,
         });
       }
     }
