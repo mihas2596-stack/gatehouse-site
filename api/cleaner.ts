@@ -202,6 +202,7 @@ async function visitConfirmed(visitId: string): Promise<boolean> {
 }
 
 async function view(visit: VisitRow) {
+  const { loadClientPhone } = await import("./_client_contact.js");
   const photos = await photosOf(visit.id);
   const withUrls = await Promise.all(
     photos.map(async (p) => ({
@@ -252,6 +253,10 @@ async function view(visit: VisitRow) {
       client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,
       client_first_name: firstName,
+      // The existing signed cleaner-link gate scopes this contact to one job.
+      client_phone: visit.status !== "cancelled" && visit.status !== "paid"
+        && visit.report_status !== "sent" && visit.report_status !== "submitted"
+        && await visitConfirmed(visit.id) ? await loadClientPhone(visit.id) : null,
     },
     checklist: visit.checklist ?? { rooms: [] },
     photos: withUrls,
@@ -442,7 +447,7 @@ async function publishReportToClient(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+          from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
           to: [custEmail],
           reply_to: "hello@gatehousehomecleaning.com",
           subject: "Your cleaning report is ready",
