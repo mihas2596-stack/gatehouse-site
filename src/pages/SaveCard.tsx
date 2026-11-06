@@ -101,11 +101,12 @@ export default function SaveCard() {
           <h1 className="font-heading text-3xl font-bold">{status === "failed" ? "Card not saved" : "Couldn't verify card"}</h1>
           <p className="my-6">We couldn't verify your card status. This doesn't mean it failed. Check again before entering it again.</p>
           <Button variant="hero" size="lg" onClick={() => void load()}>Check again</Button>
+          {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
           {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
         </> : <>
           {done ? <CheckCircle className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" /> : <CreditCard className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" />}
-          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? confirmed ? "Booking confirmed" : "Card saved. Your request is complete." : "Last step: save your card — $0 today"}</h1>
-          <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? confirmed ? `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : `Your date is awaiting confirmation. We'll email your cleaner and arrival window ${booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
+          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? !bt ? "Card saved — $0 charged today" : confirmed ? "Booking confirmed" : "Card saved. Your request is complete." : "Last step: save your card — $0 today"}</h1>
+          <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? !bt ? "Your payment method is saved. To request a cleaning, choose your service and date below." : confirmed ? `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : `Your date is awaiting confirmation. We'll email your cleaner and arrival window ${booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
           {booking && <dl className="rounded-xl border border-border bg-card p-5 text-left space-y-3 mb-6">
             {booking.service && <div><dt className="font-semibold">Service</dt><dd>{booking.service}</dd></div>}
             {(booking.confirmed_date || booking.date) && <div><dt className="font-semibold">{confirmed ? "Confirmed date" : "Requested date"}</dt><dd>{formatDateLong(booking.confirmed_date || booking.date)}</dd></div>}
@@ -129,6 +130,7 @@ export default function SaveCard() {
               <p className="text-base text-muted-foreground text-center">You'll enter your card securely on Stripe. No Link account is required.</p>
             </form>
           </>}
+          {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
           {bt && <p className="mt-6"><Link to={visitLink} className="underline font-semibold">View my visit</Link></p>}
         </>}
       </div>
