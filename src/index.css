@@ -413,3 +413,21 @@ body[data-menu-open="true"] .quote-price-bar { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Booking and job flows: readable hierarchy without dense fine print. */
+.readable-flow { font-size: 18px; line-height: 1.6; }
+.readable-flow .text-sm, .readable-flow .text-xs { font-size: 16px; line-height: 1.55; }
+.readable-flow label { line-height: 1.5; }
+.readable-flow input:not([type="checkbox"]):not([type="radio"]),
+.readable-flow select, .readable-flow textarea { font-size: 18px; }
+.readable-flow input[type="checkbox"], .readable-flow input[type="radio"] { flex-shrink: 0; width: 22px; height: 22px; }
+.readable-flow h1 { line-height: 1.15 !important; }
+.cleaner-flow { font-size: 16px; line-height: 1.6; }
+.cleaner-flow input[type="checkbox"] { flex-shrink: 0; width: 24px; height: 24px; }
+.cleaner-flow summary { scroll-margin-top: 80px; }
+@media (max-width: 767px) {
+  .readable-flow h1 { font-size: 30px !important; }
+  .cleaner-flow h1 { font-size: 28px !important; }
+  .cleaner-flow h2 { font-size: 21px !important; }
+  .cleaner-flow details > summary > .font-heading { font-size: 21px; }
+}
