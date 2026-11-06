@@ -931,8 +931,8 @@ export default async function handler(req: Req, res: Res) {
       if (!cancellationSync.ok && !row) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
       Object.assign(meta, { gh_state: "cancelled", gh_cancel_scope: scope, gh_cancel_fee_cents: String(fee) });
       const scopeText = scope === "stop"
-        ? "This visit and all future recurring visits are cancelled."
-        : "This visit is cancelled. Your recurring schedule stays in place — tell us if you want to stop it too.";
+        ? "This visit is cancelled. Your request to stop repeat visits is recorded. Gatehouse will confirm changes to any other separately confirmed visits."
+        : "This visit is cancelled. Any other confirmed visits are unchanged. Tell us if you also want to cancel them.";
       await notify(
         scope === "stop" ? "Your recurring cleanings are cancelled" : "Your visit is cancelled",
         `Hi ${(customer.name || "").trim().split(/\s+/)[0] || "there"},\n\n${scopeText}\n` +
