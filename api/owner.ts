@@ -256,10 +256,10 @@ export default async function handler(req: Req, res: Res) {
     }
 
     // list
-    const visits = await dbSelect<VisitRow>(
-      "gh_visits",
-      "order=created_at.desc&limit=100",
-    );
+    const offsetRaw = typeof req.query?.offset === "string" ? req.query.offset : "0";
+    const offset = /^\d{1,7}$/.test(offsetRaw) ? Number(offsetRaw) : 0;
+    const page = await dbSelect<VisitRow>("gh_visits", `order=created_at.desc,id.desc&offset=${offset}&limit=101`);
+    const visits = page.slice(0, 100);
     const ids = visits.map((v) => v.id);
     const counts = new Map<string, number>();
     if (ids.length > 0) {
@@ -345,6 +345,7 @@ export default async function handler(req: Req, res: Res) {
     }
     return json(200, {
       ok: true,
+      next_offset: page.length > 100 ? offset + 100 : null,
       visits: visits.map((v) => ({
         ...annotateVisit(v, opened.get(v.id) ?? null),
         photo_count: counts.get(v.id) ?? 0,

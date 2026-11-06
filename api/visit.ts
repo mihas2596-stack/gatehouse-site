@@ -1,3 +1,5 @@
+import { clientVisitLink } from "./_booking_links.js";
+import { emailDocument } from "./_email_copy.js";
 // /api/visit — the client's "Manage your visit" page backend.
 //
 // Authenticated by the same signed booking token (bt) as /api/report.
@@ -32,6 +34,7 @@ import {
 // booking the customer is not currently bound to.
 type BookingRow = {
   id: string; booking_id: string; status: string | null;
+  client_name?: string | null; client_email?: string | null;
   amount_cents: number | null; cleaner_name: string | null;
   report_sent_at: string | null; report_bounced: boolean | null;
   access_notes: string | null; no_photo_zones: string | null;
@@ -592,6 +595,7 @@ export default async function handler(req: Req, res: Res) {
         };
       }
     }
+    if (customer && row) { customer.name = row.client_name || payload.name || customer.name; customer.email = row.client_email || payload.email || customer.email; }
     const bound = Boolean(boundCustomer);
     if (customer) {
       try {
@@ -638,7 +642,8 @@ export default async function handler(req: Req, res: Res) {
     // for the client — never an assumed confirmation.
     let cardBrand = "";
     let cardLast4 = "";
-    const cardConfirmed = Boolean(latestEvent(events, "card_confirmed"));
+    const selectedCardEvent = latestEvent(events, "card_confirmed");
+    const cardConfirmed = Boolean(selectedCardEvent);
     if (customer.id && meta["gh_payment_method"]) {
       try {
         const pmRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`);
@@ -647,6 +652,9 @@ export default async function handler(req: Req, res: Res) {
         cardLast4 = String(pm?.card?.last4 ?? "");
       } catch { /* best-effort — the choice UI falls back to no details */ }
     }
+
+    if (typeof selectedCardEvent?.detail?.["brand"] === "string") cardBrand = selectedCardEvent.detail["brand"] as string;
+    if (typeof selectedCardEvent?.detail?.["last4"] === "string") cardLast4 = selectedCardEvent.detail["last4"] as string;
 
     // Entry arrangement (spec A §5-6): only once the visit is confirmed
     // AND a cleaner is assigned, and only while the visit is not done.
@@ -763,22 +771,27 @@ export default async function handler(req: Req, res: Res) {
       res.status(409).json({ requestId, ok: false, error: "already_cancelled" });
       return;
     }
+    let notificationFailed = false;
     const notify = async (subject: string, text: string, toClient: boolean) => {
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
-      if (!RESEND_API_KEY) return;
+      if (!RESEND_API_KEY) { notificationFailed = true; return; }
       const to = toClient && customer.email ? [customer.email] : ["nikolajmihasenok@gmail.com"];
       try {
-        await fetch("https://api.resend.com/emails", {
+        const result = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            from: "Gatehouse site <info@gatehousehomecleaning.com>",
+            from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
             to, reply_to: "hello@gatehousehomecleaning.com", subject, text,
+            html: emailDocument({ firstName: toClient ? (customer.name || "there").split(/\s+/)[0] : "Gatehouse", heading: subject.replace(/ — booking .+$/, ""), paragraphs: [text.replace(/^Hi [^,]+,\n\n/, "").replace(/\n\nGatehouse Home Cleaning\n?$/, "")], action: { url: toClient ? clientVisitLink(STRIPE_SECRET_KEY, { bid: payload.bid, email: customer.email || payload.email, name: customer.name }) : "https://www.gatehousehomecleaning.com/owner", label: toClient ? "View my visit" : "Open owner panel" } }),
           }),
           signal: AbortSignal.timeout(15000),
         });
+        notificationFailed ||= !result.ok;
+        await logEvent(row?.id ?? null, payload.bid, "system", result.ok ? "notification_email_sent" : "notification_email_failed", { kind: subject.slice(0, 100), audience: toClient ? "client" : "owner" });
       } catch {
-        /* best-effort */
+        notificationFailed = true;
+        await logEvent(row?.id ?? null, payload.bid, "system", "notification_email_failed", { audience: toClient ? "client" : "owner" });
       }
     };
 
@@ -860,7 +873,7 @@ export default async function handler(req: Req, res: Res) {
       if (!sharedHadConfirmation) {
         await notify(`Date accepted — booking ${payload.bid}`, `The client accepted the alternative date ${date} for booking ${payload.bid}.`, false);
       }
-      res.status(200).json(view());
+      res.status(200).json({ ...view(), notification_email_sent: !notificationFailed });
       return;
     }
 
@@ -885,7 +898,7 @@ export default async function handler(req: Req, res: Res) {
       Object.assign(meta, { gh_state: "card_ready", gh_proposed_date: date, gh_proposed_pending: "1" });
       if (row) await logEvent(row.id, payload.bid, "client", "date_proposed", { date });
       await notify(`New date proposed — booking ${payload.bid}`, `The client proposed a new date: ${date} (booking ${payload.bid}). Confirm or decline it in the dashboard flow.`, false);
-      res.status(200).json({ ...view(), proposed_date: date });
+      res.status(200).json({ ...view(), proposed_date: date, notification_email_sent: !notificationFailed });
       return;
     }
 
@@ -896,25 +909,30 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       const fee = cancelFeeCents(meta, requestedDate, Date.now());
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      if (row) {
+        const previousStatus = row.status;
+        const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.${encodeURIComponent(previousStatus ?? "requested")}`, { status: "cancelled" });
+        if (changed !== 1) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
+        const journaled = await logEventStrict(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
+        if (!journaled) {
+          const rollback = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.cancelled`, { status: previousStatus });
+          res.status(503).json({ requestId, ok: false, error: rollback === 1 ? "cancellation_not_saved" : "cancellation_state_unknown" }); return;
+        }
+        row.status = "cancelled";
+        const accessDeleted = await deleteAccess(row.id);
+        await logEvent(row.id, payload.bid, "client", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
+      }
+      const cancellationSync = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "cancelled",
         "metadata[gh_cancel_scope]": scope,
         "metadata[gh_cancel_fee_cents]": String(fee),
         "metadata[gh_cancelled_at]": new Date().toISOString(),
       });
+      if (!cancellationSync.ok && !row) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
       Object.assign(meta, { gh_state: "cancelled", gh_cancel_scope: scope, gh_cancel_fee_cents: String(fee) });
-      if (row) {
-        await logEvent(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, { status: "cancelled" });
-        // N09: a failed cleanup is journaled, not hidden — the
-        // cancelled status plus the journal gate in cleanerEntryView
-        // still keep the secret from any cleaner.
-        const accessDeleted = await deleteAccess(row.id);
-        await logEvent(row.id, payload.bid, "client", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
-      }
       const scopeText = scope === "stop"
-        ? "This visit and all future recurring visits are cancelled."
-        : "This visit is cancelled. Your recurring schedule stays in place — tell us if you want to stop it too.";
+        ? "This visit is cancelled. Your request to stop repeat visits is recorded. Gatehouse will confirm changes to any other separately confirmed visits."
+        : "This visit is cancelled. Any other confirmed visits are unchanged. Tell us if you also want to cancel them.";
       await notify(
         scope === "stop" ? "Your recurring cleanings are cancelled" : "Your visit is cancelled",
         `Hi ${(customer.name || "").trim().split(/\s+/)[0] || "there"},\n\n${scopeText}\n` +
@@ -925,7 +943,7 @@ export default async function handler(req: Req, res: Res) {
         true,
       );
       await notify(`Cancelled (${scope}) — booking ${payload.bid}`, `Booking ${payload.bid} cancelled by the client. Scope: ${scope}. Fee recorded: ${fee} cents.`, false);
-      res.status(200).json({ ...view(), fee_cents: fee });
+      res.status(200).json({ ...view(), fee_cents: fee, notification_email_sent: !notificationFailed });
       return;
     }
 

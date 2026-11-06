@@ -1,3 +1,5 @@
+import { clientVisitLink } from "./_booking_links.js";
+import { emailDate, emailArrivalWindow, emailDocument } from "./_email_copy.js";
 // /api/auto-charge — the server-side 24h timer for "Approve, then pay".
 //
 // Invoked by Vercel Cron (see vercel.json) or manually by the operator.
@@ -23,7 +25,7 @@
 // charge and a repeated webhook cannot produce two payments for one visit.
 
 import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto";
-import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
+import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce, bookingEmailContact } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbDeleteCount, dbUpdate, dbUpdateCount, logEvent, storageRemove } from "./_db.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { loadAccess } from "./_visit_access.js";
@@ -305,6 +307,10 @@ export default async function handler(req: Req, res: Res) {
   try {
     const now = Date.now();
     const candidates = await findReportSentCustomers(STRIPE_SECRET_KEY);
+    for (const candidate of candidates) {
+      const contact = await bookingEmailContact(candidate.metadata["gh_booking_id"] ?? "", candidate.email ?? "", candidate.name ?? "");
+      candidate.name = contact.name;
+    }
     // DB pass: reports sent for bookings the shared customer is not
     // currently bound to (invisible to the metadata search above).
     try {
@@ -320,7 +326,8 @@ export default async function handler(req: Req, res: Res) {
           if (!cust) continue;
           const events = await bookingEvents(r.booking_id);
           await hydrateCustomerMeta(STRIPE_SECRET_KEY, cust, r, events);
-          candidates.push({ id: cust.id, email: cust.email, name: cust.name, metadata: cust.metadata });
+          const contact = await bookingEmailContact(r.booking_id, r.client_email, cust.name ?? "");
+          candidates.push({ id: cust.id, email: cust.email, name: contact.name, metadata: cust.metadata });
           seen.add(r.booking_id);
         }
       }
@@ -396,6 +403,7 @@ export default async function handler(req: Req, res: Res) {
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Your cleaning report is ready — a quick look",
+              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your report is ready to review", paragraphs: ["Open your photos and checklist. Choose Approve & pay if everything looks good, or Report an issue if something needs attention.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately. Otherwise automatic payment follows the 24-hour rule unless you report an issue.`], action: { url: `https://www.gatehousehomecleaning.com/report?bt=${token}`, label: "Review my cleaning" } }),
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nYour photo report is ready — please take a quick look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
@@ -459,6 +467,7 @@ export default async function handler(req: Req, res: Res) {
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Reminder: your cleaning report is waiting",
+              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your cleaning report is waiting", paragraphs: ["Please review your photos and checklist. Use Report an issue on your visit page if something was missed; this blocks automatic payment for this visit.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately.`], action: { url: `https://www.gatehousehomecleaning.com/report?bt=${token}`, label: "Review my cleaning" } }),
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
@@ -685,34 +694,33 @@ export default async function handler(req: Req, res: Res) {
       logErr("sync_recovery", err);
     }
 
-    // --- Photo retention pass: report photos are advertised as kept
-    // for 90 days and then deleted. Enforce it: for visits whose report
-    // was sent more than 90 days ago, remove the stored objects and
-    // their rows (the visit record itself stays).
+    // Delete eligible photo rows themselves, so completed/empty visits cannot
+    // starve later visits. Keep the pointer until Storage confirms deletion.
+    let retentionDeleted = 0;
+    let retentionFailed = 0;
     try {
       if (dbConfigured()) {
         const cutoff = new Date(now - 90 * 24 * 3600 * 1000).toISOString();
-        const old = await dbSelect<{ id: string; booking_id: string }>(
-          "gh_visits",
-          `report_sent_at=lt.${encodeURIComponent(cutoff)}&order=report_sent_at.asc&limit=20`,
-        );
-        for (const v of old) {
-          const photos = await dbSelect<{ id: string; storage_path: string }>(
-            "gh_photos",
-            `visit_id=eq.${v.id}&limit=200`,
+        const batches = [
+          `gh_visits.report_sent_at=lt.${encodeURIComponent(cutoff)}`,
+          `gh_visits.report_sent_at=is.null&created_at=lt.${encodeURIComponent(cutoff)}`,
+        ];
+        const seen = new Set<string>();
+        for (const match of batches) {
+          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string } }>(
+            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at)&${match}&order=created_at.asc&limit=200`,
           );
-          for (const ph of photos) {
-            await storageRemove(ph.storage_path);
-            await dbDelete("gh_photos", `id=eq.${ph.id}`);
-          }
-          if (photos.length > 0) {
-            await logEvent(v.id, v.booking_id, "system", "photos_retention_deleted", { count: photos.length });
+          for (const photo of photos) {
+            if (seen.has(photo.id)) continue;
+            seen.add(photo.id);
+            if (!await storageRemove(photo.storage_path)) { retentionFailed++; continue; }
+            if (!await dbDelete("gh_photos", `id=eq.${photo.id}`)) { retentionFailed++; continue; }
+            retentionDeleted++;
+            await logEvent(photo.visit_id, photo.gh_visits?.booking_id ?? null, "system", "photos_retention_deleted", { count: 1 });
           }
         }
       }
-    } catch (err) {
-      logErr("retention", err);
-    }
+    } catch (err) { retentionFailed++; logErr("retention", err); }
 
     // --- Receipt-retry pass (N13): a paid visit whose receipt email
     // failed earlier gets the EMAIL resent — never the payment (§7:
@@ -801,7 +809,7 @@ export default async function handler(req: Req, res: Res) {
         const today = new Date(now).toISOString().slice(0, 10);
         const tomorrow = new Date(now + 24 * 3600 * 1000).toISOString().slice(0, 10);
         const rows = await dbSelect<{
-          id: string; booking_id: string; client_email: string | null; cleaner_name: string | null;
+          id: string; booking_id: string; client_email: string | null; client_name?: string | null; cleaner_name: string | null;
           visit_date: string | null; window: string | null; status: string | null; report_sent_at: string | null;
           entry_reminder_sent: boolean | null;
           entry_method: string | null;
@@ -844,11 +852,12 @@ export default async function handler(req: Req, res: Res) {
               method: "POST",
               headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
               body: JSON.stringify({
-                from: "Gatehouse site <info@gatehousehomecleaning.com>",
+                from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
                 to: [r.client_email],
                 reply_to: "hello@gatehousehomecleaning.com",
-                subject: `Before your cleaning ${r.visit_date ?? ""} — how should we get in?`,
-                text: `Hi there,\n\nYour cleaning is coming up on ${r.visit_date ?? ""}${r.window ? ` (${r.window})` : ""} with ${r.cleaner_name}.\n\nWe still need to know how your cleaner should get in. Please open your visit page from your confirmation email and choose one: you will be home, someone else will meet the cleaner, or you will arrange entry before the visit.\n\nIf you will be home, no codes are needed.\n\nGatehouse Home Cleaning\n`,
+                subject: `Before your cleaning ${emailDate(r.visit_date ?? "")} — arrange entry`,
+                html: emailDocument({ firstName: (r.client_name ?? "there").split(/\s+/)[0], heading: "How should your cleaner get in?", paragraphs: [`Your visit: ${emailDate(r.visit_date ?? "")} · ${emailArrivalWindow(r.window ?? "")}. Cleaner: ${r.cleaner_name}.`, "You can meet your cleaner — no code needed. Open your visit page to choose how to arrange entry. Entry details are never included in this email."], action: { url: clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" }), label: "Arrange entry" } }),
+                text: `Hi there,\n\nYour cleaning is coming up on ${emailDate(r.visit_date ?? "")}${r.window ? ` (${emailArrivalWindow(r.window)})` : ""} with ${r.cleaner_name}.\n\nWe still need to know how your cleaner should get in. Please open your visit page: ${clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" })}\n\nChoose one: you will be home, someone else will meet the cleaner, or you will arrange entry before the visit.\n\nIf you will be home, no codes are needed.\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -870,7 +879,7 @@ export default async function handler(req: Req, res: Res) {
     res.status(200).json({
       requestId, ok: true,
       checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded,
-      entry_reminded: entryReminded, entry_cleaned: entryCleaned,
+      entry_reminded: entryReminded, entry_cleaned: entryCleaned, photo_retention_deleted: retentionDeleted, photo_retention_failed: retentionFailed,
     });
   } catch (error: unknown) {
     logErr("unexpected", error);

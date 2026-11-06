@@ -38,7 +38,7 @@ const faqs = [
   },
   {
     q: "How far in advance do I need to book in my area?",
-    a: "Book at least 3 days ahead. Your day and arrival window then stay the same every other week.",
+    a: "Request at least 3 days ahead. We confirm your cleaner and arrival window by email. For recurring visits, arrange the next date with Gatehouse.",
   },
   {
     q: "Do you cover Atlanta proper or only the northern suburbs?",
@@ -107,7 +107,7 @@ const Areas = () => {
               ))}
             </ul>
             <p className="mt-5 text-sm text-muted-foreground">
-              Every city gets the same every-other-week cleaning on your regular day and arrival window, at the published price.
+              Every city gets the same room-by-room checklist and clear pricing. We confirm your date, arrival window and cleaner before the visit.
             </p>
           </div>
         </div>
@@ -120,7 +120,7 @@ const Areas = () => {
             We serve seven cities across North Atlanta (see the list above). Enter your ZIP in the calculator to check whether your home is covered.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote" data-main-cta>Check Availability</Link>
+            <Link to="/quote" data-main-cta>See price &amp; request a date</Link>
           </Button>
         </div>
       </section>

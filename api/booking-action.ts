@@ -120,7 +120,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
+  action: z.enum(["invite_next_visit", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -156,6 +156,7 @@ const ActionSchema = z.object({
   cleaner_id: z.string().max(50).optional(),
   // roster_update: active flag; roster_import: pasted CSV text.
   active: z.boolean().optional(),
+  is_test: z.boolean().optional(),
   csv: z.string().max(20000).optional(),
   // send_report only: photo URLs, optionally with room + note per photo.
   photos: z.array(z.union([
@@ -254,6 +255,7 @@ export async function sendShortClientEmail(opts: {
   lines: string[];
   buttonLabel: string;
   buttonAnchor?: string;
+  buttonUrl?: string;
 }): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   const email = (opts.customer.email ?? "").trim();
@@ -265,7 +267,7 @@ export async function sendShortClientEmail(opts: {
     name: opts.customer.name ?? "",
     ts: Math.floor(Date.now() / 1000),
   });
-  const link = `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
+  const link = opts.buttonUrl ?? `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
   const bodyText = opts.lines.join("\n\n");
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -279,14 +281,7 @@ export async function sendShortClientEmail(opts: {
         text:
           `Hi ${firstName},\n\n${opts.heading}.\n\n${bodyText}\n\n${opts.buttonLabel}:\n${link}\n\n` +
           `Questions? Email hello@gatehousehomecleaning.com.\n\nGatehouse Home Cleaning\n`,
-        html:
-          `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">` +
-          `<p>Hi ${escHtml(firstName)},</p>` +
-          `<p><strong>${escHtml(opts.heading)}.</strong></p>` +
-          opts.lines.map((l) => `<p>${escHtml(l)}</p>`).join("") +
-          emailButton(link, opts.buttonLabel) +
-          `<p>Questions? Email <a href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>` +
-          `<p>Gatehouse Home Cleaning</p></div>`,
+        html: emailDocument({ firstName, heading: opts.heading, paragraphs: opts.lines, action: { url: link, label: opts.buttonLabel } }),
       }),
       signal: AbortSignal.timeout(15000),
     });
@@ -312,8 +307,9 @@ export async function sendPaymentFailedEmailOnce(
   );
   if (prior.length > 0) return true;
   const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
-  const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-  const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+  const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+  const custEmail = contact.email;
+  const custName = contact.name;
   if (!custEmail) return false;
   const ok = await sendShortClientEmail({
     secretKey,
@@ -435,8 +431,9 @@ async function sendReceiptAfterClaim(
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
   if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
   const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
-  const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-  const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+  const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+  const custEmail = contact.email;
+  const custName = contact.name;
   if (!custEmail) return false;
   const firstName = custName.trim().split(/\s+/)[0] || "there";
   const dollars = (amountCents / 100).toFixed(2).replace(/\.00$/, "");
@@ -509,8 +506,9 @@ export async function sendFeeReceiptEmailOnce(
   const key = process.env["RESEND_API_KEY"];
   if (!key) return false;
   const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
-  const custEmail = typeof custRes.data["email"] === "string" ? custRes.data["email"] : "";
-  const custName = typeof custRes.data["name"] === "string" ? custRes.data["name"] : "";
+  const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? custRes.data["email"] : "", typeof custRes.data["name"] === "string" ? custRes.data["name"] : "");
+  const custEmail = contact.email;
+  const custName = contact.name;
   if (!custEmail) return false;
   if (dbConfigured()) {
     const prior = await dbSelect<{ event?: string; detail?: Record<string, unknown> | null }>(
@@ -754,7 +752,7 @@ async function reconcileCard(
 type BookingRow = {
   id: string; booking_id: string; status: string | null;
   amount_cents: number | null; cleaner_name: string | null;
-  client_email: string | null; report_sent_at: string | null;
+  client_email: string | null; client_name?: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
   visit_date: string | null; window: string | null;
   service?: string | null;
@@ -790,6 +788,15 @@ const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null 
   events.find((e) => e.event === name) ?? null;
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+export async function bookingEmailContact(bookingId: string, email: string, name: string): Promise<{ email: string; name: string }> {
+  if (!dbConfigured()) return { email, name };
+  const result = await dbSelectStrict<{ client_email?: string | null; client_name?: string | null }>("gh_visits", `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`);
+  if (!result.ok) return { email: "", name: "" };
+  const row = result.rows[0];
+  if (row?.client_email && email && row.client_email.trim().toLowerCase() !== email.trim().toLowerCase()) return { email: "", name: "" };
+  return { email: row?.client_email || email, name: row?.client_name || name };
+}
+
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
@@ -808,11 +815,12 @@ async function hydrateCustomerMeta(
   customer: { id: string; metadata: Record<string, string> },
   row: BookingRow,
   events: BookingEvent[],
+  persist = true,
 ): Promise<void> {
   const confirmEv = latestEvent(events, "visit_confirmed");
   const opened = latestEvent(events, "issue_opened");
   const resolved = latestEvent(events, "issue_resolved");
-  const issueOpen = Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
+  const issueOpen = row.issue_open === true || Boolean(opened && (!resolved || resolved.created_at < opened.created_at));
   const cancelledEv = latestEvent(events, "visit_cancelled");
   // An operator approval is not client consent: a stale operator event
   // must not re-arm "approved" when this booking is hydrated (G3).
@@ -821,12 +829,17 @@ async function hydrateCustomerMeta(
   const approvedEv = clientApprovedEvent(events);
   const remindedEv = latestEvent(events, "reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
+  const proposal = latestEvent(events, "date_proposed");
+  const declined = Boolean(proposal && typeof proposal.detail?.["alt_dates"] === "string" && (!confirmEv || proposal.created_at > confirmEv.created_at));
   const state = row.status === "paid" ? "paid"
-    : cancelledEv ? "cancelled"
+    : row.status === "cancelled" || cancelledEv ? "cancelled"
     : issueOpen ? "issue_open"
     : approvedEv ? "approved"
+    : declined ? "date_declined"
     : row.report_sent_at ? "report_sent"
-    : customer.metadata["gh_state"] ?? "";
+    : confirmEv ? "card_ready"
+    : row.status === "requested" ? "requested"
+    : row.status ?? "requested";
   const values: Record<string, string> = {
     gh_booking_id: row.booking_id,
     gh_state: state,
@@ -835,7 +848,7 @@ async function hydrateCustomerMeta(
     gh_report_sent_at: row.report_sent_at ?? "",
     gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
     gh_report_bounced: row.report_bounced ? "1" : "",
-    gh_booking_confirmed: confirmEv ? "1" : "",
+    gh_booking_confirmed: confirmEv && state !== "cancelled" ? "1" : "",
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_confirmed_window: evStr(confirmEv, "window"),
     gh_cleaner_name: row.cleaner_name ?? "",
@@ -844,10 +857,21 @@ async function hydrateCustomerMeta(
     gh_issue_room: issueOpen ? evStr(opened, "room") : "",
     gh_reminded_at: remindedEv ? remindedEv.created_at : "",
     gh_card_email_sent: cardEmailEv ? "1" : "",
+    gh_no_photo_zones: row.no_photo_zones ?? "",
+    gh_proposed_date: evStr(proposal, "date"),
+    gh_alt_dates: declined ? evStr(proposal, "alt_dates") : "",
+    gh_issue_resolved_at: resolved?.created_at ?? "",
+    gh_reclean_date: evStr(resolved, "reclean_date"),
+    gh_cancel_scope: evStr(cancelledEv, "scope"),
+    gh_cancel_fee_cents: cancelledEv?.detail?.["fee_cents"] != null ? String(cancelledEv.detail["fee_cents"]) : "",
+    gh_fee_charged: latestEvent(events, "fee_charged") || latestEvent(events, "cancellation_fee_paid") ? "1" : "",
+    gh_last_payment: evStr(latestEvent(events, "payment_succeeded"), "payment_intent"),
+    gh_report_version: latestEvent(events, "report_sent")?.detail?.["version"] != null ? String(latestEvent(events, "report_sent")!.detail!["version"]) : "",
+
   };
   const params: Record<string, string> = {};
   for (const [k, v] of Object.entries(values)) params[`metadata[${k}]`] = v;
-  await stripePost(secretKey, `/customers/${customer.id}`, params);
+  if (persist) await stripePost(secretKey, `/customers/${customer.id}`, params);
   Object.assign(customer.metadata, values);
 }
 
@@ -1105,6 +1129,38 @@ export default async function handler(req: Req, res: Res) {
     }
     if (!bookingId) return json(400, { ok: false, error: "invalid_request" });
 
+    if (action === "invite_next_visit") {
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok || !result.row) return json(503, { ok: false, error: "status_unavailable" });
+      const visit = result.row;
+      if (visit.status !== "paid") return json(409, { ok: false, error: "visit_not_complete" });
+      const journal = await bookingEventsStrict(bookingId);
+      if (!journal.ok) return json(503, { ok: false, error: "status_unavailable" });
+      const prior = journal.events.find((event) => event.event === "next_visit_invitation_sent");
+      if (prior && Date.now() - Date.parse(prior.created_at) < 24 * 3600 * 1000) return json(200, { ok: true, email_sent: true, already_sent: true });
+      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Ready for your next clean? — Gatehouse Home Cleaning", heading: "Arrange your next visit", lines: ["Review your current price and request a date that works for you. We confirm each date, arrival window and cleaner by email.", "Sending a request does not charge your card. You review the current price, card choice and terms before the next visit is confirmed."], buttonLabel: "See price & request my next visit", buttonUrl: "https://www.gatehousehomecleaning.com/quote?service=standard&frequency=every2weeks" });
+      if (sent) await logEvent(visit.id, bookingId, "owner", "next_visit_invitation_sent");
+      else await logEvent(visit.id, bookingId, "owner", "notification_email_failed", { kind: "next_visit_invitation" });
+      return json(200, { ok: true, email_sent: sent });
+    }
+
+    if (action === "set_test_booking") {
+      if (parsed.data.is_test === undefined) return json(400, { ok: false, error: "invalid_request" });
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok) return json(503, { ok: false, error: "db_unreadable" });
+      if (!result.row) return json(404, { ok: false, error: "booking_not_found" });
+      const saved = await dbUpdateCount("gh_visits", `id=eq.${result.row.id}`, { is_test: parsed.data.is_test });
+      return json(saved === 1 ? 200 : 503, { ok: saved === 1, ...(saved !== 1 ? { error: "test_flag_not_saved" } : {}) });
+    }
+    if (action === "resend_status_email") {
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok || !result.row) return json(503, { ok: false, error: "status_unavailable" });
+      const visit = result.row;
+      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Your visit update — Gatehouse Home Cleaning", heading: visit.status === "cancelled" ? "Your visit is cancelled" : "Your visit update", lines: [visit.status === "cancelled" ? "This visit is cancelled. View your visit page for the cancellation details." : "Open your visit page for the latest confirmed status, date and payment details."], buttonLabel: "View my visit" });
+      await logEvent(visit.id, bookingId, "owner", sent ? "notification_email_sent" : "notification_email_failed", { kind: "status_update" });
+      return json(200, { ok: true, email_sent: sent });
+    }
+
     // Owner-only repair for contacts lost by older booking versions.
     if (action === "set_client_phone") {
       const phone = normalizeClientPhone(parsed.data.client_phone);
@@ -1142,9 +1198,9 @@ export default async function handler(req: Req, res: Res) {
       return json(404, { ok: false, error: "booking_not_found" });
     }
     const bound = Boolean(boundCustomer);
-    if (row && !bound) {
+    if (row && (!bound || action === "status")) {
       try {
-        await hydrateCustomerMeta(STRIPE_SECRET_KEY, customer, row, events);
+        await hydrateCustomerMeta(STRIPE_SECRET_KEY, customer, row, events, action !== "status");
       } catch {
         /* actions below re-check state before writing */
       }
@@ -1286,8 +1342,9 @@ export default async function handler(req: Req, res: Res) {
       let emailSent = false;
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+        const custEmail = contact.email;
+        const custName = contact.name;
         if (custEmail) {
           const firstName = custName.trim().split(/\s+/)[0] || "there";
           const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
@@ -1460,8 +1517,9 @@ export default async function handler(req: Req, res: Res) {
       let emailSent = false;
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+        const custEmail = contact.email;
+        const custName = contact.name;
         if (custEmail) {
           const firstName = custName.trim().split(/\s+/)[0] || "there";
           const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
@@ -1514,8 +1572,9 @@ export default async function handler(req: Req, res: Res) {
       let emailSent = false;
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+        const custEmail = contact.email;
+        const custName = contact.name;
         if (custEmail) {
           const firstName = custName.trim().split(/\s+/)[0] || "there";
           const visitToken = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
@@ -1984,8 +2043,9 @@ export default async function handler(req: Req, res: Res) {
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+        const custEmail = contact.email;
+        const custName = contact.name;
         if (custEmail) {
           const firstName = custName.trim().split(/\s+/)[0] || "there";
           const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
@@ -2156,8 +2216,9 @@ export default async function handler(req: Req, res: Res) {
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
       if (RESEND_API_KEY) {
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
-        const custEmail = typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "";
-        const custName = typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "";
+        const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
+        const custEmail = contact.email;
+        const custName = contact.name;
         if (custEmail) {
           const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
             bid: bookingId, email: custEmail, name: custName,

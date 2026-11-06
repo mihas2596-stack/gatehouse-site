@@ -7,7 +7,7 @@ import Quote from "@/pages/Quote";
 // 2026-11-06T10:33Z after the extensions of 2026-10-26, 2026-10-28, 2026-10-31 and 2026-11-03). Pin the clock
 // past the window so these regular-price assertions stay deterministic;
 // token test mode has its own cases below.
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-07T00:00:00Z"));
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-14T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);

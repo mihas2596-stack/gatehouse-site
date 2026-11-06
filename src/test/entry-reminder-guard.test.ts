@@ -129,7 +129,7 @@ describe("entry reminder guard", () => {
     expect(r.code).toBe(200);
     expect(r.body["entry_reminded"]).toBe(1);
     expect(resendCalls).toHaveLength(1);
-    expect(resendCalls[0].subject).toContain("how should we get in?");
+    expect(resendCalls[0].subject).toContain("arrange entry");
   });
 
   it("skips meeting choices (home / other_person)", async () => {

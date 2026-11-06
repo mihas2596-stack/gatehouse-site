@@ -174,7 +174,7 @@ describe("RA16 accept_alt_date writes the row first", () => {
     expect(evts.filter((e) => e.event === "visit_confirmed")).toHaveLength(1);
     expect(custMeta["gh_confirmed_date"]).toBe("2027-02-10");
     expect(custMeta["gh_state"]).toBe("card_ready");
-    expect(callOrder).toEqual(["row-patch", "event-post:visit_confirmed", "meta-post"]);
+    expect(callOrder).toEqual(["row-patch", "event-post:visit_confirmed", "meta-post", "event-post:notification_email_sent"]);
   });
 
   it("meta POST 500: 502, and the retry succeeds (state still declined)", async () => {
@@ -197,7 +197,7 @@ describe("RA16 accept_alt_date writes the row first", () => {
     // Replay heals only the shared metadata: no second journal
     // event, no second row write, one owner notification total.
     expect(evts.filter((e) => e.event === "visit_confirmed")).toHaveLength(1);
-    expect(callOrder).toEqual(["meta-post"]);
+    expect(callOrder).toEqual(["meta-post", "event-post:notification_email_sent"]);
     expect(resendCount).toBe(1);
   });
 });

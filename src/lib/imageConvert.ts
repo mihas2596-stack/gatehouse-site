@@ -27,7 +27,7 @@ export async function convertToJpeg(file: File): Promise<Blob> {
           "or pick it from the gallery instead.",
       );
     }
-    if (["image/jpeg", "image/png", "image/webp"].includes(file.type)) return file;
+    if (["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("We couldn’t safely process this photo. Please take another photo or choose a different JPG/PNG from your gallery.");
     throw new Error("This file isn't a photo we can use. Please take a photo or pick a JPG/PNG from the gallery.");
   }
   const maxSide = 2048;

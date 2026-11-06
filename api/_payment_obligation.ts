@@ -161,7 +161,7 @@ export async function chargeVisit(input: {
   nowMs: number;
   deps: ChargeDeps;
 }): Promise<ChargeOutcome> {
-  const { secretKey, bookingId, customerId, paymentMethod, source, deps } = input;
+  const { secretKey, bookingId, customerId, source, deps } = input;
   const rowRes = await loadRow(bookingId);
   if (!rowRes.ok) return { outcome: "unknown", error: "db_unreadable" };
   const row = rowRes.row;
@@ -169,6 +169,12 @@ export async function chargeVisit(input: {
   const evRes = await loadEvents(bookingId);
   if (!evRes.ok) return { outcome: "unknown", error: "db_unreadable" };
   const events = evRes.events;
+  // Card choice is per booking, just like its price and consent. Updating
+  // the shared customer's default card for visit B must not change A.
+  const selectedCard = events.filter((e) => e.event === "card_confirmed")
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.detail?.["payment_method_id"];
+  const paymentMethod = typeof selectedCard === "string" && selectedCard.startsWith("pm_")
+    ? selectedCard : input.paymentMethod;
 
   // --- Obligation resolution (row + journal only, RA01/RA05/RA06). ---
   if (row.status === "paid") return { outcome: "blocked", error: "already_paid" };

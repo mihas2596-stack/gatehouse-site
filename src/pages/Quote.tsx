@@ -211,7 +211,7 @@ const Quote = () => {
     termsConsent: false,
     photoConsent: false,
     smsConsent: false,
-    city: "",
+    city: params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
     state: "GA",
     apt: "",
   });

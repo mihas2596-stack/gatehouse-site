@@ -1,338 +1,139 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
-import { formatDateLong } from "@/lib/utils";
+import { formatDateLong, formatArrivalWindow } from "@/lib/utils";
 import { trackFunnel } from "@/lib/measurement";
 
-type SubmitStatus = "idle" | "sending" | "error";
-type VerifyState =
-  | { kind: "none" }
-  | { kind: "verifying"; booking: BookingSummary | null }
-  | { kind: "saved"; booking: BookingSummary | null }
-  | { kind: "pending"; booking: BookingSummary | null }
-  | { kind: "failed"; booking: BookingSummary | null }
-  | { kind: "unknown"; booking: BookingSummary | null };
-
 type BookingSummary = {
-  first?: string;
-  recurring?: string;
-  service?: string;
-  date?: string;
-  has_card?: string;
-  booking_confirmed?: string;
-  confirmed_date?: string;
-  confirmed_window?: string;
+  first?: string; recurring?: string; service?: string; first_service?: string; date?: string;
+  has_card?: string; card_confirmed?: string; card_brand?: string; card_last4?: string;
+  booking_confirmed?: string; confirmed_date?: string; confirmed_window?: string;
+  visit_state?: string; auto_charge_blocked?: string; confirm_by?: string;
 };
+type Status = "loading" | "ready" | "saved" | "pending" | "failed" | "unknown";
 
-const SaveCard = () => {
-  const [searchParams] = useSearchParams();
-  const bt = searchParams.get("bt") ?? "";
-  const savedParam = searchParams.get("saved") === "1";
-  const sessionId = searchParams.get("session_id") ?? "";
-  const canceled = searchParams.get("canceled") === "1";
-
+export default function SaveCard() {
+  const [params] = useSearchParams();
+  const bt = params.get("bt") ?? "";
+  const sessionId = params.get("session_id") ?? "";
+  const returning = params.get("saved") === "1";
+  const [status, setStatus] = useState<Status>(bt || returning ? "loading" : "ready");
+  const [booking, setBooking] = useState<BookingSummary | null>(null);
+  const [entry, setEntry] = useState(params.get("mode") === "change");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
-  const [verify, setVerify] = useState<VerifyState>({ kind: "none" });
-  const [booking, setBooking] = useState<BookingSummary | null>(null);
-
-  // Verify a returning Stripe session server-side. ?saved=1 alone NEVER
-  // means "card saved" — only a verified SetupIntent does.
-  useEffect(() => {
-    if (!savedParam) return;
-    if (!sessionId) {
-      // saved=1 without a session id: cannot verify. Do NOT show success.
-      setVerify({ kind: "unknown", booking: null });
-      return;
-    }
-    setVerify({ kind: "verifying", booking: null });
-    const url =
-      `/api/card-status?session_id=${encodeURIComponent(sessionId)}` +
-      (bt ? `&bt=${encodeURIComponent(bt)}` : "");
-    fetch(url)
-      .then((r) => r.json())
-      .then((data: { verified?: boolean; status?: string; booking?: BookingSummary | null }) => {
-        const b = data.booking ?? null;
-        setBooking(b);
-        if (data.verified && data.status === "saved") {
-          setVerify({ kind: "saved", booking: b });
-          // Audit fix (§10): gh_lead_submit fires on request acceptance,
-          // not on card save — the funnel conflated the two. This event
-          // fires only on server-verified save (never on ?saved=1 alone).
-          trackFunnel("gh_card_saved", { form_type: "quote" });
-        }
-        else if (data.status === "pending") setVerify({ kind: "pending", booking: b });
-        else if (data.status === "failed") setVerify({ kind: "failed", booking: b });
-        else setVerify({ kind: "unknown", booking: b });
-      })
-      .catch(() => setVerify({ kind: "unknown", booking: null }));
-  }, [savedParam, sessionId, bt]);
-
-  // When opened with a booking token, we already trust the booking —
-  // no need to retype name/email. Show the booking summary instead.
-  // (The token itself is verified server-side when creating the session.)
-  useEffect(() => {
-    if (!bt || savedParam) return;
-    fetch(`/api/card-status?bt=${encodeURIComponent(bt)}`)
-      .then((r) => r.json())
-      .then((data: { booking?: BookingSummary | null }) => {
-        if (data.booking) setBooking(data.booking);
-      })
-      .catch(() => {});
-  }, [bt, savedParam]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const body: Record<string, string> = {};
-    if (bt) {
-      body.bt = bt;
-    } else {
-      const errors: Record<string, string> = {};
-      if (name.trim().length < 2) errors.name = "Enter your name.";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
-        errors.email = "Enter a valid email, like name@example.com.";
-      setFieldErrors(errors);
-      if (Object.keys(errors).length > 0) return;
-      body.name = name.trim();
-      body.email = email.trim();
-    }
-
-    setSubmitStatus("sending");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (!bt && !returning) { setStatus("ready"); return; }
+    if (returning && !sessionId) { setStatus("unknown"); return; }
+    setStatus("loading");
     try {
-      const res = await fetch("/api/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json()) as { ok?: boolean; url?: string };
-      if (res.ok && data.ok && typeof data.url === "string") {
-        window.location.href = data.url;
-        return;
-      }
-      setSubmitStatus("error");
-    } catch {
-      setSubmitStatus("error");
-    }
+      const response = await fetch(`/api/card-status?${new URLSearchParams({ ...(bt ? { bt } : {}), ...(sessionId ? { session_id: sessionId } : {}) })}`);
+      const data = await response.json();
+      if (response.ok === false || data.ok === false || (bt && !data.booking)) throw new Error("unknown");
+      setBooking(data.booking ?? null);
+      if (returning) {
+        if (data.verified && data.status === "saved") { setStatus("saved"); setEntry(false); trackFunnel("gh_card_saved", { form_type: "quote" }); }
+        else setStatus(data.status === "pending" ? "pending" : data.status === "failed" ? "failed" : "unknown");
+      } else setStatus("ready");
+    } catch { setStatus("unknown"); }
+  }, [bt, sessionId, returning]);
+  useEffect(() => { void load(); }, [load]);
+
+  const confirm = async () => {
+    if (busy || !bt) return;
+    setBusy(true); setError("");
+    try {
+      const r = await fetch("/api/card-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bt, action: "confirm_card" }) });
+      const data = await r.json();
+      if (r.ok === false || !data.ok) throw new Error("not saved");
+      setBooking((b) => ({ ...b, card_confirmed: "1" }));
+      setStatus("saved"); trackFunnel("gh_card_saved", { form_type: "quote" });
+    } catch { setError("We couldn't confirm your choice. Your request is saved. Please try again."); }
+    finally { setBusy(false); }
   };
-
-  const bookingSummary = booking && (booking.first || booking.recurring || booking.service || booking.date);
-  // Revisit state from the booking token (server-checked against Stripe):
-  // a client reopening their link sees the true state, not the save form.
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); if (busy) return;
+    const fields: Record<string, string> = {};
+    if (!bt) {
+      if (name.trim().length < 2) fields.name = "Enter your name.";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) fields.email = "Enter a valid email, like name@example.com.";
+    }
+    setErrors(fields); if (Object.keys(fields).length) return;
+    setBusy(true); setError("");
+    try {
+      const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt } : { name: name.trim(), email: email.trim() }) });
+      const data = await r.json();
+      if (!r.ok || !data.ok || typeof data.url !== "string") throw new Error("checkout");
+      window.location.href = data.url;
+    } catch { setError("We couldn't open Stripe's secure page. Your request is saved — please try again."); setBusy(false); }
+  };
+  const cancelled = booking?.visit_state === "cancelled";
   const hasCard = booking?.has_card === "1";
-  const isConfirmed = booking?.booking_confirmed === "1";
-
+  const chosen = booking?.card_confirmed === "1" || status === "saved";
+  const confirmed = booking?.booking_confirmed === "1";
+  const blocked = booking?.auto_charge_blocked === "1";
+  const unknown = status === "unknown" || status === "pending" || status === "failed";
+  const choice = status === "ready" && hasCard && !chosen && !entry;
+  const done = !entry && (status === "saved" || (hasCard && chosen)) && !unknown;
+  const showForm = !cancelled && !unknown && status !== "loading" && !done && (!hasCard || entry);
+  const visitLink = `/visit?bt=${encodeURIComponent(bt)}`;
+  const brand = booking?.card_brand?.replace(/\b\w/g, (c) => c.toUpperCase()) || "Card";
   return (
     <div className="page-shell readable-flow min-h-[80vh] bg-background">
-      <SEO
-        url="https://www.gatehousehomecleaning.com/save-card"
-        title="Save Your Card — $0 Today | Gatehouse Home Cleaning"
-        description="Save your card to secure your booking. No charge today — your card is charged when you approve the photo report, or automatically 24 hours after we send it if you haven't reported an issue."
-        noindex
-      />
-      <div className="container max-w-xl py-12 pb-24 text-center md:pb-12">
-        {verify.kind === "verifying" && (
-          <>
-            <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Checking your card…</h1>
-            <p className="text-lg text-foreground mb-6">We're confirming with Stripe that your card was saved.</p>
-          </>
-        )}
-        {verify.kind === "saved" && (
-          <>
-            <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved. Your request is complete.</h1>
-            <p className="text-lg text-foreground mb-6">
-              We&apos;ll confirm availability for your requested date by email within one business
-              day. Nothing was charged — your card is charged when you approve your photo report,
-              or 24 hours after we send it if you haven&apos;t reported an issue.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button variant="hero" size="lg" asChild>
-                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
-              </Button>
-              <Button variant="outline" size="lg" asChild>
-                <Link to="/">Back to Home</Link>
-              </Button>
-            </div>
-          </>
-        )}
-        {(verify.kind === "pending" || verify.kind === "failed" || verify.kind === "unknown") && (
-          <>
-            <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-              {verify.kind === "pending" ? "Almost there" : verify.kind === "failed" ? "Card not saved" : "Couldn't verify card"}
-            </h1>
-            <p className="text-lg text-foreground mb-6">
-              {verify.kind === "pending"
-                ? "Your card entry is still being confirmed with Stripe. Wait a moment, then check again."
-                : verify.kind === "failed"
-                  ? "The card wasn't saved. Nothing was charged. You can try again with the same or a different card."
-                  : "We couldn't verify your card status with Stripe right now — this doesn't mean it failed. Nothing was charged. Check again in a moment, or try a fresh card entry below."}
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center mb-6">
-              <Button variant="hero" size="lg" onClick={() => window.location.reload()}>
-                Check again
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => setVerify({ kind: "none" })}>
-                Start a fresh card entry
-              </Button>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Still stuck? Email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a> — we&apos;ll help you out.
-            </p>
-          </>
-        )}
-        {verify.kind === "none" && hasCard && isConfirmed && (
-          <>
-            <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Booking confirmed</h1>
-            <p className="text-lg text-foreground mb-6">
-              Your cleaning is confirmed
-              {booking?.confirmed_date ? <> for <strong>{booking.confirmed_date}</strong></> : null}
-              {booking?.confirmed_window ? <> · {booking.confirmed_window}</> : null}.
-              Your card is saved — $0 charged today. Your card is charged when you approve your
-              photo report, or automatically 24 hours after we send it if you haven&apos;t reported
-              an issue.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button variant="hero" size="lg" asChild>
-                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
-              </Button>
-              <Button variant="outline" size="lg" asChild>
-                <Link to="/">Back to Home</Link>
-              </Button>
-            </div>
-          </>
-        )}
-        {verify.kind === "none" && hasCard && !isConfirmed && (
-          <>
-            <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Card saved. Your request is complete.</h1>
-            <p className="text-lg text-foreground mb-6">
-              Your card is already on file for this booking — no need to save it again. We&apos;ll
-              confirm availability for your requested date by email within one business day.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button variant="hero" size="lg" asChild>
-                <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
-              </Button>
-              <Button variant="outline" size="lg" asChild>
-                <Link to="/">Back to Home</Link>
-              </Button>
-            </div>
-          </>
-        )}
-        {verify.kind === "none" && !hasCard && (
-          <>
-            <CreditCard className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <ol className="mb-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm font-semibold" aria-label="How booking works">
-              <li className="rounded-full border border-border bg-card px-3 py-1.5">1 · Your price</li>
-              <li aria-hidden="true" className="text-muted-foreground">→</li>
-              <li className="rounded-full border border-border bg-card px-3 py-1.5">2 · Your visit</li>
-              <li aria-hidden="true" className="text-muted-foreground">→</li>
-              <li className="rounded-full bg-primary px-3 py-1.5 text-primary-foreground">3 · Save your card — $0 today</li>
-            </ol>
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-              Last step: save your card — $0 today
-            </h1>
-            <p className="text-lg text-foreground mb-6">
-              This finishes your request — nothing is charged today.
-              {!isConfirmed && (
-                <> The card alone doesn&apos;t confirm your time — we confirm your date and arrival
-                window by email within one business day.</>
-              )}
-            </p>
-            {isConfirmed && (
-              <p className="mb-6 rounded-lg border border-sage/40 bg-sage/10 p-4 text-base text-foreground">
-                Good news — your visit is confirmed
-                {booking?.confirmed_date ? <> for <strong>{booking.confirmed_date}</strong></> : null}
-                {booking?.confirmed_window ? <> · {booking.confirmed_window}</> : null}.
-                Save your card below to complete — $0 today.
-              </p>
-            )}
-            <div className="mb-6"><PaymentSummary showCard /></div>
-            <p className="mb-6 text-left text-base leading-relaxed">Cancel free at least 48 hours before your visit; later cancellations cost $25. If the cleaner cannot enter at the scheduled time, the full visit price applies. <Link to="/terms#terms-6" className="underline text-primary">Changes &amp; access policy</Link>.</p>
-            {bookingSummary && (
-              <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
-                <h2 className="mb-2 font-heading text-lg font-bold">Your booking</h2>
-                <ul className="space-y-1 text-base">
-                  {booking!.service && <li>Service: <strong>{booking!.service}</strong></li>}
-                  {booking!.date && <li>Preferred date: <strong>{formatDateLong(booking!.date)}</strong></li>}
-                  {booking!.first && <li>First visit: <strong>${booking!.first}</strong></li>}
-                  {booking!.recurring && <li>Recurring visits: <strong>${booking!.recurring}</strong></li>}
-                </ul>
-                <p className="mt-4 border-t border-sage/40 pt-4 text-sm leading-relaxed">
-                  By continuing, you authorize Gatehouse to charge this card{" "}
-                  {booking!.first ? (
-                    <>${booking!.first} for the first visit{booking!.recurring ? <> and ${booking!.recurring} per recurring visit</> : null}</>
-                  ) : (
-                    <>per the prices above</>
-                  )}{" "}
-                  as described above and in our Terms. $0 is charged today.
-                </p>
-              </div>
-            )}
-            {canceled && (
-              <p className="mb-6 rounded-lg bg-muted p-4 text-sm text-muted-foreground">
-                Card entry was canceled — nothing was saved or charged. You can try again below whenever
-                you're ready.
-              </p>
-            )}
+      <SEO url="https://www.gatehousehomecleaning.com/save-card" title="Choose Your Card — $0 Today | Gatehouse Home Cleaning" description="Choose a card for your visit through Stripe. No charge for saving or updating your card." noindex />
+      <div className="container max-w-xl py-10 pb-24 text-center md:pb-12">
+        {status === "loading" ? <>
+          <Loader2 className="mx-auto mb-6 h-12 w-12 animate-spin" aria-hidden="true" />
+          <h1 className="font-heading text-3xl font-bold">Checking your card…</h1>
+          <p className="mt-4">Please wait while we check the status of this visit.</p>
+        </> : cancelled ? <>
+          <h1 className="font-heading text-3xl font-bold">This visit is cancelled</h1>
+          <p className="my-6">You don't need to save a card for this visit.</p>
+          <Button asChild variant="outline"><Link to={visitLink}>View my visit</Link></Button>
+        </> : unknown ? <>
+          <AlertTriangle className="mx-auto mb-6 h-12 w-12" aria-hidden="true" />
+          <h1 className="font-heading text-3xl font-bold">{status === "failed" ? "Card not saved" : "Couldn't verify card"}</h1>
+          <p className="my-6">We couldn't verify your card status. This doesn't mean it failed. Check again before entering it again.</p>
+          <Button variant="hero" size="lg" onClick={() => void load()}>Check again</Button>
+          {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
+          {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
+        </> : <>
+          {done ? <CheckCircle className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" /> : <CreditCard className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" />}
+          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? !bt ? "Card saved — $0 charged today" : confirmed ? "Booking confirmed" : "Card saved. Your request is complete." : "Last step: save your card — $0 today"}</h1>
+          <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? !bt ? "Your payment method is saved. To request a cleaning, choose your service and date below." : confirmed ? `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : `Your date is awaiting confirmation. We'll email your cleaner and arrival window ${booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
+          {booking && <dl className="rounded-xl border border-border bg-card p-5 text-left space-y-3 mb-6">
+            {booking.service && <div><dt className="font-semibold">Service</dt><dd>{booking.service}</dd></div>}
+            {(booking.confirmed_date || booking.date) && <div><dt className="font-semibold">{confirmed ? "Confirmed date" : "Requested date"}</dt><dd>{formatDateLong(booking.confirmed_date || booking.date)}</dd></div>}
+            {booking.first && <div><dt className="font-semibold">This visit</dt><dd>${booking.first}</dd></div>}
+            {hasCard && <div><dt className="font-semibold">Card on file</dt><dd>{brand}{booking.card_last4 ? ` ••••${booking.card_last4}` : ""}</dd></div>}
+            <div><dt className="font-semibold">Due today</dt><dd>$0</dd></div>
+          </dl>}
+          {blocked && <p role="status" className="rounded-xl bg-sage/15 p-5 mb-6 text-left">Automatic payment is blocked for this visit because an issue was reported. Updating your card does not restart it. You choose when to approve your report and pay.</p>}
+          {error && <p role="alert" className="mb-4 rounded-lg bg-destructive/10 p-4">{error}</p>}
+          {choice && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy} onClick={() => void confirm()}>{busy ? "Confirming…" : "Use this card for this booking — $0 today"}</Button>}
+          {hasCard && !entry && <Button variant="outline" size="lg" className="w-full mb-4" onClick={() => setEntry(true)}>Add a different card</Button>}
+          {showForm && <>
+            {!blocked && <div className="mb-6"><PaymentSummary showCard /></div>}
+            {params.get("canceled") === "1" && <p className="mb-6">Card entry was cancelled. You can try again when you're ready.</p>}
             <form onSubmit={submit} className="text-left space-y-4" noValidate>
-              {!bt && (
-                <>
-                  <div>
-                    <label htmlFor="sc-name" className="mb-1 block text-sm font-medium">
-                      Full name
-                    </label>
-                    <input
-                      id="sc-name"
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="w-full rounded-lg border border-input bg-background px-4 py-3 text-base"
-                      autoComplete="name"
-                    />
-                    {fieldErrors.name && <p className="mt-1 text-sm text-destructive">{fieldErrors.name}</p>}
-                  </div>
-                  <div>
-                    <label htmlFor="sc-email" className="mb-1 block text-sm font-medium">
-                      Email
-                    </label>
-                    <input
-                      id="sc-email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full rounded-lg border border-input bg-background px-4 py-3 text-base"
-                      autoComplete="email"
-                    />
-                    {fieldErrors.email && <p className="mt-1 text-sm text-destructive">{fieldErrors.email}</p>}
-                  </div>
-                </>
-              )}
-              {submitStatus === "error" && (
-                <p className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
-                  Something went wrong starting the secure card entry. Please try again in a minute.
-                </p>
-              )}
-              <Button type="submit" variant="hero" size="lg" className="w-full" disabled={submitStatus === "sending"}>
-                {submitStatus === "sending" ? "Opening Stripe's secure page…" : "Add card — $0 today"}
-              </Button>
-              <p className="text-center text-xs text-muted-foreground">
-                You'll enter your card securely on Stripe. No Link account is required.
-              </p>
+              {!bt && <>
+                <div><label className="block font-medium mb-1" htmlFor="sc-name">Full name</label><input className="w-full rounded-lg border p-3 text-base" id="sc-name" value={name} autoComplete="name" onChange={(e) => setName(e.target.value)} aria-invalid={!!errors.name} aria-describedby={errors.name ? "sc-name-error" : undefined} />{errors.name && <p id="sc-name-error" className="text-destructive">{errors.name}</p>}</div>
+                <div><label className="block font-medium mb-1" htmlFor="sc-email">Email</label><input className="w-full rounded-lg border p-3 text-base" id="sc-email" type="email" value={email} autoComplete="email" onChange={(e) => setEmail(e.target.value)} aria-invalid={!!errors.email} aria-describedby={errors.email ? "sc-email-error" : undefined} />{errors.email && <p id="sc-email-error" className="text-destructive">{errors.email}</p>}</div>
+              </>}
+              <Button type="submit" variant="hero" size="lg" className="w-full" disabled={busy}>{busy ? "Opening Stripe's secure page…" : "Add card — $0 today"}</Button>
+              <p className="text-base text-muted-foreground text-center">You'll enter your card securely on Stripe. No Link account is required.</p>
             </form>
-          </>
-        )}
+          </>}
+          {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
+          {bt && <p className="mt-6"><Link to={visitLink} className="underline font-semibold">View my visit</Link></p>}
+        </>}
       </div>
     </div>
   );
-};
-
-export default SaveCard;
+}

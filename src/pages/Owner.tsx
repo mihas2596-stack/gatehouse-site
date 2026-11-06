@@ -1,3 +1,4 @@
+import { formatArrivalWindow } from "@/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
@@ -9,6 +10,7 @@ import ClientContact from "@/components/ClientContact";
 import {
   attentionItems,
   nextActionFor,
+  isPastUnfinishedVisit,
   reportLabel,
   stripeLabel,
   visitLabel,
@@ -144,7 +146,7 @@ const EVENT_LABELS: Record<string, string> = {
 // Detail keys that must never render in Activity (defense in depth —
 // events should not carry them, but the panel never displays them).
 const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
-type OwnerFilter = "attention" | "upcoming" | "completed" | "cancelled" | "all";
+type OwnerFilter = "attention" | "upcoming" | "past" | "completed" | "cancelled" | "all";
 
 const Owner = () => {
   const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
@@ -155,6 +157,8 @@ const Owner = () => {
   const [showTokenForm, setShowTokenForm] = useState(false);
   const [linkMsg, setLinkMsg] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   // Test bookings are hidden by default (the owner has dozens of them);
   // the choice persists across sessions.
   const [hideTest, setHideTest] = useState(() => {
@@ -276,7 +280,7 @@ const Owner = () => {
     setError("");
     try {
       const r = await fetch("/api/owner?view=list", { headers: headers() });
-      const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string };
+      const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string; next_offset?: number | null };
       if (tokenRef.current !== token) return;
       if (!j.ok) {
         if (j.error === "unauthorized") {
@@ -294,6 +298,7 @@ const Owner = () => {
         setVisits([]);
       } else {
         setVisits(j.visits ?? []);
+        setNextOffset(j.next_offset ?? null);
       }
     } catch {
       if (tokenRef.current !== token) return;
@@ -301,6 +306,21 @@ const Owner = () => {
     }
     setLoading(false);
   }, [token, headers]);
+
+  const loadMore = async () => {
+    if (nextOffset === null || loadingMore || !token) return;
+    setLoadingMore(true);
+    const session = token;
+    try {
+      const response = await fetch(`/api/owner?view=list&offset=${nextOffset}`, { headers: headers() });
+      const data = await response.json();
+      if (tokenRef.current !== session) return;
+      if (!response.ok || !data.ok) throw new Error("list");
+      setVisits((current) => { const ids = new Set(current.map((v) => v.id)); return [...current, ...(data.visits ?? []).filter((v: Visit) => !ids.has(v.id))]; });
+      setNextOffset(data.next_offset ?? null);
+    } catch { if (tokenRef.current === session) setError("Couldn't load more visits. Please try again."); }
+    finally { setLoadingMore(false); }
+  };
 
   useEffect(() => {
     void loadList();
@@ -435,7 +455,7 @@ const Owner = () => {
       const j = await act(payload);
       if (!isCurrentVisit(actionVisitId, actionEpoch)) { void loadList(); return; }
       if (j.ok) {
-        setActionMsg(`${label}: done.`);
+        setActionMsg(j.email_sent === false ? `${label}: saved, but the email could not be sent. You can retry the status email below.` : `${label}: done.`);
         after?.(j);
         void loadList();
         if (selected) {
@@ -868,10 +888,11 @@ const Owner = () => {
   // Task-centered filters — one list, no duplicated queues. "Needs
   // attention" is the shared attentionItems rule (plus bounced reports,
   // which need a re-send); "Upcoming" is the active pipeline.
-  const isAttention = (v: Visit): boolean => attentionItems(v).length > 0 || v.report_bounced;
+  const isAttention = (v: Visit): boolean => attentionItems(v).length > 0 || v.report_bounced || isPastUnfinishedVisit(v);
   const filterCounts: Record<OwnerFilter, number> = {
     attention: listedVisits.filter(isAttention).length,
-    upcoming: listedVisits.filter((v) => v.status !== "cancelled" && v.status !== "paid").length,
+    upcoming: listedVisits.filter((v) => v.status !== "cancelled" && v.status !== "paid" && !isPastUnfinishedVisit(v)).length,
+    past: listedVisits.filter((v) => isPastUnfinishedVisit(v)).length,
     completed: listedVisits.filter((v) => v.status === "paid").length,
     cancelled: listedVisits.filter((v) => v.status === "cancelled").length,
     all: listedVisits.length,
@@ -879,6 +900,7 @@ const Owner = () => {
   const FILTERS: { key: OwnerFilter; label: string; empty: string }[] = [
     { key: "attention", label: "Needs attention", empty: "Nothing needs attention right now." },
     { key: "upcoming", label: "Upcoming", empty: "No upcoming visits." },
+    { key: "past", label: "Past dates to review", empty: "No unfinished visits with past dates." },
     { key: "completed", label: "Completed", empty: "No completed visits yet." },
     { key: "cancelled", label: "Cancelled", empty: "No cancelled visits." },
     { key: "all", label: "All visits", empty: "No visits yet." },
@@ -892,7 +914,8 @@ const Owner = () => {
     if (filter === "all") return true;
     if (filter === "cancelled") return v.status === "cancelled";
     if (filter === "completed") return v.status === "paid";
-    if (filter === "upcoming") return v.status !== "cancelled" && v.status !== "paid";
+    if (filter === "past") return isPastUnfinishedVisit(v);
+    if (filter === "upcoming") return v.status !== "cancelled" && v.status !== "paid" && !isPastUnfinishedVisit(v);
     return isAttention(v);
   });
 
@@ -1007,7 +1030,7 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
                   {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ?? ""} · {money(v.amount_cents)}</span>
+                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)}</span>
                 </div>
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
@@ -1018,6 +1041,7 @@ const Owner = () => {
                 </div>
               </button>
             ))}
+            {nextOffset !== null && <Button variant="outline" className="w-full mt-4" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load older visits"}</Button>}
             {filteredVisits.length === 0 && !loading && !error && (
               <p className="text-muted-foreground text-sm">
                 {filter === "all"
@@ -1090,13 +1114,13 @@ const Owner = () => {
               <section id="block-summary" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h2 id="owner-detail-title" tabIndex={-1} className="font-heading text-2xl font-bold outline-none">{v.client_name ?? "—"}</h2>
                 <p className="text-sm text-muted-foreground">
-                  {v.service ?? ""} · {fmtVisitDate(v.visit_date)} {v.window ?? ""} · {money(v.amount_cents)}
+                  {v.service ?? ""} · {fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)}
                 </p>
                 <p className="text-sm">{v.address ?? ""}</p>
                 {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
                 <p className="text-sm">
                   Visit: <strong>{visitLabel(v.status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
-                  {stripeState && <> · Stripe: <strong>{stripeLabel(stripeState)}</strong></>}
+                  {stripeState && <> · Payment: <strong>{stripeLabel(stripeState)}</strong></>}
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
@@ -1404,7 +1428,7 @@ const Owner = () => {
                 {(v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid") && !scheduleEditing ? (
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${v.window}` : ""}</p>
+                      <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${formatArrivalWindow(v.window)}` : ""}</p>
                       <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.proposed_pending && v.proposed_date ? v.proposed_date : (v.visit_date ?? "")); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
                         Change
                       </Button>
@@ -1703,7 +1727,7 @@ const Owner = () => {
                 <h3 className="font-semibold mb-3">Payment</h3>
                 <p className="text-sm">
                   {money(v.amount_cents)}
-                  {v.paid_at ? ` · Paid ${fmtDateET(v.paid_at)}` : stripeState ? ` · Stripe: ${stripeState}` : " · Not paid yet"}
+                  {v.paid_at ? ` · Paid ${fmtDateET(v.paid_at)}` : stripeState ? ` · ${stripeLabel(stripeState)}` : " · Not paid yet"}
                 </p>
                 {paymentFailed && (
                   <p className="text-sm text-destructive mt-1">
@@ -1712,6 +1736,9 @@ const Owner = () => {
                 )}
                 <details className="mt-2">
                   <summary className="text-sm underline text-muted-foreground cursor-pointer">More actions</summary>
+                  <Button variant="outline" size="sm" className="mt-3 mr-2" disabled={!!acting} onClick={() => void runAction("Send status email", { action: "resend_status_email", booking_id: v.booking_id })}>Resend status email</Button>
+                  <Button variant="outline" size="sm" className="mt-3" disabled={!!acting} onClick={() => void runAction("Update test flag", { action: "set_test_booking", booking_id: v.booking_id, is_test: !v.is_test })}>{v.is_test ? "Mark as real booking" : "Mark as test booking"}</Button>
+
                   <div className="mt-2">
                     <Button
                       variant="outline"
@@ -1729,6 +1756,12 @@ const Owner = () => {
                 </details>
               </section>
 
+              {v.status !== "cancelled" && v.status !== "paid" && <p className="mb-4 text-base text-muted-foreground">Before dispatch: confirm the cleaner accepted the job, has the needed supplies, and understands the entry arrangement. An opened link alone does not confirm acceptance.</p>}
+              {v.status === "paid" && <section className="rounded-xl border border-border bg-card p-5 mb-4">
+                <h2 className="font-heading text-xl font-bold mb-2">Next visit</h2>
+                <p className="text-base mb-4">Invite this customer to review the current price and request their next date. They choose the card and terms; sending this invitation creates no booking or charge.</p>
+                <Button variant="outline" disabled={!!acting} onClick={() => void runAction("Invite next visit", { action: "invite_next_visit", booking_id: v.booking_id })}>Email next-visit invitation</Button>
+              </section>}
               {/* F. Activity — collapsed by default */}
               <details className="rounded-xl border border-border bg-card p-4 mb-4">
                 <summary className="font-semibold cursor-pointer">Activity</summary>

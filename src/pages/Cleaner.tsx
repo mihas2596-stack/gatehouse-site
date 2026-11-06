@@ -471,7 +471,7 @@ const Cleaner = () => {
                     />
                   </div>
                   <p className="text-base text-muted-foreground mt-2">
-                    Open a room: take a before photo, tick the checklist, then add an after photo. If photos are not allowed, give a reason.
+                    Open a room: take a before photo, complete the tasks, then add an after photo. If a task cannot be completed, add a note for Gatehouse. If photos are not allowed, give a reason.
                   </p>
                 </>
               );
@@ -572,7 +572,7 @@ const Cleaner = () => {
                   ))}
 
                 {!noPhotoHere && <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <label className="flex-1">
+                  <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
                     <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take BEFORE photo
                     </span>
@@ -580,7 +580,7 @@ const Cleaner = () => {
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      className="hidden"
+                      className="sr-only"
                       disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
@@ -589,7 +589,7 @@ const Cleaner = () => {
                       }}
                     />
                   </label>
-                  <label className="flex-1">
+                  <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
                     <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-base font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take AFTER photo
                     </span>
@@ -597,7 +597,7 @@ const Cleaner = () => {
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      className="hidden"
+                      className="sr-only"
                       disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
@@ -606,7 +606,11 @@ const Cleaner = () => {
                       }}
                     />
                   </label>
-                  <label className="col-span-2 sm:col-span-1">
+                  <label className="col-span-2 sm:col-span-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
+                    <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-border px-3 py-2.5 text-base cursor-pointer">Gallery (before)</span>
+                    <input type="file" accept="image/*" multiple className="sr-only" disabled={busy || noPhotoHere} onChange={(e) => { for (const file of Array.from(e.target.files ?? [])) void uploadPhoto(room.name, "before", file); e.target.value = ""; }} />
+                  </label>
+                  <label className="col-span-2 sm:col-span-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
                     <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
                       <ImagePlus className="w-4 h-4" /> Gallery (after)
                     </span>
@@ -614,7 +618,7 @@ const Cleaner = () => {
                       type="file"
                       accept="image/*"
                       multiple
-                      className="hidden"
+                      className="sr-only"
                       disabled={busy || noPhotoHere}
                       onChange={(e) => {
                         const files = Array.from(e.target.files ?? []);

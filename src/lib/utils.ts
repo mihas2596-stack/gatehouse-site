@@ -19,3 +19,9 @@ export function formatDateLong(iso?: string): string {
   if (!month) return iso;
   return `${month} ${Number(m[3])}, ${m[1]}`;
 }
+
+/** Shared, readable Atlanta arrival windows; preserves historical custom windows. */
+export function formatArrivalWindow(value?: string | null): string {
+  if (!value) return "To be confirmed";
+  return ({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[value] ?? value;
+}

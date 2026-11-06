@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
 import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
@@ -10,34 +10,35 @@ import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 type BookingRow = {
   id: string; booking_id: string; status: string | null;
   amount_cents: number | null; service: string | null; visit_date: string | null;
+  client_name?: string | null; client_email?: string | null; created_at?: string | null; report_sent_at?: string | null;
+  issue_open?: boolean | null; issue_ever?: boolean | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
   if (!dbConfigured()) return null;
-  const rows = await dbSelect<BookingRow>(
+  const result = await dbSelectStrict<BookingRow>(
     "gh_visits",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
   );
-  return rows[0] ?? null;
+  if (!result.ok) throw new Error("status_unavailable");
+  return result.rows[0] ?? null;
 }
 async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
   if (!dbConfigured()) return [];
-  return dbSelect<BookingEvent>(
-    "gh_events",
-    `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
-  );
+  const result = await dbSelectStrict<BookingEvent>("gh_events", `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`);
+  if (!result.ok) throw new Error("status_unavailable");
+  return result.rows;
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
-  events.find((e) => e.event === name) ?? null;
+  events.filter((e) => e.event === name).sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
-  const list = res.ok
-    ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
-    : [];
+  if (!res.ok) throw new Error("stripe_unavailable");
+  const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
   return list.length > 0
     ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
     : null;
@@ -275,12 +276,12 @@ async function reconcileCard(
     secretKey,
     `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
   );
-  if (!res.ok) return null;
+  if (!res.ok) throw new Error("stripe_unavailable");
   const list = (res.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
   const pm = list[0];
-  const pmId = pm?.id ?? existing;
+  const pmId = pm?.id;
   if (!pmId) return null;
-  if (!existing) {
+  if (existing !== pmId) {
     const patch: Record<string, string> = { "metadata[gh_payment_method]": pmId };
     const state = customer.metadata["gh_state"] ?? "";
     if (!state || state === "awaiting_card" || state === "card_failed") {
@@ -291,6 +292,18 @@ async function reconcileCard(
     if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
   }
   return { id: pmId, brand: String(pm?.card?.brand ?? ""), last4: String(pm?.card?.last4 ?? "") };
+}
+
+async function ownedCard(secretKey: string, customerId: string, paymentMethod: string): Promise<CardDetails | null> {
+  const result = await stripeGet(secretKey, `/payment_methods/${encodeURIComponent(paymentMethod)}`);
+  if (result.status === 404) return null;
+  if (!result.ok) throw new Error("stripe_unavailable");
+  const pm = result.data;
+  const owner = typeof pm["customer"] === "string" ? pm["customer"] : (pm["customer"] as { id?: string } | null)?.id;
+  if (owner !== customerId) return null;
+  const card = pm["card"] as { brand?: string; last4?: string } | undefined;
+  if (!card) return null;
+  return { id: paymentMethod, brand: String(card.brand ?? ""), last4: String(card.last4 ?? "") };
 }
 
 const fmtMoney = (dollars: string): string => {
@@ -387,7 +400,9 @@ async function maybeSendCardSavedEmail(
     "metadata[gh_card_email_sent]": claim,
   });
   customer.metadata["gh_card_email_sent"] = claim;
-  const firstName = (customer.name ?? payload?.name ?? "").trim().split(/\s+/)[0] || "there";
+  const ownRow = payload?.bid ? await latestBookingRow(payload.bid) : null;
+  const ownEvents = payload?.bid ? await bookingEvents(payload.bid) : [];
+  const firstName = (ownRow?.client_name || payload?.name || customer.name || "").trim().split(/\s+/)[0] || "there";
   const firstCents = bookingCtx?.amountCents ?? parseInt(customer.metadata["gh_first_price_cents"] ?? "", 10);
   const price = Number.isFinite(firstCents) && firstCents > 0
     ? fmtMoney(String(firstCents / 100))
@@ -399,10 +414,12 @@ async function maybeSendCardSavedEmail(
     const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
     visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
   }
-  const deadline = confirmDeadlineLabel();
-  const explainer = paymentEmailCopy(price).replace(/^Due today: \$0\.\n\n/, "");
+  const created = latestEvent(ownEvents, "visit_created")?.created_at || ownRow?.created_at;
+  const deadline = confirmDeadlineLabel(created && !Number.isNaN(Date.parse(created)) ? new Date(created) : new Date());
+  const explainer = ownRow?.issue_ever || ownRow?.issue_open ? "Automatic payment is blocked for this visit. Updating your card does not restart it. You choose when to approve the report and pay." : paymentEmailCopy(price).replace(/^Due today: \$0\.\n\n/, "");
   const requestSummary = `Service: ${service}${price ? `\nFirst visit: ${price}` : ""}${date ? `\nRequested date: ${emailDate(date)}` : ""}`;
-  const nextStep = `Your date is awaiting confirmation. We'll email your date, cleaner and arrival window by ${deadline}.`;
+  const confirmed = ownRow?.status !== "cancelled" && ownEvents.some((e) => e.event === "visit_confirmed");
+  const nextStep = ownRow?.report_sent_at ? "Your card is saved for this visit. Open your cleaning report to review the work and payment status." : confirmed ? "Your card is saved for your confirmed visit. View your date, arrival window and cleaner below." : `Your date is awaiting confirmation. We'll email your date, cleaner and arrival window by ${deadline}.`;
   const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${nextStep}\n\n${requestSummary}\n\n${explainer}\n\nView my visit:\n${visitUrl}\n\nQuestions? Reply to this email.\n\nGatehouse Home Cleaning\n`;
   const html = emailDocument({
     firstName, heading: "Card saved — $0 charged today",
@@ -458,7 +475,7 @@ async function findCustomerByBooking(
     return null;
   }
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
-  if (!listRes.ok) return null;
+  if (!listRes.ok) throw new Error("stripe_unavailable");
   const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
   const found = list.find((c) => c.metadata?.["gh_booking_id"] === bookingId);
   return found ? { id: found.id, metadata: found.metadata ?? {}, email: found.email, name: found.name } : null;
@@ -478,6 +495,7 @@ export default async function handler(req: Req, res: Res) {
     // A matching email/card in Stripe is never enough on its own — this
     // call is the explicit confirmation, and it logs a per-booking event
     // so every surface can prove the choice instead of assuming it.
+    try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const btPost = typeof body["bt"] === "string" ? (body["bt"] as string) : "";
     const action = typeof body["action"] === "string" ? (body["action"] as string) : "";
@@ -502,20 +520,25 @@ export default async function handler(req: Req, res: Res) {
       res.status(409).json({ ok: false, error: "no_card" });
       return;
     }
+    if (cust.email && cust.email.toLowerCase() !== verified.payload.email.toLowerCase()) {
+      res.status(403).json({ ok: false, error: "identity_mismatch" }); return;
+    }
     const card = await reconcileCard(STRIPE_SECRET_KEY, cust);
     if (!card) {
       res.status(409).json({ ok: false, error: "no_card" });
       return;
     }
-    const row = await latestBookingRow(bid);
+    const rowResult = dbConfigured() ? await dbSelectStrict<BookingRow>("gh_visits", `booking_id=eq.${encodeURIComponent(bid)}&order=visit_no.desc&limit=1`) : { ok: true, rows: [] };
+    if (!rowResult.ok) { res.status(503).json({ ok: false, error: "status_unavailable" }); return; }
+    const row = rowResult.rows[0] ?? null;
+    if (row?.status === "cancelled") { res.status(409).json({ ok: false, error: "visit_cancelled" }); return; }
     const events = row ? await bookingEvents(bid) : [];
-    const already = events.some(
-      (e) => e.event === "card_confirmed" && (e.detail?.["payment_method_id"] as string | undefined) === card.id,
-    );
+    const already = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"] === card.id;
     if (!already) {
-      await logEvent(row?.id ?? null, bid, "client", "card_confirmed", {
+      const persisted = await logEventStrict(row?.id ?? null, bid, "client", "card_confirmed", {
         payment_method_id: card.id, brand: card.brand, last4: card.last4,
       });
+      if (dbConfigured() && !persisted) { res.status(503).json({ ok: false, error: "card_confirmation_failed" }); return; }
       await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
         visitId: row?.id ?? null,
         amountCents: row?.amount_cents ?? null,
@@ -523,6 +546,7 @@ export default async function handler(req: Req, res: Res) {
     }
     res.status(200).json({ ok: true, card_brand: card.brand, card_last4: card.last4 });
     return;
+    } catch { res.status(503).json({ ok: false, error: "status_unavailable" }); return; }
   }
   if (req.method !== "GET") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
@@ -582,6 +606,12 @@ export default async function handler(req: Req, res: Res) {
         try {
           const row = await latestBookingRow(bookingId);
           const events = row ? await bookingEvents(bookingId) : [];
+          const cancelled = row?.status === "cancelled" || events.some((e) => e.event === "visit_cancelled");
+          if (cancelled) booking.visit_state = "cancelled";
+          else if (row?.status) booking.visit_state = row.status;
+          booking.auto_charge_blocked = row?.issue_ever || row?.issue_open || events.some((e) => e.event === "issue_opened") ? "1" : "";
+          const createdAt = latestEvent(events, "visit_created")?.created_at || row?.created_at;
+          if (createdAt && !Number.isNaN(Date.parse(createdAt))) booking.confirm_by = confirmDeadlineLabel(new Date(createdAt));
           if (row) {
             if (row.amount_cents != null && row.amount_cents > 0) booking.first = String(row.amount_cents / 100);
             if (row.service) booking.service = row.service;
@@ -594,7 +624,11 @@ export default async function handler(req: Req, res: Res) {
           const emailCust = !boundCust && p.email ? await findCustomerByEmail(revisitKey, p.email) : null;
           const cust = boundCust ?? emailCust;
           if (cust) {
-            const card = await reconcileCard(revisitKey, cust);
+            if (cust.email && cust.email.toLowerCase() !== p.email.toLowerCase()) throw new Error("identity_mismatch");
+            const selectedId = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"];
+            const card = typeof selectedId === "string" && selectedId.startsWith("pm_")
+              ? await ownedCard(revisitKey, cust.id, selectedId)
+              : await reconcileCard(revisitKey, cust);
             if (card) {
               booking.has_card = "1";
               booking.card_state = "card_ready";
@@ -610,12 +644,12 @@ export default async function handler(req: Req, res: Res) {
           if (vcEv?.detail && typeof vcEv.detail["first_service"] === "string" && vcEv.detail["first_service"]) {
             booking.first_service = vcEv.detail["first_service"] as string;
           }
-          if (confirmEv) {
+          if (confirmEv && !cancelled) {
             booking.booking_confirmed = "1";
             const d = confirmEv.detail ?? {};
             if (typeof d["date"] === "string" && d["date"]) booking.confirmed_date = d["date"];
             if (typeof d["window"] === "string" && d["window"]) booking.confirmed_window = d["window"];
-          } else if (!row && boundCust?.metadata["gh_booking_confirmed"] === "1") {
+          } else if (!row && !cancelled && boundCust?.metadata["gh_state"] !== "cancelled" && boundCust?.metadata["gh_booking_confirmed"] === "1") {
             booking.booking_confirmed = "1";
             if (boundCust.metadata["gh_confirmed_date"]) booking.confirmed_date = boundCust.metadata["gh_confirmed_date"];
             if (boundCust.metadata["gh_confirmed_window"]) booking.confirmed_window = boundCust.metadata["gh_confirmed_window"];
@@ -623,13 +657,11 @@ export default async function handler(req: Req, res: Res) {
           if (!booking.has_card && boundCust?.metadata["gh_state"]) {
             booking.card_state = boundCust.metadata["gh_state"];
           }
-        } catch {
-          /* state unknown — the save form stays available */
-        }
+        } catch { res.status(503).json({ requestId, ok: false, verified: false, status: "unknown", booking: null }); return; }
       }
     }
 
-    if (booking && !booking.booking_confirmed) {
+    if (booking && !booking.booking_confirmed && !booking.confirm_by) {
       // The same deadline label the emails quote (next business day, 6 PM ET).
       booking.confirm_by = confirmDeadlineLabel();
     }
@@ -690,44 +722,51 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
 
-    // Verified: a card was saved on the session's customer for this booking.
-    // Backfill the customer metadata right here instead of relying solely
-    // on the webhook, then send the one-time card-saved email.
+    // A successful Stripe setup is not a successful booking choice until
+    // its own journal is durable. Use the SetupIntent's exact card, not
+    // the shared customer's most recently added card from another visit.
     try {
-      const custId = typeof s["customer"] === "string" ? (s["customer"] as string) : "";
-      if (custId && bookingId) {
-        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(custId)}`);
-        if (custRes.ok) {
-          const cust = {
-            id: custId,
-            metadata: (custRes.data["metadata"] as Record<string, string> | undefined) ?? {},
-            email: typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : undefined,
-            name: typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : undefined,
-          };
-          const card = await reconcileCard(STRIPE_SECRET_KEY, cust);
-          if (card) {
-            if (booking) {
-              booking.has_card = "1";
-              booking.card_confirmed = "1";
-              if (card.brand) booking.card_brand = card.brand;
-              if (card.last4) booking.card_last4 = card.last4;
-            }
-            const row = bookingId ? await latestBookingRow(bookingId) : null;
-            const evs = bookingId ? await bookingEvents(bookingId) : [];
-            if (!evs.some((e) => e.event === "card_confirmed" && (e.detail?.["payment_method_id"] as string | undefined) === card.id)) {
-              await logEvent(row?.id ?? null, bookingId, "client", "card_confirmed", {
-                payment_method_id: card.id, brand: card.brand, last4: card.last4, via: "checkout_session",
-              });
-            }
-            await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
-              visitId: row?.id ?? null,
-              amountCents: row?.amount_cents ?? null,
-            });
-          }
+      const custId = typeof s["customer"] === "string" ? s["customer"] as string : "";
+      const pmRaw = si.data["payment_method"];
+      const pmId = typeof pmRaw === "string" ? pmRaw : (pmRaw as { id?: string } | null)?.id;
+      if (!custId || !pmId) throw new Error("saved_card_unavailable");
+      const card = await ownedCard(STRIPE_SECRET_KEY, custId, pmId);
+      if (!card) throw new Error("saved_card_unavailable");
+      if (bookingId) {
+        const row = await latestBookingRow(bookingId);
+        if (row?.status === "cancelled") {
+          res.status(409).json({ requestId, ok: false, verified: false, status: "failed", error: "visit_cancelled", booking }); return;
         }
+        const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(custId)}`);
+        if (!custRes.ok) throw new Error("stripe_unavailable");
+        const cust = {
+          id: custId,
+          metadata: (custRes.data["metadata"] as Record<string, string> | undefined) ?? {},
+          email: typeof custRes.data["email"] === "string" ? custRes.data["email"] as string : undefined,
+          name: typeof custRes.data["name"] === "string" ? custRes.data["name"] as string : undefined,
+        };
+        const expectedEmail = row?.client_email || tokenPayload?.email;
+        if (expectedEmail && cust.email?.toLowerCase() !== expectedEmail.toLowerCase()) throw new Error("identity_mismatch");
+        const evs = await bookingEvents(bookingId);
+        if (latestEvent(evs, "card_confirmed")?.detail?.["payment_method_id"] !== card.id) {
+          const persisted = await logEventStrict(row?.id ?? null, bookingId, "client", "card_confirmed", {
+            payment_method_id: card.id, brand: card.brand, last4: card.last4, via: "checkout_session",
+          });
+          if (dbConfigured() && !persisted) throw new Error("card_confirmation_failed");
+        }
+        if (booking) {
+          booking.has_card = "1";
+          booking.card_confirmed = "1";
+          booking.card_brand = card.brand;
+          booking.card_last4 = card.last4;
+        }
+        await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
+          visitId: row?.id ?? null, amountCents: row?.amount_cents ?? null,
+        });
       }
-    } catch {
-      /* verification already succeeded — backfill is best-effort */
+    } catch (error) {
+      logErr("card_confirmation", error);
+      res.status(503).json({ requestId, ok: false, verified: false, status: "unknown", booking: null }); return;
     }
     // NOTE: card numbers / CVC never leave Stripe; we only see IDs.
     res.status(200).json({
