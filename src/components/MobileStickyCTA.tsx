@@ -31,8 +31,9 @@ const MobileStickyCTA = () => {
       setCtaVisible(false);
       return;
     }
+    const visible = new Set<Element>();
     const io = new IntersectionObserver(
-      (entries) => setCtaVisible(entries.some((e) => e.isIntersecting)),
+      (entries) => { entries.forEach((e) => e.isIntersecting ? visible.add(e.target) : visible.delete(e.target)); setCtaVisible(visible.size > 0); },
       { rootMargin: "0px 0px -10% 0px" },
     );
     targets.forEach((t) => io.observe(t));
@@ -42,7 +43,7 @@ const MobileStickyCTA = () => {
   useEffect(() => {
     const onFocusIn = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
-      setFieldFocused(!!t?.closest("input, textarea, select"));
+      setFieldFocused(!!t?.closest("input, textarea, select, button, a, summary") && !t?.closest('[aria-label="Quick action"]'));
     };
     const onFocusOut = () => setFieldFocused(false);
     document.addEventListener("focusin", onFocusIn);
@@ -61,18 +62,18 @@ const MobileStickyCTA = () => {
     };
   }, []);
 
-  if (!isMarketingRoute(pathname)) return null;
+  if (!isMarketingRoute(pathname) || pathname === "/contact") return null;
   if (ctaVisible || fieldFocused || menuOpen || sampleOpen) return null;
 
   return (
     <nav
       aria-label="Quick action"
-      className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50"
+      className="md:hidden fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background px-4 py-3"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       <Link
         to="/quote"
-        className="flex min-h-[48px] items-center rounded-full bg-primary px-6 text-base font-bold text-primary-foreground shadow-lg no-underline"
+        className="flex min-h-[48px] items-center justify-center rounded-full bg-primary px-6 text-base font-bold text-primary-foreground shadow-lg no-underline"
       >
         See My Price
       </Link>
