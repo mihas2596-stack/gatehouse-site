@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { photoBlocked } from "@/lib/photoPolicy";
 import { cleanerJobMessage } from "@/lib/cleanerMessage";
+import ClientContact from "@/components/ClientContact";
 import {
   attentionItems,
   nextActionFor,
@@ -21,6 +22,7 @@ type Visit = {
   booking_id: string;
   client_name: string | null;
   client_email: string | null;
+  client_phone?: string | null;
   service: string | null;
   visit_date: string | null;
   window: string | null;
@@ -1146,11 +1148,23 @@ const Owner = () => {
                   </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <span className="text-sm text-muted-foreground">{v.client_email ?? ""}</span>
+                  <a className="text-base underline break-all" href={`mailto:${v.client_email ?? ""}`}>{v.client_email ?? ""}</a>
                   <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
                     Copy client link (visit + payment)
                   </Button>
                 </div>
+                <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} /></div>
+                <details className="mt-3" key={`contact:${v.id}:${v.client_phone ?? ""}`}>
+                  <summary className="min-h-[44px] cursor-pointer text-base underline">{v.client_phone ? "Update client phone" : "Add client phone"}</summary>
+                  <form className="flex flex-wrap gap-2 mt-2" onSubmit={(e) => {
+                    e.preventDefault();
+                    const phone = new FormData(e.currentTarget).get("client_phone");
+                    void runAction("Save client phone", { action: "set_client_phone", booking_id: v.booking_id, client_phone: String(phone ?? "") });
+                  }}>
+                    <input name="client_phone" type="tel" required maxLength={50} aria-label="Client phone" defaultValue={v.client_phone ?? ""} placeholder="10-digit US phone number" className="min-h-[44px] rounded-lg border border-border bg-background px-3 text-base" />
+                    <Button type="submit" variant="outline" disabled={acting !== ""}>Save phone</Button>
+                  </form>
+                </details>
                 <p className="text-xs text-muted-foreground mt-1">For the client — dates, report, payment. Never send this to the cleaner.</p>
                 {clientCopyStatus && <p className="text-sm mt-1" role="status">{clientCopyStatus}</p>}
                 {manualCopy?.owner === "client" && (
