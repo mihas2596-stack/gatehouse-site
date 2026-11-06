@@ -14,6 +14,46 @@ No secrets, no real personal data, no private tokens in this file.
   scratch files). Never commit a whole worktree. Ship only an explicit list
   of paths, and verify `git status` shows exactly those files.
 
+## Total audit release — 06.11.2026
+
+- Prepared against production/main `68a07bfea329faea7a9904e737265d3cfd7e21e7`.
+  See `docs/total-audit-release-2026-11-06.md` for the acceptance scope and
+  explicit operational limits. No database migration or new secret required.
+- Test prices extended through 13 November 2026, 23:59 Minsk
+  (`2026-11-13T20:59:59Z`). Both calculator and API use the same cutoff.
+  This remains a LIVE Stripe environment with reduced prices; it is not a
+  Stripe sandbox. Existing visit amounts are unchanged.
+- Per-booking status, card choice, actual work scope, names, deadlines and
+  cancellation are taken from the booking's own row/journal. Charge code
+  uses that visit's selected payment method, with the legacy fallback only
+  when no card-confirmed event exists. Identity, pinned amount, consent,
+  issue block and payment idempotency guards are retained.
+- Save-card supports explicit existing-card choice and adding a different
+  card. A Stripe or database failure shows unknown/retry, not false success.
+  Checkout success requires the exact SetupIntent card and a durable journal.
+- New work checklists match the public standard tasks, paid extras and actual
+  first Deep cleaning. Existing visit checklists are not rewritten silently.
+- Photo retention processes eligible photos, including old unpublished
+  drafts, in progressing batches. Failed storage removal keeps its DB record
+  for a retry. Decode failures cannot bypass photo metadata processing.
+- Owner adds older-visit pagination, explicit test marking, past-date review,
+  resend-status and next-visit invitation. The invitation creates no charge
+  or booking: the customer reviews and submits a new request normally.
+- Customer, cleaner, public-page and email copy/layout simplified. Privacy
+  describes the implemented photo/access lifecycle. Terms and fee rules are
+  unchanged. New consent-gated portal-view events contain no personal data.
+- Still manual: an email reply complaint must be opened using "Open issue
+  from email" immediately. The client's Report an issue button blocks it
+  directly. Incoming email is not connected to automatic dispute handling.
+  Monitor replies while any 24h payment window is running; do not assume a
+  next-business-day response will beat that window.
+- Operational verification of cleaner acceptance, supplies, background checks,
+  insurance and repair capacity is still required. No unsupported trust
+  claims were added. Historic missing phone numbers need per-booking proof
+  before repair. The first-Deep pricing policy was not changed implicitly.
+- Verification record and deployed commit must be checked in the release
+  report; a branch commit alone is not proof of a healthy production deploy.
+
 ## UX and contact fix batch — 06.11.2026
 
 - Reworked the homepage hero copy and wide photo crop; removed its visible caption.
