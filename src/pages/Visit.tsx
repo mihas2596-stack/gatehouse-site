@@ -1,3 +1,5 @@
+import { trackFunnel } from "@/lib/measurement";
+import { formatArrivalWindow } from "@/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CalendarClock, AlertTriangle, Loader2, User } from "lucide-react";
@@ -24,6 +26,7 @@ type VisitStateName =
   | "cancelled";
 
 type VisitData = {
+  notification_email_sent?: boolean;
   ok: boolean;
   state: VisitStateName;
   booking?: {
@@ -222,7 +225,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
               <dd className="font-semibold text-right">
                 {cardLabel}
                 {cardActionable && (
-                  <> · <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline">Change card</Link></>
+                  <> · <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`} className="underline">Change card</Link></>
                 )}
               </dd>
             </div>
@@ -243,7 +246,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                   {busy ? "Processing payment…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
                 </Button>
                 <Button variant="outline" asChild>
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Change card</Link>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Change card</Link>
                 </Button>
                 <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
                   Report an issue
@@ -355,6 +358,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
 }
 
 const Visit = () => {
+  const measuredStates = useRef(new Set<string>());
   const [searchParams] = useSearchParams();
   const bt = searchParams.get("bt") ?? "";
 
@@ -490,6 +494,12 @@ const Visit = () => {
     setConfirmingCard(false);
   };
 
+  useEffect(() => {
+    if (!data || measuredStates.current.has(data.state)) return;
+    const event = ({ confirmed: "gh_visit_confirmed_view", report_sent: "gh_report_view", paid: "gh_payment_success_view", issue_open: "gh_issue_status_view" } as const)[data.state as "confirmed" | "report_sent" | "paid" | "issue_open"];
+    if (event && trackFunnel(event)) measuredStates.current.add(data.state);
+  }, [data?.state]);
+
   const b = data?.booking ?? {};
   const fee = data?.cancel_fee_cents ?? 0;
   const manageable =
@@ -501,7 +511,7 @@ const Visit = () => {
   if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
   if (b.confirmed_date) rows.push(["Visit date (confirmed)", fmtDateUS(b.confirmed_date)]);
   else if (b.requested_date) rows.push(["Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
-  if (b.window) rows.push(["Arrival window (Atlanta time)", b.window]);
+  if (b.window) rows.push(["Arrival window (Atlanta time)", formatArrivalWindow(b.window)]);
   if (b.first) rows.push(["First visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
   // Payment-method status without full details: brand + last 4 only,
@@ -540,6 +550,7 @@ const Visit = () => {
           </div>
         )}
 
+        {data?.notification_email_sent === false && <p role="status" className="rounded-xl border border-border bg-card p-4 mb-6">Your change is saved, but its email confirmation could not be sent. Your current status is shown here — you do not need to repeat the change.</p>}
         {!loading && data?.state === "transient_error" && (
           <div className="text-center">
             <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
@@ -573,7 +584,7 @@ const Visit = () => {
                     {confirmingCard ? "Confirming…" : "Use this card for this booking"}
                   </Button>
                   <Button variant="outline" asChild>
-                    <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Add a different card</Link>
+                    <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Add a different card</Link>
                   </Button>
                 </div>
                 {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
@@ -619,8 +630,8 @@ const Visit = () => {
             {data.state === "cancelled" && (
               <p className="text-lg text-foreground mb-6 text-center">
                 {data.cancelled_scope === "stop"
-                  ? "This visit and all future recurring visits are cancelled."
-                  : "This visit is cancelled. Your recurring schedule, if you have one, stays in place."}{" "}
+                  ? "This visit is cancelled. Your request to stop repeat visits is recorded. Gatehouse will confirm changes to any other separately confirmed visits."
+                  : "This visit is cancelled. Any other confirmed visits are unchanged."}{" "}
                 Your saved card stays on file for future bookings — email us any time to have it removed.
               </p>
             )}
@@ -651,7 +662,7 @@ const Visit = () => {
             {(data.state === "card_needed" || data.state === "card_failed") && (
               <div className="text-center mb-8">
                 <Button variant="hero" size="lg" asChild>
-                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Save card — $0 today</Link>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Save card — $0 today</Link>
                 </Button>
               </div>
             )}
@@ -663,7 +674,7 @@ const Visit = () => {
             )}
 
 
-            {rows.length > 0 && (
+            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue"].includes(data.state) && (
               <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
                 <dl className="space-y-1.5">
                   {rows.map(([k, v]) => (
@@ -723,9 +734,9 @@ const Visit = () => {
                   <li>If anything about the arrival changes, we email you the same day.</li>
                 </ul>
                 <p className="text-sm text-muted-foreground mt-3">
-                  If we can&apos;t get in: we re-check your instructions, try to reach you, and wait
-                  before marking the visit missed. A visit we can&apos;t enter is charged as a full
-                  visit under our Terms — so clear instructions really help.
+                  If entry fails, we re-check your instructions, contact you and wait before marking the visit missed.
+                  Our Terms apply the full visit price when entry remains unavailable.
+                  You can meet your cleaner in person — no code needed.
                 </p>
               </div>
             )}
@@ -925,11 +936,11 @@ const Visit = () => {
                     <div className="space-y-2 mb-3 text-sm">
                       <label className="flex gap-2 items-start">
                         <input type="radio" name="scope" checked={cancelScope === "once"} onChange={() => setCancelScope("once")} className="mt-1" />
-                        <span><strong>Cancel this visit only.</strong> My recurring schedule stays in place.</span>
+                        <span><strong>Cancel this visit only.</strong> Any other confirmed visits stay unchanged.</span>
                       </label>
                       <label className="flex gap-2 items-start">
                         <input type="radio" name="scope" checked={cancelScope === "stop"} onChange={() => setCancelScope("stop")} className="mt-1" />
-                        <span><strong>Cancel this visit and stop my recurring cleanings.</strong></span>
+                        <span><strong>Cancel this visit and ask Gatehouse to stop repeat visits.</strong></span>
                       </label>
                     </div>
                     <p className="text-sm mb-3">
