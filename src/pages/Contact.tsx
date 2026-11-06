@@ -120,7 +120,7 @@ const Contact = () => {
             Have a Question? <span className="text-gradient-gold">Message Us</span>
           </h1>
           <p className="text-foreground text-lg">
-            This form is for general questions and inquiries. To book a cleaning, see your price online — then request your date. We confirm bookings within one business day.
+            Have a question? Send us a message. We reply within one business day.
           </p>
         </div>
       </section>
@@ -162,16 +162,16 @@ const ContactInfo = () => (
       <h2 className="font-heading text-2xl font-bold mb-6">Reach Out Anytime</h2>
       <div className="space-y-5">
         <a href="mailto:hello@gatehousehomecleaning.com" className="flex items-center gap-4 p-4 bg-card rounded-xl shadow-warm hover:shadow-warm-lg transition-all group min-h-[44px]">
-          <div className="w-12 h-12 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
+          <div className="w-12 h-12 shrink-0 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
             <Mail className="w-6 h-6 text-accent-foreground" />
           </div>
           <div>
             <p className="font-semibold">Email Us</p>
-            <p className="text-muted-foreground text-sm">hello@gatehousehomecleaning.com</p>
+            <p className="text-muted-foreground text-base break-all">hello@gatehousehomecleaning.com</p>
           </div>
         </a>
         <a href="tel:+17705258599" className="flex items-center gap-4 p-4 bg-card rounded-xl shadow-warm hover:shadow-warm-lg transition-all group min-h-[44px]">
-          <div className="w-12 h-12 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
+          <div className="w-12 h-12 shrink-0 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
             <Phone className="w-6 h-6 text-accent-foreground" />
           </div>
           <div>
@@ -235,8 +235,8 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
     <form onSubmit={handleSubmit} noValidate className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
       <h3 className="font-heading text-2xl font-bold mb-2">Send us a question</h3>
       <p className="text-foreground text-sm mb-8">
-        General questions only. To book a cleaning, please{" "}
-        <Link to="/quote" className="font-semibold text-primary underline underline-offset-2">get a quote &amp; book</Link>.
+        For a cleaning price, please{" "}
+        <Link to="/quote" className="font-semibold text-primary underline underline-offset-2">see your price online</Link>.
       </p>
 
       <p className="text-sm text-muted-foreground mb-4">Fields marked * are required.</p>
@@ -244,7 +244,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
       <div hidden aria-hidden="true"><label htmlFor="c-website">Leave this empty</label><input id="c-website" name="website" tabIndex={-1} autoComplete="off" value={String(formData.website ?? "")} onChange={handleChange} /></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div>
-          <label htmlFor="name" className="block text-sm font-medium mb-1.5">Your Name *</label>
+          <label htmlFor="name" className="block text-base font-medium mb-1.5">Your Name *</label>
           <input
             id="name" name="name" type="text" required autoComplete="name" ref={fieldRefs.name}
             value={String(formData.name ?? "")} onChange={handleChange}
@@ -257,7 +257,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
           {errors.name && <p id="name-error" role="alert" className="mt-1 text-sm text-destructive">{errors.name}</p>}
         </div>
         <div>
-          <label htmlFor="email" className="block text-sm font-medium mb-1.5">Email Address *</label>
+          <label htmlFor="email" className="block text-base font-medium mb-1.5">Email Address *</label>
           <input
             id="email" name="email" type="email" required autoComplete="email" ref={fieldRefs.email}
             value={String(formData.email ?? "")} onChange={handleChange}
@@ -270,7 +270,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
           {errors.email && <p id="email-error" role="alert" className="mt-1 text-sm text-destructive">{errors.email}</p>}
         </div>
         <div className="md:col-span-2">
-          <label htmlFor="message" className="block text-sm font-medium mb-1.5">Your Message *</label>
+          <label htmlFor="message" className="block text-base font-medium mb-1.5">Your Message *</label>
           <textarea
             id="message" name="message" rows={5} required ref={fieldRefs.message}
             value={String(formData.message ?? "")} onChange={handleChange}
@@ -295,9 +295,9 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
           aria-required="true"
           aria-invalid={!!errors.privacy}
           aria-describedby={errors.privacy ? "privacy-error" : undefined}
-          className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+          className="mt-1 h-6 w-6 shrink-0 rounded border-input text-primary focus:ring-2 focus:ring-ring"
         />
-        <label htmlFor="privacy" className="text-sm text-foreground leading-snug">
+        <label htmlFor="privacy" className="text-base text-foreground leading-relaxed">
           I acknowledge Gatehouse Home Cleaning will use my email to reply to this question and that my information is handled per the{" "}
           <Link to="/privacy" className="underline text-primary">Privacy Policy</Link>.
         </label>
@@ -308,9 +308,7 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
         {isSubmitting ? "Sending..." : <>Send My Question <Send className="w-5 h-5" /></>}
       </Button>
 
-      <p className="text-xs text-foreground text-center mt-4">
-        We use your details only to reply to you. See our Privacy Policy.
-      </p>
+
     </form>
   </div>
 );
