@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { campaignAttribution, trackFunnel } from "@/lib/measurement";
 import { Sparkles } from "lucide-react";
@@ -60,7 +61,7 @@ const SMS_DISCLOSURE =
   "Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.";
 const SMS_CONSENT_TEXT = `${SMS_CONSENT_MAIN} ${SMS_DISCLOSURE}`;
 const PHOTO_CONSENT_MAIN =
-  "I consent to photos inside my home of the cleaned rooms for my private cleaning report.";
+  "I agree to photos of the cleaned rooms for my private cleaning report.";
 const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms not to photograph on your visit page before the visit.";
 const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
@@ -541,7 +542,7 @@ const Quote = () => {
       trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
       // Recap shown on /thank-you: price, date, arrival window, current
       // status and response time. Never a "confirmed" promise — the date is
-      // a request until Nick confirms availability by email.
+      // a request until Gatehouse confirms availability by email.
       const recapPrice =
         service === "standard" && breakdown
           ? isRecurring
@@ -601,7 +602,7 @@ const Quote = () => {
   ].filter(Boolean).join(", ");
 
   return (
-    <div className="page-shell">
+    <div className="page-shell readable-flow">
       <SEO
         title="See Your Cleaning Price | Gatehouse"
         description="Enter your home size, bedrooms and bathrooms to see your cleaning price online, then pick a day."
@@ -994,7 +995,7 @@ const Quote = () => {
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-left sm:text-right">{fullAddress || "—"}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-left sm:text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
                   {entryMethod === "decide_later" && (
-                    <p className="mt-1 text-sm text-foreground">Nick will email you before your visit to help arrange entry. You don&apos;t need to share a door code now.</p>
+                    <p className="mt-1 text-sm text-foreground">We will email you before your visit to help arrange entry. You don&apos;t need to share a door code now.</p>
                   )}
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-left sm:text-right">$0</dd></div>
@@ -1104,7 +1105,7 @@ const Quote = () => {
                     placeholder="Pets, focus areas, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
-                  <p className="mt-1.5 text-sm text-muted-foreground">For cleaning preferences only — do not put entry codes, keys or alarm codes here. Private entry details are added after your visit is confirmed.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">Cleaning preferences only. Add entry codes privately after confirmation.</p>
                 </div>
                 <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your home address</h3>
                 <div>
@@ -1152,18 +1153,18 @@ const Quote = () => {
                   </details>
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
-                  <p id="entry-label" className="block text-sm font-medium mb-1">How would you like to arrange entry? *</p>
-                  <p className="text-sm text-muted-foreground mb-3">You’re welcome to be home for your cleaning. Choose what works best for you.</p>
-                  <div role="radiogroup" aria-labelledby="entry-label" className="flex flex-col gap-1">
+                  <p id="entry-label" className="block text-sm font-medium mb-1">How will your cleaner get in? *</p>
+                  <p className="text-sm text-muted-foreground mb-3">Choose an option. No keys or entry codes needed now.</p>
+                  <div role="radiogroup" aria-labelledby="entry-label" className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {ENTRY_METHODS.map((m) => (
-                      <label key={m} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
+                      <label key={m} className={`flex min-h-[64px] cursor-pointer items-center gap-3 rounded-xl border p-4 text-base ${entryMethod === m ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card"}`}>
                         <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
                         {ENTRY_METHOD_LABEL[m]}
                       </label>
                     ))}
                   </div>
                   {entryMethod === "decide_later" && (
-                    <p className="mt-3 text-sm text-foreground">You can decide later. Nick will email you to help arrange entry before your visit. You don&apos;t need to share a door code now.</p>
+                    <p className="mt-3 text-sm text-foreground">We’ll email you to agree on entry before your visit.</p>
                   )}
                   {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
                   {entryMethod === "arrange_before" && (
@@ -1181,21 +1182,21 @@ const Quote = () => {
                       <p className="mt-2 text-sm text-muted-foreground">No entry codes are needed now. You can add private entry details after your visit is confirmed.</p>
                     </div>
                   )}
-                  <div className="mt-3">
+                  <details className="mt-4">
+                    <summary className="min-h-[44px] cursor-pointer font-semibold">Add parking or building notes (optional)</summary>
                     <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
                     <input
                       id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
                       placeholder="e.g. Park in the driveway, gate intercom at the front"
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                     />
-                    <p className="mt-1 text-sm text-muted-foreground">Do not put entry codes, alarm codes or key locations here. Private entry details are added after your visit is confirmed.</p>
-                  </div>
-                  <p className="mt-3 text-sm font-medium text-foreground">If we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6). You can add or change private entry details on your visit page after your visit is confirmed.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">For parking and directions only. Add codes privately after confirmation.</p>
+                  </details>
                 </div>
 
               </div>
-              <h3 className="font-heading text-base font-bold mb-2">Photo report consent</h3>
-              <p className="text-sm text-foreground mb-3">Photos let you check every room after we leave. They go only into your private report.</p>
+              <h3 className="font-heading text-base font-bold mb-2">Your private photo report</h3>
+              <p className="text-sm text-foreground mb-3">See the results after cleaning. Photos are never published without your separate written permission.</p>
               <div className="flex items-start gap-3">
                 <input
                   id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
@@ -1205,9 +1206,10 @@ const Quote = () => {
                 />
                 <label htmlFor="b-photo" className="text-sm text-foreground leading-snug">
                   {PHOTO_CONSENT_MAIN} *
-                  <span className="mt-1 block text-sm text-muted-foreground">{PHOTO_CONSENT_SUB}</span>
+
                 </label>
               </div>
+              <details className="mt-3 mb-5"><summary className="min-h-[44px] cursor-pointer text-base font-semibold">Photo privacy &amp; rooms to skip</summary><p className="mt-2 text-base leading-relaxed">{PHOTO_CONSENT_SUB}</p></details>
               {bookingErrors.photoConsent && <p id="b-photo-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.photoConsent}</p>}
               <div className="mt-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Your price:</strong></p>
@@ -1231,14 +1233,13 @@ const Quote = () => {
               {step === 3 && (<>
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
-              <div className="mt-6 rounded-xl border border-border bg-card p-5 text-base leading-relaxed">
-                  <h3 className="font-heading text-lg font-bold mb-2">Payment</h3>
-                  <p className="text-base leading-relaxed"><strong>Today: $0.</strong> <span className="font-semibold">Nothing is charged today.</span> Your card is saved through Stripe — we never see or store your full card number.</p>
-                  <p className="mt-3 text-base leading-relaxed"><strong>After cleaning:</strong> you get a photo report. Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue.</p>
-                  <p className="mt-3 text-base leading-relaxed"><strong>If something is wrong:</strong> report an issue within 24 hours after we send the report and the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.</p>
-                  <p className="mt-3 text-base text-muted-foreground">Saving a card doesn’t confirm your date — we confirm it by email within one business day.</p>
-                </div>
-              <p className="mt-3 text-sm text-muted-foreground">Access reminder: if we can&apos;t get in at the scheduled time, the full visit price is charged (Terms, Section 6).</p>
+              <div className="mt-6"><PaymentSummary showCard /></div>
+              <p className="mt-4 rounded-xl bg-sage/15 p-4 text-base leading-relaxed"><strong>Your date is still a request.</strong> We confirm your date, arrival window and cleaner by email within one business day.</p>
+              <section className="mt-5 text-base leading-relaxed" aria-label="Changes and home access">
+                <h3 className="font-semibold">Changes &amp; home access</h3>
+                <p className="mt-2">Cancel free at least 48 hours before your visit; later cancellations cost $25.</p>
+                <p className="mt-2">Please arrange entry before the visit. If the cleaner cannot enter at the scheduled time, the full visit price applies. <a href="/terms#terms-6" target="_blank" rel="noopener noreferrer" className="underline text-primary">Read the access policy</a>.</p>
+              </section>
               <div className="mt-5 flex items-start gap-3">
                 <input
                   id="b-terms" name="termsConsent" type="checkbox" required ref={refs.termsConsent}
@@ -1265,6 +1266,7 @@ const Quote = () => {
                       : "Continue to save card — $0 today"}
                 </Button>
               </div>
+              <p className="mt-3 text-center text-base">Next: save your card securely on Stripe. $0 charged today.</p>
               <p className="text-sm text-muted-foreground text-center mt-3">
                 Questions? Call <a href="tel:+17705258599" className="underline">(770) 525-8599</a> or email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>.
               </p>

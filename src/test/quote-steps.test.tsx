@@ -18,8 +18,8 @@ const fillStep2 = () => {
   for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }
-  fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
-  fireEvent.click(screen.getByLabelText(/I consent to photos inside my home/));
+  fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
+  fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
 };
 
 describe("quote steps", () => {
@@ -52,8 +52,8 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Review & save card" })).toBeInTheDocument();
     // The sentence is split: the lead is semibold, the rest regular.
-    expect(screen.getByText("Nothing is charged today.")).toBeInTheDocument();
-    expect(screen.getByText(/Your card is charged when you approve your cleaning report, or automatically 24 hours after we send it if you haven’t reported an issue\./)).toBeInTheDocument();
+    expect(screen.getByText("Today: $0")).toBeInTheDocument();
+    expect(screen.getByText(/Your card is charged automatically 24 hours after we send the report/)).toBeInTheDocument();
     // The resend/version/cleaner clause was removed from the client view.
     expect(screen.queryByText(/does not change if we resend a message, publish a new report version, or change the date or cleaner/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
@@ -144,11 +144,11 @@ describe("quote steps", () => {
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Review & save card" })).toBeInTheDocument();
-    expect(screen.getByText("Today: $0.")).toBeInTheDocument();
-    expect(screen.getByText("After cleaning:")).toBeInTheDocument();
-    expect(screen.getByText("If something is wrong:")).toBeInTheDocument();
-    expect(screen.getByText(/Your card is saved through Stripe/)).toBeInTheDocument();
-    expect(screen.getByText(/Saving a card doesn’t confirm your date/)).toBeInTheDocument();
+    expect(screen.getByText("Today: $0")).toBeInTheDocument();
+    expect(screen.getByText("Review, then pay")).toBeInTheDocument();
+    expect(screen.getByText("Something missed?")).toBeInTheDocument();
+    expect(screen.getByText(/Save a card for this visit through Stripe/)).toBeInTheDocument();
+    expect(screen.getByText(/Your date is still a request/)).toBeInTheDocument();
     expect(screen.queryByText(/A report email that bounces blocks/)).not.toBeInTheDocument();
     expect(screen.queryByText(/After your visit we send a status update/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Saving a card is not a confirmed date/)).not.toBeInTheDocument();
@@ -167,17 +167,17 @@ describe("quote steps", () => {
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByText("How would you like to arrange entry? *")).toBeInTheDocument();
-    expect(screen.getByText("You’re welcome to be home for your cleaning. Choose what works best for you.")).toBeInTheDocument();
-    for (const name of [/be home to let the cleaner in/, /Someone else will let/, /arrange entry before/, /decide later/]) {
+    expect(screen.getByText("How will your cleaner get in? *")).toBeInTheDocument();
+    expect(screen.getByText("Choose an option. No keys or entry codes needed now.")).toBeInTheDocument();
+    for (const name of [/I’ll be home/, /Someone will meet/, /I’ll arrange access/, /Decide later/]) {
       expect((screen.getByRole("radio", { name }) as HTMLInputElement).checked).toBe(false);
     }
     expect(screen.queryByText("Door code / smart lock")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /arrange entry before/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /I’ll arrange access/ }));
     expect(screen.getByText("Door code / smart lock")).toBeInTheDocument();
     expect(screen.getByText("Lockbox")).toBeInTheDocument();
     expect(screen.getByText("No entry codes are needed now. You can add private entry details after your visit is confirmed.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
     expect(screen.queryByText("Door code / smart lock")).not.toBeInTheDocument();
   });
 
@@ -189,7 +189,7 @@ describe("quote steps", () => {
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.click(screen.getByLabelText(/I consent to photos inside my home/));
+    fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("Choose how to arrange entry.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
@@ -206,7 +206,7 @@ describe("quote steps", () => {
     expect(document.body.textContent).toContain("December 1, 2099");
     expect(screen.getByText("Due today")).toBeInTheDocument();
     expect(screen.getByText("$0")).toBeInTheDocument();
-    expect(screen.getByText(/be home to let the cleaner in/)).toBeInTheDocument();
+    expect(screen.getByText(/I’ll be home/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit details" })).toBeInTheDocument();
     expect(screen.getByText("View all details")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
@@ -220,8 +220,8 @@ describe("quote steps", () => {
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
-    fireEvent.click(screen.getByLabelText(/I consent to photos inside my home/));
+    fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
+    fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("Enter your city.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
@@ -235,12 +235,12 @@ describe("quote steps", () => {
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.click(screen.getByRole("radio", { name: /decide later/ }));
-    expect(screen.getByText(/You can decide later\. Nick will email you to help arrange entry/)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/I consent to photos inside my home/));
+    fireEvent.click(screen.getByRole("radio", { name: /Decide later/ }));
+    expect(screen.getByText(/We’ll email you to agree on entry/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("We’ll help you arrange it")).toBeInTheDocument();
-    expect(screen.getByText(/Nick will email you before your visit to help arrange entry/)).toBeInTheDocument();
+    expect(screen.getByText(/We will email you before your visit to help arrange entry/)).toBeInTheDocument();
   });
 
   it("rejects a non-Georgia state on step 2", () => {
@@ -251,8 +251,8 @@ describe("quote steps", () => {
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "NY"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
-    fireEvent.click(screen.getByLabelText(/I consent to photos inside my home/));
+    fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
+    fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("We currently serve Georgia only — please enter GA.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();

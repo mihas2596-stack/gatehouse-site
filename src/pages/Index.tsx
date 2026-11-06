@@ -64,7 +64,7 @@ const homeFaqs = [
   },
   {
     q: "How do I cancel?",
-    a: "Free up to 48 hours before your visit; $25 inside 48 hours. If we can't get in, the full visit price applies — see Terms. There's no long-term commitment: pause or stop the schedule any time.",
+    a: "Free up to 48 hours before your visit; $25 inside 48 hours. If the cleaner cannot enter at the scheduled time, the full visit price applies. See our access policy in the Terms. There's no long-term commitment: pause or stop the schedule any time.",
   },
 ];
 
@@ -94,8 +94,8 @@ const Index = () => {
       </p>
     )}
     <SEO
-      title="Every-Other-Week House Cleaning in North Atlanta | Gatehouse"
-      description="Every-other-week cleaning in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online."
+      title="House Cleaning in North Atlanta | Gatehouse"
+      description="One-time, recurring and deep house cleaning in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online."
       url="https://gatehousehomecleaning.com/"
     />
     <Helmet>
@@ -117,28 +117,28 @@ const Index = () => {
 
     {/* 1. HERO — one headline, one sentence, one action. */}
     <section className="hero-section border-b border-border/60 bg-background pt-10 pb-12 md:pt-14 md:pb-16">
-      <div className="container">
-        <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-2 md:gap-12 lg:gap-16">
+      <div className="container max-w-[1320px]">
+        <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-[0.9fr_1.1fr] md:gap-10 lg:gap-14">
           <div className="animate-fade-up text-center md:text-left">
-            <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[46px] lg:text-[56px]">
-              A clean home, every other week.
+            <p className="mb-4 text-base font-semibold tracking-wide text-primary">HOUSE CLEANING IN NORTH ATLANTA</p>
+            <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[44px] lg:text-[60px]">
+              A cleaner home.<br />More time for you.
             </h1>
-            <p className="mt-4 text-base font-medium leading-relaxed text-foreground md:text-lg">
-              House cleaning in North Atlanta. One-time and deep cleaning also available.
+            <p className="mt-5 max-w-lg mx-auto md:mx-0 text-lg leading-relaxed text-foreground">
+              One-time, recurring, and deep cleaning for your home. See your price online and request a visit that fits your schedule.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
-            <p className="mt-2 text-sm text-muted-foreground">No card needed to see your price.</p>
+            <p className="mt-3 text-base text-muted-foreground">No card needed to see your price.</p>
           </div>
           <figure>
             <img
               src={heroImage}
               alt="Freshly cleaned bedroom — real photo from a Gatehouse clean"
               loading="eager"
-              className="h-52 w-full rounded-xl object-cover shadow-warm sm:h-64 md:h-[380px] lg:h-[440px]"
+              className="aspect-[16/10] w-full rounded-2xl object-cover object-[center_35%] shadow-warm"
             />
-            <figcaption className="mt-2 text-xs text-muted-foreground">Real photo from a Gatehouse clean.</figcaption>
           </figure>
         </div>
       </div>

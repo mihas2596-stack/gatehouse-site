@@ -8,10 +8,10 @@ export const ENTRY_METHODS = ["home", "other_person", "arrange_before", "decide_
 export type EntryMethodChoice = (typeof ENTRY_METHODS)[number];
 
 export const ENTRY_METHOD_LABEL: Record<EntryMethodChoice, string> = {
-  home: "I’ll be home to let the cleaner in.",
-  other_person: "Someone else will let the cleaner in.",
-  arrange_before: "I’ll arrange entry before the visit.",
-  decide_later: "I’ll decide later — please contact me.",
+  home: "I’ll be home.",
+  other_person: "Someone will meet the cleaner.",
+  arrange_before: "I’ll arrange access.",
+  decide_later: "Decide later — email me.",
 };
 
 export const ENTRY_DETAILS = ["door_code", "lockbox", "other"] as const;

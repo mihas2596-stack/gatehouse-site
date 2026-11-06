@@ -392,14 +392,14 @@ export default async function handler(req: Req, res: Res) {
             method: "POST",
             headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
             body: JSON.stringify({
-              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Your cleaning report is ready — a quick look",
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nYour photo report is ready — please take a quick look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
-                `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nNick\n\nGatehouse Home Cleaning\n`,
+                `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nGatehouse Home Cleaning\n`,
             }),
             signal: AbortSignal.timeout(15000),
           });
@@ -455,14 +455,14 @@ export default async function handler(req: Req, res: Res) {
             method: "POST",
             headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
             body: JSON.stringify({
-              from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Reminder: your cleaning report is waiting",
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
-                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nNick\n\nGatehouse Home Cleaning\n`,
+                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nGatehouse Home Cleaning\n`,
             }),
             signal: AbortSignal.timeout(15000),
           });

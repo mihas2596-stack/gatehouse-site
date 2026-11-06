@@ -81,7 +81,7 @@ describe("booking price confirmation", () => {
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.click(screen.getByRole("radio", { name: /be home to let the cleaner in/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
     fireEvent.click(document.getElementById("b-photo")!);
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     fireEvent.click(document.getElementById("b-terms")!);

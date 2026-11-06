@@ -737,7 +737,7 @@ const Visit = () => {
                 </h2>
                 {!entryChoiceSettled(data.entry_choice?.method as EntryMethodChoice | null) && !data.entry?.method && (
                   <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm" role="status">
-                    Entry not settled yet — Nick will email you to help arrange entry before your visit. You can also choose an option below.
+                    Entry not settled yet — We will email you to help arrange entry before your visit. You can also choose an option below.
                   </p>
                 )}
                 <p className="text-sm text-muted-foreground mb-3">
@@ -837,7 +837,7 @@ const Visit = () => {
                 <h2 className="font-heading text-lg font-bold mb-3">Entry</h2>
                 <p className="text-sm text-foreground">You will arrange entry here after your visit is confirmed and your cleaner is assigned. Nothing secret is needed before then.</p>
                 {data.entry_choice?.method === "decide_later" && (
-                  <p className="mt-2 text-sm text-foreground">You chose to decide later — Nick will email you to help arrange entry before your visit.</p>
+                  <p className="mt-2 text-sm text-foreground">You chose to decide later — We will email you to help arrange entry before your visit.</p>
                 )}
               </div>
             )}

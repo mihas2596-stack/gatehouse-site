@@ -173,3 +173,23 @@ describe("O4: can_charge follows the payment basis", () => {
     expect((r.body["visit"] as Row)["can_charge"]).toBe(true);
   });
 });
+
+
+describe("visit-scoped client contact", () => {
+  it("returns this visit's latest phone, never another client's phone", async () => {
+    events = [
+      ev("client_contact", { phone: "4045550100" }, hoursAgo(2)),
+      ev("client_contact", { phone: "7705550123" }, hoursAgo(1)),
+      ev("client_contact", { phone: "6785550199" }, hoursAgo(0), "other-visit"),
+    ];
+    const r = await detail();
+    expect((r.body.visit as Row).client_phone).toBe("+17705550123");
+  });
+  it("does not return contact data to an unauthenticated request", async () => {
+    events = [ev("client_contact", { phone: "7705550123" }, hoursAgo(1))];
+    const r = res();
+    await handler({ method: "GET", headers: {}, query: { view: "detail", visit_id: VISIT_ID } }, r as never);
+    expect(r.code).toBe(401);
+    expect(JSON.stringify(r.body)).not.toContain("7705550123");
+  });
+});

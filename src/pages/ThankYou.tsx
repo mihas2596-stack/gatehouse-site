@@ -4,7 +4,7 @@ import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
-import JourneySteps from "@/components/JourneySteps";
+import PaymentSummary from "@/components/PaymentSummary";
 
 type Plan = {
   service?: string;
@@ -191,7 +191,7 @@ const ThankYou = () => {
 
   if (!received || !isBooking) {
     return (
-      <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
+      <div className="page-shell readable-flow min-h-[80vh] bg-background">
         <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
         <div className="container text-center max-w-xl py-12 pb-24 md:pb-12">
           {received && <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />}
@@ -261,13 +261,14 @@ const ThankYou = () => {
             <dd className="flex flex-wrap items-center gap-2">
               <span>
                 {formatDateLong(requestedDate)}
-                {recap.window ? <> · {recap.window}</> : null}
-                {recap.entry ? <> · Entry: {recap.entry}</> : null}
+
               </span>
               <span className="rounded-full bg-peach/50 px-2.5 py-0.5 text-xs font-semibold">Awaiting confirmation</span>
             </dd>
           </div>
         ) : null}
+        {!confirmedDate && recap.window && <div><dt className="font-semibold">Requested arrival window</dt><dd className="mt-1">{recap.window}</dd></div>}
+        {recap.entry && <div><dt className="font-semibold">Home access</dt><dd className="mt-1">{recap.entry}</dd></div>}
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-border pt-3">
           <dt className="font-semibold">Due today</dt>
           <dd><strong>$0</strong></dd>
@@ -285,9 +286,9 @@ const ThankYou = () => {
   );
 
   const shell = (children: React.ReactNode) => (
-    <div className="page-shell min-h-[80vh] flex items-center justify-center bg-background">
+    <div className="page-shell readable-flow min-h-[80vh] bg-background">
       <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps after contacting Gatehouse Home Cleaning." noindex />
-      <div className="container max-w-xl py-12 pb-24 md:pb-12">{children}</div>
+      <div className="container max-w-2xl py-8 pb-24 md:pb-12">{children}</div>
     </div>
   );
 
@@ -325,7 +326,7 @@ const ThankYou = () => {
       <>
         <div className="text-center">
           <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">You&apos;re all set — your request is received</h1>
+          <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">{card.kind === "confirmed" ? "Your visit is confirmed" : "Request received"}</h1>
           {emailNotice}
           <p className="text-lg text-foreground mb-2">
             <strong>Card saved · $0 charged today</strong>
@@ -338,7 +339,7 @@ const ThankYou = () => {
                 {confirmedWindow ? <> · {confirmedWindow}</> : null}.
               </>
             ) : (
-              <>No further action is needed right now. We&apos;ll confirm your cleaner and arrival window by {card.booking?.confirm_by ? <strong>{card.booking.confirm_by}</strong> : "email within one business day"}.</>
+              <>Your date is awaiting confirmation. We&apos;ll email your date, cleaner and arrival window by {card.booking?.confirm_by ? <strong>{card.booking.confirm_by}</strong> : "email within one business day"}.</>
             )}
           </p>
           {recap.email && (
@@ -348,21 +349,15 @@ const ThankYou = () => {
           )}
         </div>
 
-        {summaryCard}
-
-        <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
-          <h2 className="font-heading text-lg font-bold mb-3">What happens next</h2>
-          <JourneySteps current={card.kind === "confirmed" ? 1 : 0} />
-          <p className="mt-4 text-base leading-relaxed">
-            Your card is charged when you approve the report, or automatically 24 hours after we
-            send it if you haven&apos;t reported an issue. If you report an issue within that
-            window, the automatic charge is blocked for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it.
-          </p>
-        </div>
-
-        <Button variant="hero" size="xl" className="w-full" asChild>
+        <Button variant="hero" size="xl" className="w-full mb-6" asChild>
           <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
         </Button>
+        {summaryCard}
+        <div className="mb-6 rounded-xl bg-sage/15 p-5 text-left">
+          <h2 className="font-heading text-xl font-bold">What happens next</h2>
+          <p className="mt-2 text-lg">{card.kind === "confirmed" ? "Your cleaner arrives during the confirmed window. After cleaning, we email your photo report." : "We check availability and email your confirmation. You can follow the status on your visit page."}</p>
+        </div>
+        <PaymentSummary />
       </>,
     );
   }
@@ -438,14 +433,13 @@ const ThankYou = () => {
       {failed ? (
         <p className="mb-8 text-base leading-relaxed">
           Nothing was charged, and your visit isn&apos;t confirmed. Your request is still saved —
-          save your card to continue. Your card is only used to pay after the cleaning, once
-          you&apos;ve seen the photo report.
+          save your card through Stripe to continue. Gatehouse never sees your full card number.
         </p>
       ) : (
         <p className="mb-8 text-base leading-relaxed">
           Saving your card costs $0 today and doesn&apos;t book anything by itself. We confirm your
-          date by email within one business day after you add it. Your card is charged only after
-          the cleaning — when you approve the photo report, or 24 hours after we send it if you
+          date by email within one business day after you add it. For cleaning, payment is taken
+          when you approve the photo report, or 24 hours after we send it if you
           haven&apos;t reported an issue.
         </p>
       )}

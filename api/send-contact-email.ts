@@ -353,7 +353,7 @@ function validServiceDate(value: string): boolean {
 const RESEND_API = "https://api.resend.com/emails";
 const OWNER_EMAIL = "nikolajmihasenok@gmail.com";
 const FROM_OWNER = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
-const FROM_AUTO = "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
+const FROM_AUTO = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const REPLY_TO_AUTO = "hello@gatehousehomecleaning.com";
 
 const ALLOWED_ORIGINS = [
@@ -826,6 +826,16 @@ export default async function handler(req: Req, res: Res) {
           }
           if (visitRow) {
             visitRowId = visitRow.id;
+            // Keep contact with this visit. Older versions only put the phone
+            // in the owner email, so neither private portal could read it.
+            const contactPhone = (phone ?? "").replace(/\D/g, "");
+            if (contactPhone) {
+              const contacts = await dbSelect("gh_events", `visit_id=eq.${visitRow.id}&event=eq.client_contact&limit=1`);
+              if (contacts.length === 0) {
+                const saved = await dbInsert("gh_events", { visit_id: visitRow.id, booking_id: bookingId, actor: "client", event: "client_contact", detail: { phone: contactPhone } });
+                if (!saved) return json(503, { ok: false, error: "contact_save_failed" });
+              }
+            }
             if (createdByThisCall) {
               // Single pricing record for the booking (§5/§7): the server
               // breakdown's first_service is what every surface must show
@@ -1017,9 +1027,8 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
         const explainer = paymentExplainer(priceDisplay);
         const textBody = !isQuote ? `Hi ${firstName},
 
-Thanks for your question. I received your message and will reply within one business day. This is a general inquiry, not a booking request.
+Thanks for your question. We’ll reply within one business day. This is a general inquiry, not a booking request.
 
-Nick
 Gatehouse Home Cleaning
 hello@gatehousehomecleaning.com` : cardOnFile ? `Hi ${firstName},
 
@@ -1034,8 +1043,6 @@ Your visit page — confirm your card, see your status, your cleaner, reschedule
 ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
 
 ${explainer}
-
-Nick
 
 Gatehouse Home Cleaning
 
@@ -1058,8 +1065,6 @@ ${explainer}
 
 Your visit page — status, your cleaner, reschedule or cancel:
 ${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
-
-Nick
 
 Gatehouse Home Cleaning
 
@@ -1090,7 +1095,7 @@ hello@gatehousehomecleaning.com`;
           from: FROM_AUTO,
           to: [email],
           reply_to: REPLY_TO_AUTO,
-          subject: !isQuote ? "Got your question — I’ll reply within one business day" : cardOnFile ? "Request received — confirm your card" : "Request received — save your card to continue",
+          subject: !isQuote ? "Got your question — we’ll reply within one business day" : cardOnFile ? "Request received — confirm your card" : "Request received — save your card to continue",
           text: textBody,
           ...(htmlBody ? { html: htmlBody } : {}),
         }, parsed.data.request_id ? `customer/${parsed.data.request_id}` : undefined);

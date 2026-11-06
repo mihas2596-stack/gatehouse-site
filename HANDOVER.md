@@ -14,6 +14,32 @@ No secrets, no real personal data, no private tokens in this file.
   scratch files). Never commit a whole worktree. Ship only an explicit list
   of paths, and verify `git status` shows exactly those files.
 
+## UX and contact fix batch — 06.11.2026
+
+- Reworked the homepage hero copy and wide photo crop; removed its visible caption.
+- Quote entry choices are large cards. Parking notes and photo-privacy details
+  expand on demand; consent remains explicit and its exact text is recorded.
+- Readable payment summary shared by quote, save-card and thank-you. The card
+  save is distinguished from date confirmation. Automatic 24h charging and the
+  permanent issue block remain visible. Prices and fee/payment rules unchanged;
+  the full-price lockout notice appears once before quote submission.
+- Nick is replaced by Gatehouse in operational copy and email sender/signature;
+  the About page retains Nick with his owner role.
+- Phone is saved as a visit-scoped `client_contact` event in existing gh_events.
+  Owner detail reads the latest contact. A signed cleaner link exposes it only
+  on a confirmed active job, before report submission. No schema migration.
+  Owner-only `set_client_phone` repairs historical missing numbers, which can
+  be recovered from the original owner email; old rows do not recover themselves.
+- Cleaner phone UI has call/text/copy actions. Mobile job flow is split into
+  before-you-go, rooms (one expanded at a time), and finish. Existing upload,
+  autosave serialization, no-photo restrictions and Finish guards are preserved.
+- Read the delivered request/card-saved, confirmation, and report emails. Shared
+  email layout uses 18px body text, a prominent early action, short payment
+  sections and a named service sender. Existing inbox messages are unchanged.
+- Local validation: 61 files / 1029 tests pass (7 new contact regressions).
+  TypeScript source check, production build and 18-page HTML checks passed.
+  Deployment and live verification must be checked after this commit lands.
+
 ## QA fix batch — 03.11.2026
 
 ### QA follow-up — 05.11.2026
