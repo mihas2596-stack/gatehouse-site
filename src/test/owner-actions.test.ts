@@ -124,3 +124,10 @@ describe("no raw machine values leak into owner UI", () => {
     expect(stripeLabel("")).toBe("—");
   });
 });
+
+// Stale requests must never suggest immediate dispatch into a past date.
+it("routes an unfinished past visit to review before assignment", () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T12:00:00Z"));
+  expect(nextActionFor({ status: "requested", report_status: "none", visit_date: "2026-11-01" }, false)).toBe("Review the past visit date");
+  expect(nextActionFor({ status: "requested", report_status: "none", visit_date: "2026-11-07" }, false)).toBe("Approve request");
+});
