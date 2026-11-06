@@ -88,7 +88,7 @@ describe("entry instructions separation", () => {
     const res = response();
     await handler({ method: "POST", headers: { origin }, body: quoteBody }, res);
     expect(res.code).toBe(200);
-    const events = callsTo("gh_events").map((c) => JSON.parse(String(c[1]?.body)) as Record<string, unknown>);
+    const events = callsTo("gh_events").filter((c) => c[1]?.body).map((c) => JSON.parse(String(c[1]?.body)) as Record<string, unknown>);
     const kinds = events.map((e) => e.event);
     expect(kinds).toContain("client_note");
     expect(kinds).toContain("scope_review");
