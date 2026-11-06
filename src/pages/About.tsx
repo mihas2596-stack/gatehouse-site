@@ -23,7 +23,7 @@ const About = () => {
         <div className="container text-center max-w-3xl">
           <p className="font-script text-xl text-golden mb-2">Our Story</p>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-            Meet Nick, <span className="text-gradient-gold">Your Point of Contact</span>
+            Meet Nick, <span className="text-gradient-gold">Owner of Gatehouse</span>
           </h1>
           <p className="text-lg text-foreground/80 max-w-2xl mx-auto">
             I manage Gatehouse and coordinate your visit with independent cleaning professionals in North Atlanta. You can reach me directly with questions about your request.
@@ -47,7 +47,7 @@ const About = () => {
                 className="w-full h-full object-cover object-top"
               />
             </div>
-            <p className="md:hidden text-center text-sm text-muted-foreground mt-2">Nick — Founder</p>
+            <p className="md:hidden text-center text-sm text-muted-foreground mt-2">Nick — Owner</p>
             <div>
               <h2 className="font-heading text-2xl md:text-[34px] font-bold mb-6">
                 Why Every Other Week
