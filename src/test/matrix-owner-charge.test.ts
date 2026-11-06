@@ -28,7 +28,7 @@ type Evt = Record<string, unknown>;
 let rows: Row[];
 let evts: Evt[];
 let custMeta: Record<string, string>;
-let piCalls: Array<{ amount: string; id: string }>;
+let piCalls: Array<{ amount: string; id: string; paymentMethod: string }>;
 let evSeq: number;
 
 function res(code: number, body: unknown) {
@@ -97,7 +97,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
     if (u.pathname === "/v1/payment_intents" && method === "POST") {
       const params = parseForm(init?.body);
       const id = `pi_mx_${piCalls.length + 1}`;
-      piCalls.push({ amount: params.get("amount") ?? "", id });
+      piCalls.push({ amount: params.get("amount") ?? "", id, paymentMethod: params.get("payment_method") ?? "" });
       return res(200, { id, status: "succeeded" });
     }
     return res(404, { error: { message: "stripe route not stubbed" } });
@@ -153,6 +153,21 @@ const DISPUTES = ["none", "rowEver", "rowOpen", "journal"] as const;
 function iso(ms: number) { return new Date(ms).toISOString(); }
 
 describe("owner charge matrix", () => {
+  it("charges the card selected for this booking when another visit changed the customer default", async () => {
+    const sent = iso(Date.now() - 30 * 3600 * 1000);
+    rows = [{ id: ROW_ID, booking_id: BID, client_email: EMAIL, client_name: "Casey Client", status: "report_sent", report_status: "sent", amount_cents: 20000, report_sent_at: sent, issue_open: false, issue_ever: false, report_bounced: false, payment_intent_id: null }];
+    evts = [
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sent },
+      { visit_id: ROW_ID, booking_id: BID, event: "card_confirmed", detail: { payment_method_id: "pm_booking_A" }, created_at: iso(Date.now() - 40 * 3600 * 1000) },
+    ];
+    custMeta = { gh_booking_id: BID, gh_state: "report_sent", gh_payment_method: "pm_customer_B", gh_report_sent_at: sent, gh_report_version: "1" };
+    const r = response();
+    await bookingAction({ method: "POST", headers: { authorization: AUTH, "x-forwarded-for": "selected-card-regression" }, body: { action: "charge", booking_id: BID, amount_cents: 20000 } }, r as never);
+    expect(r.body.state).toBe("paid");
+    expect(piCalls).toHaveLength(1);
+    expect(piCalls[0].paymentMethod).toBe("pm_booking_A");
+  });
+
   it("5760 combinations: forbidden charges are zero, allowed charges pay", async () => {
     const failures: string[] = [];
     let paidCount = 0;
