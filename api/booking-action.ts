@@ -33,6 +33,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
+import { normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy, reportEmail } from "./_email_copy.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
@@ -119,7 +120,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
+  action: z.enum(["set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -144,6 +145,7 @@ const ActionSchema = z.object({
   // set_cleaner: optional per-visit contact for the assigned cleaner.
   // Stored on the visit row only (never mirrored to Stripe metadata).
   cleaner_phone: z.string().max(40).optional(),
+  client_phone: z.string().max(50).optional(),
   // set_access_notes: owner's correction of the visit's entry instructions.
   access_notes: z.string().max(1000).optional(),
   // send_report: explicit owner decision to resolve an open customer
@@ -270,13 +272,13 @@ export async function sendShortClientEmail(opts: {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
         to: [email],
         reply_to: "hello@gatehousehomecleaning.com",
         subject: opts.subject,
         text:
           `Hi ${firstName},\n\n${opts.heading}.\n\n${bodyText}\n\n${opts.buttonLabel}:\n${link}\n\n` +
-          `Questions? Email hello@gatehousehomecleaning.com.\n\nNick\nGatehouse Home Cleaning\n`,
+          `Questions? Email hello@gatehousehomecleaning.com.\n\nGatehouse Home Cleaning\n`,
         html:
           `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#222;line-height:1.6;font-size:16px;">` +
           `<p>Hi ${escHtml(firstName)},</p>` +
@@ -284,7 +286,7 @@ export async function sendShortClientEmail(opts: {
           opts.lines.map((l) => `<p>${escHtml(l)}</p>`).join("") +
           emailButton(link, opts.buttonLabel) +
           `<p>Questions? Email <a href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>` +
-          `<p>Nick<br>Gatehouse Home Cleaning</p></div>`,
+          `<p>Gatehouse Home Cleaning</p></div>`,
       }),
       signal: AbortSignal.timeout(15000),
     });
@@ -966,7 +968,7 @@ async function sendConfirmationEmail(args: {
     "Need to change or cancel? Use your visit page or reply to this email — free up to 48 hours before your visit, $25 after that.",
   ];
   const renderedConfirmation = {
-    text: `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\n${paragraphs.join("\n\n")}\n\nView my visit:\n${args.visitLink}\n\nNick\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`,
+    text: `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\n${paragraphs.join("\n\n")}\n\nView my visit:\n${args.visitLink}\n\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`,
     html: emailDocument({ firstName: args.firstName, heading: "Your cleaning is confirmed", paragraphs, action: { url: args.visitLink, label: "View my visit" } }),
   };
   try {
@@ -977,7 +979,7 @@ async function sendConfirmationEmail(args: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
         to: [args.to],
         reply_to: "hello@gatehousehomecleaning.com",
         subject: `Your cleaning is confirmed — ${emailDate(args.date)}`,
@@ -1102,6 +1104,18 @@ export default async function handler(req: Req, res: Res) {
       return json(200, { ok: true, imported, errors });
     }
     if (!bookingId) return json(400, { ok: false, error: "invalid_request" });
+
+    // Owner-only repair for contacts lost by older booking versions.
+    if (action === "set_client_phone") {
+      const phone = normalizeClientPhone(parsed.data.client_phone);
+      if (!phone) return json(400, { ok: false, error: "invalid_phone" });
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok) return json(502, { ok: false, error: "db_unreadable" });
+      if (!result.row) return json(404, { ok: false, error: "booking_not_found" });
+      const saved = await dbInsert("gh_events", { visit_id: result.row.id, booking_id: bookingId, actor: "owner", event: "client_contact", detail: { phone } });
+      if (!saved) return json(503, { ok: false, error: "contact_save_failed" });
+      return json(200, { ok: true });
+    }
 
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
     const rowRes = await latestBookingRowStrict(bookingId);
@@ -1999,7 +2013,7 @@ export default async function handler(req: Req, res: Res) {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
                 to: [custEmail],
                 reply_to: "hello@gatehousehomecleaning.com",
                 subject: "Your cleaning report is ready",
@@ -2158,7 +2172,7 @@ export default async function handler(req: Req, res: Res) {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
                 to: [custEmail],
                 reply_to: "hello@gatehousehomecleaning.com",
                 subject: "About your requested date",
@@ -2166,7 +2180,7 @@ export default async function handler(req: Req, res: Res) {
                   `Hi ${firstName},\n\nThanks for your request. The date you picked doesn't work on our side` +
                   (alts.length ? ` — here are the closest dates we can do: ${alts.join(", ")}.` : ".") +
                   `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\nhttps://www.gatehousehomecleaning.com/visit?bt=${token}\n\n` +
-                  `Your card stays on file, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nNick\n\nGatehouse Home Cleaning\n`,
+                  `Your card stays on file, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
             });
