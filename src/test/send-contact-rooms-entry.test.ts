@@ -10,6 +10,7 @@ vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-30T00:00:00Z"));
 type Row = Record<string, unknown>;
 let inserts: Row[];
 let resendCalls: unknown[];
+let contactEvents: Row[];
 
 function res() {
   return {
@@ -61,6 +62,7 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   inserts = [];
+  contactEvents = [];
   resendCalls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
     const u = new URL(String(url));
@@ -79,7 +81,11 @@ beforeEach(() => {
         }
         return okRes([]);
       }
-      if (u.pathname.includes("/rest/v1/gh_events") && method === "POST") return okRes([{ id: 1 }]);
+      if (u.pathname.includes("/rest/v1/gh_events") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Row;
+        if (body.event === "client_contact") contactEvents.push(body);
+        return okRes([{ id: 1 }]);
+      }
       return okRes([]);
     }
     return { ok: false, status: 404, json: async () => ({}) };
@@ -156,5 +162,15 @@ describe("send-contact rooms and entry", () => {
     expect(r.code).toBe(200);
     expect(roomNames()).toEqual(["Kitchen", "Bathroom", "Bedroom", "Living room"]);
     expect(inserts[0]["entry_method"]).toBe("decide_later");
+  });
+});
+
+describe("booking contact persistence", () => {
+  it("keeps the submitted phone on the same visit without putting it in the client token", async () => {
+    const r = await call(base({ phone: "(770) 555-0100" }));
+    expect(r.code).toBe(200);
+    expect(contactEvents).toEqual([expect.objectContaining({
+      visit_id: "visit-1", event: "client_contact", detail: { phone: "7705550100" },
+    })]);
   });
 });
