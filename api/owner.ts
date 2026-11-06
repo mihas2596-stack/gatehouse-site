@@ -11,6 +11,7 @@ import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
+import { loadClientPhone } from "./_client_contact.js";
 
 // O3: a payment failure is current only if no later success supersedes
 // it and the visit is not paid. Any historical payment_failed event used
@@ -211,6 +212,7 @@ export default async function handler(req: Req, res: Res) {
         ok: true,
         visit: {
           ...annotateVisit(visit, openedAt),
+          client_phone: await loadClientPhone(visitId),
           entry_choice: {
             method: visit["entry_method"] ?? null,
             detail: visit["entry_detail"] ?? null,
