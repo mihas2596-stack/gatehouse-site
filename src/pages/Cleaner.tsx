@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { ReportChecklistView } from "@/components/ReportContent";
 import { createAutosaveQueue, type AutosaveState } from "@/lib/autosaveQueue";
+import ClientContact from "@/components/ClientContact";
 import { photoBlocked } from "@/lib/photoPolicy";
 
 type ChecklistItem = { label: string; done: boolean };
@@ -34,6 +35,7 @@ type CleanerView = {
     client_notes?: string | null;
     no_photo_zones: string | null;
     client_first_name: string;
+    client_phone?: string | null;
   };
   checklist: Checklist;
   photos: Photo[];
@@ -61,6 +63,7 @@ const Cleaner = () => {
   const ct = searchParams.get("ct") ?? "";
   const [data, setData] = useState<CleanerView | null>(null);
   const [error, setError] = useState("");
+  const [openRoom, setOpenRoom] = useState<string | null | undefined>(undefined);
   const [checklist, setChecklist] = useState<Checklist>({ rooms: [] });
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploads, setUploads] = useState<Record<string, UploadState>>({});
@@ -298,60 +301,62 @@ const Cleaner = () => {
   return (
     <div className="min-h-screen bg-background page-shell">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
-      <div className="max-w-xl mx-auto px-4 pb-6">
-        <p className="text-sm font-semibold tracking-wide text-primary mb-1">GATEHOUSE HOME CLEANING</p>
-        <h1 className="font-heading text-3xl font-bold mb-1">Your visit</h1>
+      <div className="cleaner-flow max-w-2xl mx-auto px-4 pb-6">
+        <p className="text-base font-semibold tracking-wide text-primary mb-1">GATEHOUSE HOME CLEANING</p>
+        <h1 className="font-heading text-3xl font-bold mb-1">Your cleaning job</h1>
         <p className="text-lg text-foreground">
           {fmtDate(v.date)}
-          {v.window ? <> · {v.window}</> : null}
+          {v.window ? <> · {({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}</> : null}
         </p>
         {v.service && <p className="text-muted-foreground">{v.service}{v.client_first_name ? <> · for {v.client_first_name}</> : null}</p>}
         {data.cancelled === true && (
           <div className="rounded-xl border border-border bg-muted p-4 mt-4" role="status">
             <p className="font-semibold">This visit was cancelled.</p>
-            <p className="text-sm text-muted-foreground">The form is read-only — no changes can be sent for this visit.</p>
+            <p className="text-base text-muted-foreground">The form is read-only — no changes can be sent for this visit.</p>
           </div>
         )}
 
         {data.confirmed === false && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
-            <p className="text-sm font-semibold">Visit awaiting confirmation</p>
-            <p className="text-sm text-muted-foreground">The owner has not confirmed this visit yet. You can look around, but photos and the report stay disabled until confirmation arrives.</p>
+            <p className="text-base font-semibold">Visit awaiting confirmation</p>
+            <p className="text-base text-muted-foreground">Wait for confirmation before travelling. Photos and sending unlock after confirmation.</p>
           </div>
         )}
 
-        <div className="rounded-xl border border-border bg-card p-4 mt-4 space-y-2">
+        <div className="rounded-xl border border-border bg-card p-5 mt-4 space-y-4">
+          <h2 className="font-heading text-xl font-bold">1. Before you go</h2>
           {v.address && (
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm"><span className="font-semibold">Address:</span> {v.address}</p>
-              <a className="text-sm underline shrink-0" target="_blank" rel="noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.address)}`}>
+              <p className="text-base"><span className="font-semibold">Address:</span> {v.address}</p>
+              <a className="text-base underline shrink-0" target="_blank" rel="noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.address)}`}>
                 Open in Maps
               </a>
             </div>
           )}
+          {!locked && <ClientContact phone={v.client_phone} />}
           {v.entry && (
-            <div className="text-sm space-y-1">
+            <div className="text-base space-y-1">
               <p><span className="font-semibold">Entry:</span> {v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}</p>
               {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
               {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
             </div>
           )}
           {!v.entry && v.entry_choice?.method && (
-            <div className="text-sm space-y-1">
+            <div className="text-base space-y-1">
               <p><span className="font-semibold">Entry choice:</span> {v.entry_choice.method === "home" ? "Client will be home to let you in." : v.entry_choice.method === "other_person" ? "Someone else will meet you." : v.entry_choice.method === "arrange_before" ? `Arrange entry before the visit${v.entry_choice.detail === "door_code" ? " (Door code / smart lock)" : v.entry_choice.detail === "lockbox" ? " (Lockbox)" : v.entry_choice.detail === "other" ? " (Other arrangement)" : ""}.` : "Client will decide later — contact the owner."}</p>
               {v.entry_choice.notes && <p><span className="font-semibold">Note:</span> {v.entry_choice.notes}</p>}
             </div>
           )}
           {v.client_notes && (
-            <p className="text-sm"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>
+            <p className="text-base"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>
           )}
           {v.no_photo_zones && (
-            <p className="text-sm text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
+            <p className="text-base text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
           )}
         </div>
 
         {!locked && saveState !== "idle" && (
-          <p className="text-xs text-muted-foreground mt-4" role="status">
+          <p className="text-base text-muted-foreground mt-4" role="status">
             {saveState === "saving" ? "Saving…" : saveState === "saved" ? "All changes saved." : (
               <>Not saved — <button type="button" className="underline font-semibold" onClick={retrySave}>Retry</button></>
             )}
@@ -360,19 +365,19 @@ const Cleaner = () => {
 
         {data.confirmed && data.cancelled !== true && data.report_status !== "submitted" && data.report_status !== "sent" && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
-            <p className="text-sm font-semibold">Entry not arranged yet</p>
-            <p className="text-sm text-muted-foreground">Check with the owner before going — do not head to a visit without settled entry. Call or text Nick at <a className="underline" href="tel:+17705258599">(770) 525-8599</a> or email <a className="underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>
+            <p className="text-base font-semibold">Entry not arranged yet</p>
+            <p className="text-base text-muted-foreground">Contact Gatehouse before leaving. Entry must be agreed first. Call or text <a className="underline" href="tel:+17705258599">(770) 525-8599</a> or email <a className="underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>
           </div>
         )}
 
         <details className="rounded-xl border border-border bg-card p-4 mt-4">
-          <summary className="text-sm font-semibold cursor-pointer">How photos work</summary>
-          <p className="text-sm text-foreground mt-2">
+          <summary className="text-base font-semibold cursor-pointer">How photos work</summary>
+          <p className="text-base text-foreground mt-2">
             Please don&apos;t photograph people, documents, bank cards, alarm codes or other
             personal items. Photos go only into the client&apos;s report for this visit — they are
             never used for marketing without separate consent.
           </p>
-          <p className="text-sm text-foreground mt-2">
+          <p className="text-base text-foreground mt-2">
             Take a “before” photo of each area before you start, and an “after” photo when
             you finish — from a similar angle, so the client can compare. Add a close-up only
             where it helps (inside the oven, a stain you couldn&apos;t remove, damage you found).
@@ -382,28 +387,28 @@ const Cleaner = () => {
 
         {data.report_status === "returned" && data.owner_note && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4">
-            <p className="text-sm font-semibold mb-1">The owner sent this report back:</p>
-            <p className="text-sm">{data.owner_note}</p>
+            <p className="text-base font-semibold mb-1">The owner sent this report back:</p>
+            <p className="text-base">{data.owner_note}</p>
           </div>
         )}
         {data.report_status === "submitted" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
             <p className="font-semibold">Report received — the owner will share it with the client.</p>
-            <p className="text-sm text-muted-foreground">You&apos;re done here — thank you!</p>
+            <p className="text-base text-muted-foreground">You&apos;re done here — thank you!</p>
           </div>
         )}
         {data.report_status === "sent" && data.report_bounced && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4 text-center">
             <p className="font-semibold">Sending failed — the client never got this report.</p>
-            <p className="text-sm text-muted-foreground">The owner will re-send it. You don&apos;t need to do anything.</p>
+            <p className="text-base text-muted-foreground">The owner will re-send it. You don&apos;t need to do anything.</p>
           </div>
         )}
         {data.report_status === "sent" && !data.report_bounced && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
             <p className="font-semibold">Report published — the client can open it from their link.</p>
-            <p className="text-sm text-muted-foreground">The client can open the photos and checklist from their link. You&apos;re done here — thank you!</p>
+            <p className="text-base text-muted-foreground">You&apos;re done — thank you!</p>
           </div>
         )}
 
@@ -424,7 +429,7 @@ const Cleaner = () => {
                 <div key={room.name} className="rounded-xl border border-border bg-card p-4">
                   <h2 className="font-heading text-xl font-bold mb-2">{room.name}</h2>
                   {room.skip_reason && (
-                    <p className="text-sm text-muted-foreground mb-2">No photos — {room.skip_reason}</p>
+                    <p className="text-base text-muted-foreground mb-2">No photos — {room.skip_reason}</p>
                   )}
                   <div className="grid grid-cols-3 gap-2">
                     {roomPhotos.map((ph) => (
@@ -455,7 +460,8 @@ const Cleaner = () => {
               }).length;
               return (
                 <>
-                  <p className="text-sm font-semibold mb-2">
+                  <h2 className="font-heading text-xl font-bold mb-2">2. Clean each room</h2>
+                  <p className="text-base font-semibold mb-2">
                     Rooms ready: {ready} of {checklist.rooms.length}
                   </p>
                   <div className="h-2 rounded bg-muted overflow-hidden">
@@ -464,8 +470,8 @@ const Cleaner = () => {
                       style={{ width: `${checklist.rooms.length ? (ready / checklist.rooms.length) * 100 : 0}%` }}
                     />
                   </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Each room needs an “after” photo — or a written reason why there is none.
+                  <p className="text-base text-muted-foreground mt-2">
+                    Open a room: take a before photo, tick the checklist, then add an after photo. If photos are not allowed, give a reason.
                   </p>
                 </>
               );
@@ -479,28 +485,28 @@ const Cleaner = () => {
             const afterCount = roomPhotos.filter((p) => p.kind === "after").length;
             const noPhotoHere = photoBlocked(v.no_photo_zones, room.name);
             return (
-              <details key={room.name} open={roomIdx === 0} className="rounded-xl border border-border bg-card p-4 mt-4">
-                <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer list-none">
+              <details key={room.name} open={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
+                <summary className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); setOpenRoom((openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? null : room.name); }}>
                   <span className="font-heading text-xl font-bold">{room.name}</span>
                   <span className="flex flex-wrap items-center gap-2">
                     {afterCount > 0 ? (
-                      <span className="text-[11px] bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">After photo ✓</span>
+                      <span className="text-base bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">Photo ready ✓</span>
                     ) : room.skip_reason ? (
-                      <span className="text-[11px] bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Skipped — reason given</span>
+                      <span className="text-base bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Reason added</span>
                     ) : noPhotoHere ? (
-                      <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">No photos — add a reason</span>
+                      <span className="text-base bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">No photos — add a reason</span>
                     ) : (
-                      <span className="text-[11px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Needs an after photo</span>
+                      <span className="text-base bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Add after photo</span>
                     )}
-                    <span className="text-xs text-muted-foreground">{afterCount} photo{afterCount === 1 ? "" : "s"}</span>
+                    <span className="text-base text-primary underline">{(openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? "Hide" : "Open"}</span>
                   </span>
                 </summary>
                 {noPhotoHere && afterCount === 0 && (
-                  <p className="text-sm text-destructive mt-2">This room is on the client&apos;s do-not-photograph list — use the reason field below instead of a photo.</p>
+                  <p className="text-base text-destructive mt-2">This room is on the client&apos;s do-not-photograph list — use the reason field below instead of a photo.</p>
                 )}
                 <div className="space-y-2 mb-3 mt-2">
                   {room.items.map((item, idx) => (
-                    <label key={idx} className="flex min-h-[44px] items-center gap-3 text-sm cursor-pointer">
+                    <label key={idx} className="flex min-h-[44px] items-center gap-3 text-base cursor-pointer">
                       <input
                         type="checkbox"
                         className="mt-0.5 h-5 w-5 accent-primary"
@@ -553,13 +559,13 @@ const Cleaner = () => {
                   .filter(([, u]) => u.room === room.name && u.status === "error")
                   .map(([tempId, u]) => (
                     <div key={tempId} className="mb-2 flex items-start gap-2">
-                      <p className="text-sm text-destructive flex-1" role="alert">{u.error}</p>
+                      <p className="text-base text-destructive flex-1" role="alert">{u.error}</p>
                       {u.file && (
-                        <button type="button" className="min-h-[44px] px-2 text-sm underline shrink-0" onClick={() => retryUpload(tempId)}>
+                        <button type="button" className="min-h-[44px] px-2 text-base underline shrink-0" onClick={() => retryUpload(tempId)}>
                           Retry
                         </button>
                       )}
-                      <button type="button" className="min-h-[44px] px-2 text-sm text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
+                      <button type="button" className="min-h-[44px] px-2 text-base text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
                         Dismiss
                       </button>
                     </div>
@@ -567,7 +573,7 @@ const Cleaner = () => {
 
                 {!noPhotoHere && <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="flex-1">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take BEFORE photo
                     </span>
                     <input
@@ -584,7 +590,7 @@ const Cleaner = () => {
                     />
                   </label>
                   <label className="flex-1">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-sm font-medium cursor-pointer">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-base font-medium cursor-pointer">
                       <Camera className="w-4 h-4" /> Take AFTER photo
                     </span>
                     <input
@@ -601,7 +607,7 @@ const Cleaner = () => {
                     />
                   </label>
                   <label className="col-span-2 sm:col-span-1">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium cursor-pointer">
+                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
                       <ImagePlus className="w-4 h-4" /> Gallery (after)
                     </span>
                     <input
@@ -621,13 +627,13 @@ const Cleaner = () => {
 
                 {afterCount === 0 && (
                   <div className="mt-3">
-                    <label className="block text-sm font-medium mb-1" htmlFor={`skip-${room.name}`}>
+                    <label className="block text-base font-medium mb-1" htmlFor={`skip-${room.name}`}>
                       No photo for this room? Tell us why
                     </label>
                     <input
                       id={`skip-${room.name}`}
                       type="text"
-                      className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
+                      className="w-full border border-border rounded-lg px-3 py-2 bg-background text-base"
                       disabled={busy}
                       placeholder="e.g. Room wasn't part of this visit"
                       value={room.skip_reason ?? ""}
@@ -641,7 +647,7 @@ const Cleaner = () => {
                   </div>
                 )}
                 {missing.includes(room.name) && (
-                  <p className="text-sm text-destructive mt-2" role="alert">This room still needs a photo or a reason.</p>
+                  <p className="text-base text-destructive mt-2" role="alert">This room still needs a photo or a reason.</p>
                 )}
               </details>
             );
@@ -649,33 +655,34 @@ const Cleaner = () => {
 
         {!locked && (
           <>
-            <div className="rounded-xl border border-border bg-card p-4 mt-4">
-              <label className="block font-semibold mb-2" htmlFor="problem-note">
+            <details className="rounded-xl border border-border bg-card p-4 mt-4">
+              <summary className="min-h-[44px] cursor-pointer font-semibold">Add a note for Gatehouse (optional)</summary>
+              <label className="block font-semibold mb-2 mt-2" htmlFor="problem-note">
                 Anything the owner should know?
               </label>
               <textarea
                 id="problem-note"
-                className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
+                className="w-full border border-border rounded-lg px-3 py-2 bg-background text-base"
                 rows={3}
                 disabled={busy}
                 placeholder="Damage you found, a room you couldn't access, supplies missing…"
                 value={checklist.problem_note ?? ""}
                 onChange={(e) => saveChecklist({ ...checklist, problem_note: e.target.value })}
               />
-            </div>
+            </details>
             {submitError && (
-              <p className="text-sm text-destructive mt-4" role="alert">
+              <p className="text-base text-destructive mt-4" role="alert">
                 {submitError}
                 {missing.length > 0 && <> {missing.join(", ")}</>}
               </p>
             )}
             {Object.values(uploads).some((u) => u.status === "error") && (
-              <p className="text-sm text-destructive mt-4" role="alert">
+              <p className="text-base text-destructive mt-4" role="alert">
                 Some photos failed to upload — retry them above before finishing, or they will not be in the report.
               </p>
             )}
             {Object.values(uploads).some((u) => u.status === "working") && (
-              <p className="text-sm text-muted-foreground mt-4" role="status">
+              <p className="text-base text-muted-foreground mt-4" role="status">
                 Photos are still uploading — Finish will unlock when they are done.
               </p>
             )}
@@ -686,8 +693,8 @@ const Cleaner = () => {
               }).map((r) => r.name);
               const uploading = Object.values(uploads).filter((u) => u.status === "working").length;
               return (
-                <div className="rounded-xl border border-border bg-card p-4 mt-4 text-sm" role="status">
-                  <p className="font-semibold mb-1">Before you finish</p>
+                <div className="rounded-xl border border-border bg-card p-4 mt-4 text-base" role="status">
+                  <h2 className="font-heading text-xl font-bold mb-2">3. Finish your job</h2>
                   <p>Rooms ready: {checklist.rooms.length - missingRooms.length} of {checklist.rooms.length}</p>
                   {missingRooms.length > 0 && <p className="text-destructive">Still need a photo or a reason: {missingRooms.join(", ")}</p>}
                   {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
@@ -698,8 +705,8 @@ const Cleaner = () => {
             <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
-            <p className="text-xs text-muted-foreground text-center mt-2">
-              Finish sends the report to the client right away. If there is an open issue or a sending problem, the owner reviews it first instead. Your draft saves automatically — you can close this page and come back.
+            <p className="text-base text-muted-foreground text-center mt-2">
+              Your work saves automatically. Finish sends the report, or passes it to Gatehouse if review is needed.
             </p>
           </>
         )}
