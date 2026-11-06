@@ -125,12 +125,12 @@ const Index = () => {
               A cleaner home.<br />More time for you.
             </h1>
             <p className="mt-5 max-w-lg mx-auto md:mx-0 text-lg leading-relaxed text-foreground">
-              One-time, recurring, and deep cleaning for your home. See your price online and request a visit that fits your schedule.
+              One-time, recurring, and deep cleaning for your home. See your price online. Review your photo report after the clean.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
-            <p className="mt-3 text-base text-muted-foreground">No card needed to see your price.</p>
+            <p className="mt-3 text-base text-muted-foreground">No contact details or card needed to see your price.</p>
           </div>
           <figure>
             <img
