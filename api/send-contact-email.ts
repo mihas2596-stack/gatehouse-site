@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildWorkRooms } from "./_work_scope.js";
 import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
 import { mintOwnerLoginToken } from "./_owner_auth.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
@@ -89,9 +90,9 @@ export const TEST_PRICE_SCALE = 0.01;
 // Extended again by owner order 2026-10-28 by 72h: now ends 2026-11-01T10:33:00Z.
 // Extended again by owner order 2026-10-31: now ends 2026-11-03T10:33:00Z
 // (owner payment testing 2026-11-01–02; values unchanged, only the window).
-// Extended again by owner order 2026-11-03 by 72h: now ends 2026-11-06T10:33:00Z
-// (owner payment testing continues; values unchanged, only the window).
-const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-06T10:33:00Z");
+// Extended again 2026-11-03, then by owner order 2026-11-06 for another
+// week: ends 2026-11-13T20:59:59Z (23:59 Minsk). Existing quotes stay pinned.
+const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-13T20:59:59Z");
 const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;
@@ -652,7 +653,7 @@ export default async function handler(req: Req, res: Res) {
     let testScale = false;
     // Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While
     // active, every booking prices at TEST_PRICE_SCALE with no token
-    // needed; the window auto-expires 2026-11-06 10:33 UTC. Token sessions
+    // needed; the window auto-expires 2026-11-13 20:59 UTC. Token sessions
     // (testScale) work the same way on top of it.
     const cutScale = globalTestCutActive();
     let serverRecurring: string | undefined;
@@ -735,45 +736,8 @@ export default async function handler(req: Req, res: Res) {
       // start. Best-effort — a DB hiccup never fails the booking.
       if (dbConfigured()) {
         try {
-          const genericItems = [{ label: "Cleaned as agreed", done: false }];
-          const stdItems = (labels: string[]) => labels.map((label) => ({ label, done: false }));
-          // Rooms are generated from THIS booking (fix 2026-10-28): the
-          // old fixed 4-room list gave a 5-bedroom house the same rooms
-          // as a 1-bedroom one, and extra zones arrive as a joined
-          // string, so the old loop minted one-letter rooms from its
-          // characters. Counts come from the validated quote inputs;
-          // when they are missing we fall back to the old generic
-          // plural rooms so the checklist is never empty.
-          const bedN = parseInt(bedrooms ?? "", 10);
-          const fullN = parseInt(parsed.data.full_baths ?? "", 10);
-          const halfN = parseInt(parsed.data.half_baths ?? "", 10);
-          const bathTasks = ["Toilet, shower/tub and sink cleaned", "Mirrors polished", "Floor cleaned", "Trash emptied"];
-          const halfTasks = ["Toilet and sink cleaned", "Mirror polished", "Floor cleaned", "Trash emptied"];
-          const bedTasks = ["Surfaces dusted", "Floor vacuumed / cleaned", "Bed made (if requested)"];
-          const rooms: { name: string; items: { label: string; done: boolean }[] }[] = [
-            { name: "Kitchen", items: stdItems(["Counters and sink cleaned", "Appliance exteriors wiped", "Floor vacuumed and mopped", "Trash emptied"]) },
-          ];
-          if (Number.isFinite(fullN) && fullN > 0) {
-            if (fullN === 1) rooms.push({ name: "Bathroom", items: stdItems(bathTasks) });
-            else for (let i = 1; i <= fullN; i++) rooms.push({ name: `Bathroom ${i}`, items: stdItems(bathTasks) });
-          } else {
-            rooms.push({ name: "Bathrooms", items: stdItems(bathTasks) });
-          }
-          if (Number.isFinite(bedN) && bedN > 0) {
-            if (bedN === 1) rooms.push({ name: "Bedroom", items: stdItems(bedTasks) });
-            else for (let i = 1; i <= bedN; i++) rooms.push({ name: `Bedroom ${i}`, items: stdItems(bedTasks) });
-          } else {
-            rooms.push({ name: "Bedrooms", items: stdItems(bedTasks) });
-          }
-          if (Number.isFinite(halfN) && halfN > 0) {
-            if (halfN === 1) rooms.push({ name: "Half bathroom", items: stdItems(halfTasks) });
-            else for (let i = 1; i <= halfN; i++) rooms.push({ name: `Half bathroom ${i}`, items: stdItems(halfTasks) });
-          }
-          rooms.push({ name: "Living room", items: stdItems(["Surfaces dusted", "Floor vacuumed / cleaned", "Cushions straightened"]) });
-          // extra_zones arrives as a comma-joined string (see the quote
-          // form payload) — split it; never iterate the raw string.
-          const zoneNames = (extra_zones ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 8);
-          for (const z of zoneNames) rooms.push({ name: z.slice(0, 60), items: [...genericItems] });
+          const actualService = parsed.data.service_key === "moveinout" ? "Move-in / Move-out cleaning" : server?.first_service === "deep" ? "Deep cleaning" : (service ?? "Standard cleaning");
+          const rooms = buildWorkRooms({ bedrooms, fullBaths: parsed.data.full_baths ?? bathrooms, halfBaths: parsed.data.half_baths, extraZones: extra_zones, deep: server?.first_service === "deep", addons: parsed.data.addons });
           // M6/N-upsert: insert-only, never merge. A retried or
           // concurrent submission reproduces the same booking id by
           // design — it must never regress a visit that has already
@@ -795,7 +759,7 @@ export default async function handler(req: Req, res: Res) {
               visit_no: 1,
               client_name: (name ?? "").trim() || null,
               client_email: (email ?? "").trim() || null,
-              service: (service ?? "").trim() || null,
+              service: actualService,
               visit_date: /^\d{4}-\d{2}-\d{2}$/.test((date ?? "").trim()) ? (date as string).trim() : null,
               window: (time ?? "").trim() || null,
               address: (address ?? "").trim() || null,
@@ -809,7 +773,7 @@ export default async function handler(req: Req, res: Res) {
               amount_cents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
               checklist: { rooms },
               status: "requested",
-              is_test: /\b(qa|test)\b/i.test(name ?? ""),
+              is_test: testScale || cutScale || /\b(qa|test|probe)\b|прогон|провер|тест/i.test(name ?? ""),
             });
             if (inserted) {
               visitRow = inserted;
@@ -824,6 +788,7 @@ export default async function handler(req: Req, res: Res) {
               visitRow = reread[0] ?? null;
             }
           }
+          if (!visitRow) return json(503, { ok: false, error: "booking_save_failed" });
           if (visitRow) {
             visitRowId = visitRow.id;
             // Keep contact with this visit. Older versions only put the phone
@@ -865,6 +830,7 @@ export default async function handler(req: Req, res: Res) {
           }
         } catch (err) {
           logErr("visit_row", err instanceof Error ? err.message : String(err));
+          return json(503, { ok: false, error: "booking_save_failed" });
         }
       }
       saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
@@ -926,8 +892,8 @@ export default async function handler(req: Req, res: Res) {
           ${message ? row("Notes from client", escapeHtml(message).replace(/\n/g, "<br>")) : ""}
           ${notes ? row("Customer notes (client)", escapeHtml(notes).replace(/\n/g, "<br>")) : ""}
 ${isQuote ? row("Test price mode (reduced)", testScale || cutScale ? "YES" : "NO") : ""}
-${isQuote && extra_zones ? row("Extra areas to clean", extra_zones) : ""}
-${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "check scope"}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
+${isQuote && extra_zones ? row("Extra areas to clean", escapeHtml(extra_zones)) : ""}
+${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reasons || "check scope")}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
         <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form${bookingId ? ` · Booking ID: ${bookingId}` : ""}</p>
@@ -942,6 +908,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${scope_reasons || "che
         reply_to: email || undefined,
         subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
         html: htmlContent,
+        text: htmlContent.replace(/<\/tr>/g, "\n").replace(/<\/td>/g, " ").replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'),
       }, parsed.data.request_id ? `owner/${parsed.data.request_id}` : undefined);
       if (!sent.ok) {
         logErr("owner_notification", `provider ${sent.status}: ${sent.data?.name ?? ""} ${sent.data?.message ?? ""}`);
