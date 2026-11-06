@@ -21,9 +21,9 @@ const mainService: ServiceCard = {
   title: "Every Other Week",
   link: "/quote?service=recurring",
   serviceKey: "recurring",
-  desc: "Your home cleaned on the same weekday and arrival window, every other week. The house never builds up weeks of grime, so each visit takes less time.",
+  desc: "Regular upkeep, arranged with you every other week. We confirm each visit’s date, arrival window and cleaner.",
   includes: [
-    "Your regular day and arrival window, every other week",
+    "Each visit arranged and confirmed with you",
     "All rooms dusted & vacuumed",
     "Bathrooms sanitized & polished",
     "Kitchen counters & appliances wiped",
@@ -77,7 +77,7 @@ const Services = () => {
         <div className="container text-center max-w-3xl">
           <p className="font-script text-xl text-golden mb-2">Our Services</p>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
-            Every-Other-Week House Cleaning for <span className="text-gradient-gold">North Atlanta Homes</span>
+            House Cleaning for <span className="text-gradient-gold">North Atlanta Homes</span>
           </h1>
         </div>
       </section>
@@ -90,26 +90,24 @@ const Services = () => {
         </div>
       )}
 
-      {/* Main service */}
-      <section className="py-10 md:py-12">
-        <div className="container">
-          <ServiceCardBlock service={mainService} headingLevel="h2" />
-
-          <div className="mt-12">
-            <h2 className="font-heading text-2xl font-bold mb-6 text-center">Also available</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {alsoAvailable.map((s) => (
-                <ServiceCardBlock key={s.title} service={s} headingLevel="h3" compact />
-              ))}
-            </div>
-          </div>
+      <section className="py-8">
+        <div className="container max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-5">
+          {[alsoAvailable[1], mainService, alsoAvailable[0], alsoAvailable[2]].map((service, index) => (
+            <article key={service.title} className="rounded-2xl border border-border bg-card p-6 shadow-warm flex flex-col">
+              <h2 className="font-heading text-2xl font-bold mb-3">{service.title}</h2>
+              <p className="mb-4">{service.desc}</p>
+              <p className="font-semibold mb-4">From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit</p>
+              <Button asChild variant="hero" size="lg" className="mt-auto"><Link to={service.link} data-main-cta>See your price</Link></Button>
+              <details className="mt-4"><summary className="min-h-[44px] cursor-pointer text-primary underline">What this covers</summary><ul className="mt-2 space-y-2 list-disc pl-5">{service.includes.map((item) => <li key={item}>{item}</li>)}</ul></details>
+            </article>
+          ))}
         </div>
       </section>
 
       {/* Comparison — factual differences only, prices from the same config
           the calculator and the server charge by. One data source renders
           the desktop table and the mobile cards, so they can never drift. */}
-      <section className="py-10 md:py-12 bg-background">
+      <section className="py-8 bg-background"><details className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
         <div className="container max-w-4xl">
           <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
           <p className="text-center text-muted-foreground mb-8">
@@ -158,6 +156,7 @@ const Services = () => {
             Deep and move-in/out prices already include the oven, fridge and cabinet interiors — they are never charged twice.
           </p>
         </div>
+      </details>
       </section>
 
     </div>
