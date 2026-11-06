@@ -400,10 +400,10 @@ async function maybeSendCardSavedEmail(
     visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
   }
   const deadline = confirmDeadlineLabel();
-  const explainer = paymentEmailCopy(price);
+  const explainer = paymentEmailCopy(price).replace(/^Due today: \$0\.\n\n/, "");
   const requestSummary = `Service: ${service}${price ? `\nFirst visit: ${price}` : ""}${date ? `\nRequested date: ${emailDate(date)}` : ""}`;
-  const nextStep = `Your requested visit is not confirmed yet. Next step is ours: we'll confirm your cleaner and arrival window by ${deadline}.`;
-  const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${nextStep}\n\n${requestSummary}\n\n${explainer}\n\nView my visit:\n${visitUrl}\n\nQuestions? Reply to this email.\n\nNick\nGatehouse Home Cleaning\n`;
+  const nextStep = `Your date is awaiting confirmation. We'll email your date, cleaner and arrival window by ${deadline}.`;
+  const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${nextStep}\n\n${requestSummary}\n\n${explainer}\n\nView my visit:\n${visitUrl}\n\nQuestions? Reply to this email.\n\nGatehouse Home Cleaning\n`;
   const html = emailDocument({
     firstName, heading: "Card saved — $0 charged today",
     paragraphs: [nextStep, requestSummary, explainer],
@@ -414,7 +414,7 @@ async function maybeSendCardSavedEmail(
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: "Nick at Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
         to: [to],
         reply_to: "hello@gatehousehomecleaning.com",
         subject: "Card saved \u2014 your request is received",
