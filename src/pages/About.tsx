@@ -64,7 +64,7 @@ const About = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-16">
             {[
               { icon: Heart, title: "First Clean Rule", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book." },
-              { icon: Shield, title: "Same Day, Same Time", desc: "Your visit is set to the same weekday and arrival window, every other week." },
+              { icon: Shield, title: "A Schedule You Agree To", desc: "Request every-other-week visits. We arrange and confirm each date and arrival window with you." },
             ].map((v) => (
               <div key={v.title} className="text-center p-8 bg-card rounded-2xl shadow-warm">
                 <div className="w-14 h-14 rounded-xl bg-peach/50 flex items-center justify-center mx-auto mb-5">
@@ -90,7 +90,7 @@ const About = () => {
               We'd rather show you exactly who we are. Cancellation and lockout rules are listed in our FAQ and Terms.
             </p>
             <p className="text-foreground/80 leading-relaxed mt-3">
-              Photos on this site are illustrative. Real client photos will be added after our first visits.
+              The bedroom photo shown on our homepage is from a Gatehouse clean. Other illustrative images are labelled. Your private report photos are never published without separate permission.
             </p>
           </div>
 
