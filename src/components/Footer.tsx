@@ -19,7 +19,7 @@ const Footer = () => {
               North Atlanta, GA
             </span>
             <p className="mt-4 text-[#3D2B1F] text-sm leading-relaxed">
-              Every-other-week house cleaning on your regular day and arrival window. Your price is based on the details you enter.
+              House cleaning with a clear price and a private photo report. One-time and every-other-week visits, confirmed with you.
             </p>
           </div>
 
