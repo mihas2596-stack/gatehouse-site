@@ -21,6 +21,13 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     await screen.findByRole("heading", { name: "Booking confirmed" });
     expect(screen.queryByRole("button", { name: /Add.*card|Change.*card|different card/i })).not.toBeNull();
   });
+  it("a standalone card save does not claim that a cleaning date is awaiting confirmation", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, verified: true, status: "saved", booking: null }) }));
+    render(<MemoryRouter initialEntries={["/save-card?saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Card saved — $0 charged today" });
+    expect(screen.queryByText(/Your date is awaiting confirmation/)).toBeNull();
+    expect(screen.getByRole("link", { name: "See price & request a cleaning" }).getAttribute("href")).toBe("/quote");
+  });
   it("a failed status request is an unknown state, rather than a claim that another card entry is needed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     render(<MemoryRouter initialEntries={[{ pathname: "/thank-you", state: { submitted: true, kind: "booking", bt: "audit-token" } }]}><ThankYou /></MemoryRouter>);
