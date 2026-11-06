@@ -37,6 +37,7 @@ type CardStatusBooking = {
   confirmed_date?: string;
   confirmed_window?: string;
   confirm_by?: string;
+  visit_state?: string;
 };
 
 // Card states, always driven by the server (card-status reconciles with
@@ -44,6 +45,8 @@ type CardStatusBooking = {
 type CardState =
   | { kind: "checking"; slow: boolean }
   | { kind: "needed" }
+  | { kind: "unknown" }
+  | { kind: "cancelled" }
   | { kind: "failed" }
   | { kind: "saved"; booking: CardStatusBooking | null }
   | { kind: "choice"; booking: CardStatusBooking | null }
@@ -114,7 +117,9 @@ const ThankYou = () => {
         if (slowTimer.current) window.clearTimeout(slowTimer.current);
         const b = data.booking ?? null;
         setStatusBooking(b);
-        if (b?.has_card === "1" && b?.booking_confirmed === "1") {
+        if (!b) { setCard({ kind: "unknown" }); }
+        else if (b.visit_state === "cancelled") { setCard({ kind: "cancelled" }); }
+        else if (b?.has_card === "1" && b?.booking_confirmed === "1") {
           setCard({ kind: "confirmed", booking: b });
         } else if (b?.has_card === "1" && b?.card_confirmed === "1") {
           setCard({ kind: "saved", booking: b });
@@ -130,16 +135,17 @@ const ThankYou = () => {
       })
       .catch(() => {
         if (slowTimer.current) window.clearTimeout(slowTimer.current);
-        setCard({ kind: "needed" });
+        setCard({ kind: "unknown" });
       });
   }, [bt]);
 
   useEffect(() => {
+    if (!isBooking) return;
     checkCard();
     return () => {
       if (slowTimer.current) window.clearTimeout(slowTimer.current);
     };
-  }, [checkCard]);
+  }, [checkCard, isBooking]);
 
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState(false);
@@ -203,6 +209,7 @@ const ThankYou = () => {
               ? "Thanks for your question. We reply by email within one business day."
               : "Use our quote or contact form to send a request. This page alone does not create a booking."}
           </p>
+          {received && submission.customerEmailSent === false && <p role="status" className="mb-6">Your message reached us. The automatic email confirmation could not be sent. There is no need to send your message again.</p>}
           <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "See My Price"}</Link></Button>
         </div>
       </div>
@@ -291,6 +298,15 @@ const ThankYou = () => {
       <div className="container max-w-2xl py-8 pb-24 md:pb-12">{children}</div>
     </div>
   );
+
+  if (card.kind === "cancelled" || card.kind === "unknown") {
+    return shell(<div className="text-center">
+      <h1 className="font-heading text-3xl font-bold mb-4">{card.kind === "cancelled" ? "This visit is cancelled" : "We couldn’t verify your card status"}</h1>
+      <p className="mb-6 text-lg">{card.kind === "cancelled" ? "No further card step is needed for this visit." : "Your request is saved. Check again before entering your card again."}</p>
+      {card.kind === "unknown" && <Button variant="hero" size="lg" onClick={checkCard}>Check again</Button>}
+      <p className="mt-6"><Link className="underline" to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link></p>
+    </div>);
+  }
 
   // State B — checking with Stripe.
   if (card.kind === "checking") {
