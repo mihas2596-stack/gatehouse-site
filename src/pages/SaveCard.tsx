@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
 import { trackFunnel } from "@/lib/measurement";
@@ -126,7 +127,7 @@ const SaveCard = () => {
   const isConfirmed = booking?.booking_confirmed === "1";
 
   return (
-    <div className="page-shell min-h-[80vh] bg-background">
+    <div className="page-shell readable-flow min-h-[80vh] bg-background">
       <SEO
         url="https://www.gatehousehomecleaning.com/save-card"
         title="Save Your Card — $0 Today | Gatehouse Home Cleaning"
@@ -254,28 +255,8 @@ const SaveCard = () => {
                 Save your card below to complete — $0 today.
               </p>
             )}
-            <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
-              <h2 className="mb-2 font-heading text-lg font-bold">Why save a card now?</h2>
-              <p className="text-base leading-relaxed">
-                Save your card now so you won&apos;t need to enter it again after your cleaning.
-                <strong> $0 charged today.</strong>
-              </p>
-              <p className="mt-2 text-base leading-relaxed">
-                After your cleaning, we&apos;ll email your photo report. We charge the agreed visit
-                price when you approve it, or 24 hours after we send it if you haven&apos;t reported
-                an issue. Reporting an issue within that window blocks the automatic charge for this visit — it never runs on its own afterwards. You approve again to pay once we&apos;ve fixed it. Your card details are stored securely by Stripe, our payment processor —
-                Gatehouse never sees your full card number.
-              </p>
-              <p className="mt-2 text-base leading-relaxed">
-                Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.
-              </p>
-              <p className="mt-4 text-sm text-muted-foreground">
-                Free cancellation until 48 hours before your visit; after that a $25 fee applies.
-                If we arrive and can&apos;t get in — and can&apos;t reach you — the visit is charged
-                in full. See our{" "}
-                <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
-              </p>
-            </div>
+            <div className="mb-6"><PaymentSummary showCard /></div>
+            <p className="mb-6 text-left text-base leading-relaxed">Cancel free at least 48 hours before your visit; later cancellations cost $25. If the cleaner cannot enter at the scheduled time, the full visit price applies. <Link to="/terms#terms-6" className="underline text-primary">Changes &amp; access policy</Link>.</p>
             {bookingSummary && (
               <div className="mb-8 rounded-xl border border-sage/40 bg-sage/10 p-6 text-left">
                 <h2 className="mb-2 font-heading text-lg font-bold">Your booking</h2>
