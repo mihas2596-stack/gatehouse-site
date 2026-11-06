@@ -1,4 +1,4 @@
-type FunnelEvent = "gh_page_view" | "gh_quote_start" | "gh_quote_review" | "gh_lead_submit" | "gh_card_saved" | "gh_contact_submit" | "gh_form_error";
+type FunnelEvent = "gh_visit_confirmed_view" | "gh_report_view" | "gh_payment_success_view" | "gh_issue_status_view" | "gh_page_view" | "gh_quote_start" | "gh_quote_review" | "gh_lead_submit" | "gh_card_saved" | "gh_contact_submit" | "gh_form_error";
 type EventDetails = {
   page_path?: string;
   form_type?: "quote" | "contact";
