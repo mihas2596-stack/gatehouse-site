@@ -32,6 +32,14 @@ const needsEntry = (v: AttentionVisit): boolean => {
   return days >= -1 && days <= 2;
 };
 
+// Compare calendar dates in the service area's timezone. A past request
+// needs a review, not a misleading instruction to dispatch immediately.
+export const isPastUnfinishedVisit = (v: AttentionVisit, now = new Date(Date.now())): boolean => {
+  if (!v.visit_date || v.status === "paid" || v.status === "cancelled") return false;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  return v.visit_date.slice(0, 10) < today;
+};
+
 // Plain-words visit status for badges and headers — the owner should
 // never have to translate internal row statuses.
 export const visitLabel = (s: string): string => {
@@ -39,6 +47,7 @@ export const visitLabel = (s: string): string => {
     case "requested": return "Requested";
     case "confirmed": return "Confirmed";
     case "report_sent": return "Report sent";
+    case "report_submitted": return "Report ready for review";
     case "approved": return "Approved";
     case "paid": return "Paid";
     case "cancelled": return "Cancelled";
@@ -87,7 +96,10 @@ export const nextActionFor = (v: AttentionVisit, paymentFailed: boolean): string
     // issue, which the card still offers to resolve.
     return v.issue_open ? "Resolve the customer issue" : "No action needed";
   }
+  if (v.issue_open) return "Resolve the customer issue";
+  if (isPastUnfinishedVisit(v) && (!v.report_status || ["none", "draft", "returned"].includes(v.report_status))) return "Review the past visit date";
   if (!v.visit_confirmed) {
+    if (v.report_status === "sent" || v.report_status === "submitted") return "Review the visit record";
     if (v.status === "requested" && !v.request_approved) return "Approve request";
     if (!v.cleaner_name) return "Assign a cleaner";
     return "Confirm the date";
@@ -116,6 +128,11 @@ export const attentionItems = (v: AttentionVisit): AttentionItem[] => {
     return v.issue_open ? [{ label: "Open to resolve the issue", focus: "report" }] : [];
   }
   const items: AttentionItem[] = [];
+  if (v.issue_open) items.push({ label: "Open to resolve the issue", focus: "report" });
+  if (isPastUnfinishedVisit(v) && (!v.report_status || ["none", "draft", "returned"].includes(v.report_status))) {
+    items.push({ label: "Open to review the past visit date", focus: "schedule" });
+    return items;
+  }
   // A submitted (or sent) report without a confirmation event is an
   // inconsistent record: work happened without an agreed visit. It
   // needs an explicit review-and-repair confirmation, not a routine
@@ -127,7 +144,6 @@ export const attentionItems = (v: AttentionVisit): AttentionItem[] => {
   else if (!v.visit_confirmed) items.push({ label: "Open to confirm the date", focus: "schedule" });
   if (v.report_status === "submitted") items.push({ label: "Open to review the report", focus: "report" });
   if (v.report_bounced) items.push({ label: "Open: report delivery failed", focus: "report" });
-  if (v.issue_open) items.push({ label: "Open to resolve the issue", focus: "report" });
   if (v.payment_failed) items.push({ label: "Open: payment failed", focus: "payment" });
   // Entry signal: a confirmed visit within 2 days whose entry method is
   // not agreed yet — the owner sees it here, and the cron sends the
