@@ -41,12 +41,12 @@ describe("/thank-you card states", () => {
 
   it("state C: card saved — all set, no action needed, View my visit", async () => {
     renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08", has_card: "1", card_confirmed: "1" } });
-    expect(await screen.findByText(/You're all set — your request is received/)).toBeInTheDocument();
+    expect(await screen.findByText(/Request received/)).toBeInTheDocument();
     expect(screen.getByText(/Card saved · \$0 charged today/)).toBeInTheDocument();
-    expect(screen.getByText(/No further action is needed right now/)).toBeInTheDocument();
+    expect(screen.getByText(/Your date is awaiting confirmation/)).toBeInTheDocument();
     expect(screen.getByText("client@example.com")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View my visit" })).toBeInTheDocument();
-    expect(screen.getByText(/Your card is charged when you approve the report, or automatically 24 hours after we send it/)).toBeInTheDocument();
+    expect(screen.getByText(/Your card is charged automatically 24 hours after we send the report/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save card/ })).not.toBeInTheDocument();
   });
 
