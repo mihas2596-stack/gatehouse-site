@@ -162,10 +162,11 @@ export const scaleTestPrice = (n: number): number =>
  * Extended again by owner order 2026-10-28 by 72h: now ends 2026-11-01T10:33:00Z.
  * Extended again by owner order 2026-10-31: now ends 2026-11-03T10:33:00Z
  * (owner payment testing 2026-11-01–02; values unchanged, only the window).
- * Extended again by owner order 2026-11-03 by 72h: now ends 2026-11-06T10:33:00Z
- * (owner payment testing continues; values unchanged, only the window).
+ * Extended again by owner order 2026-11-03 by 72h, then 2026-11-06
+ * for another week: ends 2026-11-13T20:59:59Z (23:59 Minsk).
+ * Values and existing pinned booking amounts are unchanged.
  */
-export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-06T10:33:00Z");
+export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-13T20:59:59Z");
 export const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 
