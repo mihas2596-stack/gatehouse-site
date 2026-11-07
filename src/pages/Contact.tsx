@@ -120,7 +120,7 @@ const Contact = () => {
             Have a Question? <span className="text-gradient-gold">Message Us</span>
           </h1>
           <p className="text-foreground text-lg">
-            Have a question? Send us a message. We reply within one business day.
+            Send us a message. We reply within one business day.
           </p>
         </div>
       </section>
@@ -233,12 +233,7 @@ interface ContactFormProps {
 const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, errors, fieldRefs }: ContactFormProps) => (
   <div id="contact-form" className="scroll-mt-16 md:scroll-mt-28">
     <form onSubmit={handleSubmit} noValidate className="bg-card rounded-2xl p-6 sm:p-8 md:p-10 shadow-warm-lg">
-      <h3 className="font-heading text-2xl font-bold mb-2">Send us a question</h3>
-      <p className="text-foreground text-sm mb-8">
-        For a cleaning price, please{" "}
-        <Link to="/quote" className="font-semibold text-primary underline underline-offset-2">see your price online</Link>.
-      </p>
-
+      <h2 className="font-heading text-2xl font-bold mb-4">Send us a question</h2>
       <p className="text-sm text-muted-foreground mb-4">Fields marked * are required.</p>
 
       <div hidden aria-hidden="true"><label htmlFor="c-website">Leave this empty</label><input id="c-website" name="website" tabIndex={-1} autoComplete="off" value={String(formData.website ?? "")} onChange={handleChange} /></div>

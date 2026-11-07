@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SaveCard from "@/pages/SaveCard";
 import ThankYou from "@/pages/ThankYou";
@@ -27,6 +27,13 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     await screen.findByRole("heading", { name: "Card saved — $0 charged today" });
     expect(screen.queryByText(/Your date is awaiting confirmation/)).toBeNull();
     expect(screen.getByRole("link", { name: "See price & request a cleaning" }).getAttribute("href")).toBe("/quote");
+  });
+  it("lets a customer retry card entry after Stripe reports a failed setup", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, verified: false, status: "failed", booking: null }) }));
+    render(<MemoryRouter initialEntries={["/save-card?saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);
+    const retry = await screen.findByRole("button", { name: "Try card entry again" });
+    fireEvent.click(retry);
+    expect(screen.getByRole("button", { name: "Add card — $0 today" })).toBeInTheDocument();
   });
   it("a failed status request is an unknown state, rather than a claim that another card entry is needed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));

@@ -98,9 +98,19 @@ export default function SaveCard() {
           <Button asChild variant="outline"><Link to={visitLink}>View my visit</Link></Button>
         </> : unknown ? <>
           <AlertTriangle className="mx-auto mb-6 h-12 w-12" aria-hidden="true" />
-          <h1 className="font-heading text-3xl font-bold">{status === "failed" ? "Card not saved" : "Couldn't verify card"}</h1>
-          <p className="my-6">We couldn't verify your card status. This doesn't mean it failed. Check again before entering it again.</p>
-          <Button variant="hero" size="lg" onClick={() => void load()}>Check again</Button>
+          {status === "failed" ? <>
+            <h1 className="font-heading text-3xl font-bold">Card not saved</h1>
+            <p className="my-6">You can try again on Stripe. Saving a card costs $0 today.</p>
+            <Button variant="hero" size="lg" onClick={() => {
+              setEntry(hasCard);
+              setStatus("ready");
+              setError("");
+            }}>Try card entry again</Button>
+          </> : <>
+            <h1 className="font-heading text-3xl font-bold">{status === "pending" ? "Checking your card" : "Couldn't verify card"}</h1>
+            <p className="my-6">{status === "pending" ? "Stripe is still processing your card setup. Check again in a moment." : "Check your card status again before re-entering your details."}</p>
+            <Button variant="hero" size="lg" onClick={() => void load()}>Check again</Button>
+          </>}
           {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
           {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
         </> : <>
