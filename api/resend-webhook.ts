@@ -1,28 +1,15 @@
-// POST /api/resend-webhook — Resend (Svix) delivery events for site email.
-//
-// Purpose: a CONFIRMED BOUNCE of the photo-report email must void the
-// report's 24h clock. The Terms say the window does not start until the
-// report reaches the client another way, so on "email.bounced" for the
-// message id stored by send_report (gh_report_email_id) we flag the
-// booking (gh_report_bounced=1), clear gh_report_sent_at and return the
-// booking to card_ready. The auto-charge timer skips bounced bookings,
-// and the /report page tells the client the email could not be delivered
-// and that no charge will happen until the report reaches them.
-//
-// Fail-closed: without RESEND_WEBHOOK_SECRET the endpoint answers 503
-// and does nothing. Signature: Svix — HMAC-SHA256 over
-// "<svix-id>.<svix-timestamp>.<raw body>" with the base64-decoded secret.
+// Signed Resend callbacks. A bounce is scoped to the exact report email,
+// and is acknowledged only after the authoritative visit is protected.
 
 import { createHmac, timingSafeEqual } from "crypto";
-import { dbConfigured, dbSelect, dbUpdate, logEvent } from "./_db.js";
+import { dbSelectStrict, dbUpdateCount, logEvent } from "./_db.js";
+import { processReportReply, type ResendEmailData } from "./_report_reply.js";
 
 export const config = {
   api: {
     bodyParser: false,
   },
 };
-
-const STRIPE_API = "https://api.stripe.com/v1";
 
 async function readRawBody(stream: unknown): Promise<string> {
   const chunks: Buffer[] = [];
@@ -73,59 +60,6 @@ export function verifySvix(secret: string, id: string, timestamp: string, signat
   return false;
 }
 
-async function stripeGet(
-  secretKey: string,
-  path: string,
-): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
-  const response = await fetch(`${STRIPE_API}${path}`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${secretKey}` },
-    signal: AbortSignal.timeout(15000),
-  });
-  let data: Record<string, unknown> = {};
-  try {
-    data = (await response.json()) as Record<string, unknown>;
-  } catch {
-    /* ignore */
-  }
-  return { ok: response.ok, status: response.status, data };
-}
-
-async function stripePost(
-  secretKey: string,
-  path: string,
-  params: Record<string, string>,
-): Promise<{ ok: boolean; status: number }> {
-  const response = await fetch(`${STRIPE_API}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(params),
-    signal: AbortSignal.timeout(15000),
-  });
-  return { ok: response.ok, status: response.status };
-}
-
-async function findCustomerByReportEmail(
-  secretKey: string,
-  emailId: string,
-): Promise<{ id: string; metadata: Record<string, string> } | null> {
-  const query = `metadata['gh_report_email_id']:'${emailId.replace(/'/g, "")}'`;
-  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "1" })}`);
-  if (res.ok) {
-    const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-    if (list.length > 0) return { id: list[0].id, metadata: list[0].metadata ?? {} };
-    return null;
-  }
-  const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
-  if (!listRes.ok) return null;
-  const list = (listRes.data["data"] as Array<{ id: string; metadata?: Record<string, string> }> | undefined) ?? [];
-  const found = list.find((c) => c.metadata?.["gh_report_email_id"] === emailId);
-  return found ? { id: found.id, metadata: found.metadata ?? {} } : null;
-}
-
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
   const logErr = (step: string, err: unknown) =>
@@ -142,13 +76,6 @@ export default async function handler(req: Req, res: Res) {
     res.status(503).json({ requestId, ok: false, error: "webhook_not_configured" });
     return;
   }
-  const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
-  if (!STRIPE_SECRET_KEY) {
-    logErr("config", "STRIPE_SECRET_KEY missing");
-    res.status(500).json({ requestId, ok: false, error: "server_error" });
-    return;
-  }
-
   let raw: string;
   try {
     raw = await readRawBody(req);
@@ -170,68 +97,66 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
-  let event: { type?: string; data?: { email_id?: string } };
+  let event: { type?: string; data?: ResendEmailData };
   try {
     event = JSON.parse(raw) as typeof event;
   } catch {
     res.status(400).json({ requestId, ok: false, error: "bad_json" });
     return;
   }
-  if (event.type !== "email.bounced") {
-    res.status(200).json({ requestId, ok: true, ignored: true });
-    return;
-  }
-  const emailId = event.data?.email_id ?? "";
-  if (!emailId) {
-    res.status(200).json({ requestId, ok: true, ignored: true });
-    return;
-  }
-
   try {
-    const customer = await findCustomerByReportEmail(STRIPE_SECRET_KEY, emailId);
-    if (!customer) {
+    if (event.type === "email.received") {
+      const result = await processReportReply(event.data);
+      res.status(result.status).json({ requestId, ...result.body });
+      return;
+    }
+    if (event.type !== "email.bounced" && event.type !== "email.failed") {
       res.status(200).json({ requestId, ok: true, ignored: true });
       return;
     }
-    if ((customer.metadata["gh_state"] ?? "") !== "report_sent") {
-      // The money path already moved (approved/paid) or no clock is
-      // running — a late bounce changes nothing.
+    const emailId = event.data?.email_id;
+    if (typeof emailId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(emailId)) {
       res.status(200).json({ requestId, ok: true, ignored: true });
       return;
     }
-    const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-      "metadata[gh_state]": "card_ready",
-      "metadata[gh_report_bounced]": "1",
-      "metadata[gh_report_sent_at]": "",
-    });
-    if (!upd.ok) {
-      logErr("bounce_update", `stripe ${upd.status}`);
-      res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+    const matchEmail = `report_email_id=eq.${encodeURIComponent(emailId)}`;
+    const matched = await dbSelectStrict<{
+      id: string; booking_id: string; status: string; report_status: string; report_bounced: boolean;
+    }>("gh_visits", `${matchEmail}&select=id,booking_id,status,report_status,report_bounced&limit=2`);
+    if (!matched.ok || matched.rows.length > 1) {
+      res.status(503).json({ requestId, ok: false, error: "visit_lookup_unavailable" });
       return;
     }
-    // Mirror into the booking's DB row + journal: the auto-charge DB pass
-    // re-hydrates metadata FROM the row, so a bounce recorded only in
-    // Stripe metadata is silently undone there and the charge still fires
-    // for a report the provider confirmed undelivered.
-    const bookingId = customer.metadata["gh_booking_id"] ?? "";
-    if (bookingId && dbConfigured()) {
-      try {
-        const rows = await dbSelect<{ id: string }>(
-          "gh_visits",
-          `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
-        );
-        if (rows[0]) {
-          await dbUpdate("gh_visits", `id=eq.${rows[0].id}`, { report_bounced: true });
-          await logEvent(rows[0].id, bookingId, "system", "report_bounced", { email_id: emailId });
-        }
-      } catch (err) {
-        logErr("bounce_db_mirror", err);
-      }
+    const visit = matched.rows[0];
+    if (!visit) {
+      // Resend can send a bounce before its send response is stored.
+      // Request redelivery for report events. Other emails are irrelevant.
+      const isReport = event.data?.tags?.gh_report === "1" || event.data?.subject === "Your cleaning report is ready";
+      res.status(isReport ? 503 : 200).json(isReport
+        ? { requestId, ok: false, error: "report_email_not_linked" }
+        : { requestId, ok: true, ignored: true });
+      return;
     }
-    console.log(JSON.stringify({ requestId, step: "report_bounced", booking: bookingId }));
+    if (visit.status === "paid" || visit.status === "cancelled" || visit.report_status !== "sent") {
+      res.status(200).json({ requestId, ok: true, ignored: true });
+      return;
+    }
+    if (visit.report_bounced) {
+      res.status(200).json({ requestId, ok: true, bounced: true, already: true });
+      return;
+    }
+    const saved = await dbUpdateCount("gh_visits", [
+      `id=eq.${visit.id}`, matchEmail, `status=eq.${encodeURIComponent(visit.status)}`,
+      "report_status=eq.sent", "report_bounced=neq.true",
+    ].join("&"), { report_bounced: true });
+    if (saved !== 1) {
+      res.status(503).json({ requestId, ok: false, error: "delivery_block_not_saved" });
+      return;
+    }
+    await logEvent(visit.id, visit.booking_id, "system", "report_bounced", { email_id: emailId });
     res.status(200).json({ requestId, ok: true, bounced: true });
   } catch (err) {
     logErr("unexpected", err);
-    res.status(500).json({ requestId, ok: false, error: "server_error" });
+    res.status(503).json({ requestId, ok: false, error: "server_error" });
   }
 }
