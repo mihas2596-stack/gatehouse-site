@@ -5,6 +5,7 @@ import adminHandler from "../../api/booking-action";
 import reportHandler from "../../api/report";
 import autoChargeHandler, { selectDue } from "../../api/auto-charge";
 import resendWebhookHandler from "../../api/resend-webhook";
+import { reportReplyAddress } from "../../api/_report_reply";
 import { signBooking } from "../../api/create-checkout-session";
 
 // Payment-path hardening:
@@ -414,28 +415,67 @@ function svixReq(raw: string, sigOverride?: string) {
 describe("resend bounce webhook", () => {
   const bounceBody = JSON.stringify({ type: "email.bounced", data: { email_id: "email-uuid-1" } });
 
-  it("voids the 24h clock on a confirmed bounce", async () => {
+  beforeEach(() => {
+    enableDb();
+    dbRows = [{ ...dueRow(BASE_META.gh_report_sent_at), report_email_id: "email-uuid-1" }];
+  });
+
+  it("holds the exact visit even after its Stripe customer was reused", async () => {
+    store[0].metadata.gh_booking_id = "bid-new";
+    store[0].metadata.gh_report_email_id = "email-uuid-2";
+    dbRows.push({ ...dueRow(BASE_META.gh_report_sent_at), id: "row-new", booking_id: "bid-new", report_email_id: "email-uuid-2" });
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await resendWebhookHandler(svixReq(bounceBody) as any, res as any);
     expect(res.code).toBe(200);
     expect(res.body["bounced"]).toBe(true);
-    expect(store[0].metadata["gh_report_bounced"]).toBe("1");
-    expect(store[0].metadata["gh_report_sent_at"]).toBe("");
-    expect(store[0].metadata["gh_state"]).toBe("card_ready");
+    expect(dbRows.map((row) => row.report_bounced)).toEqual([true, false]);
+    expect(dbEvents).toEqual([expect.objectContaining({ visit_id: "row-due", event: "report_bounced" })]);
+    const replay = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await resendWebhookHandler(svixReq(bounceBody) as any, replay as any);
+    expect(replay.body.already).toBe(true);
+    expect(dbEvents).toHaveLength(1);
   });
 
-  it("rejects a bad signature and ignores bounces after approval", async () => {
+  it("rejects a bad signature and ignores bounces after payment", async () => {
     const bad = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await resendWebhookHandler(svixReq(bounceBody, "v1,AAAA") as any, bad as any);
     expect(bad.code).toBe(401);
-    store[0].metadata["gh_state"] = "approved";
+    expect(dbRows[0].report_bounced).toBe(false);
+    dbRows[0].status = "paid";
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await resendWebhookHandler(svixReq(bounceBody) as any, res as any);
     expect(res.body["ignored"]).toBe(true);
-    expect(store[0].metadata["gh_report_bounced"]).toBeUndefined();
+    expect(dbRows[0].report_bounced).toBe(false);
+  });
+
+  it("asks Resend to retry when saving the delivery hold fails", async () => {
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/gh_visits?") && init?.method === "PATCH") {
+        return new Response("unavailable", { status: 503 });
+      }
+      return original(input, init);
+    }));
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await resendWebhookHandler(svixReq(bounceBody) as any, res as any);
+    expect(res.code).toBe(503);
+    expect(res.body.error).toBe("delivery_block_not_saved");
+    expect(dbRows[0].report_bounced).toBe(false);
+  });
+
+  it("asks for redelivery when a report bounces before its email ID is stored", async () => {
+    dbRows[0].report_email_id = null;
+    const raw = JSON.stringify({ type: "email.failed", data: { email_id: "email-uuid-1", tags: { gh_report: "1" } } });
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await resendWebhookHandler(svixReq(raw) as any, res as any);
+    expect(res.code).toBe(503);
+    expect(res.body.error).toBe("report_email_not_linked");
   });
 
   it("is inert without a configured secret", async () => {
@@ -444,6 +484,41 @@ describe("resend bounce webhook", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await resendWebhookHandler(svixReq(bounceBody) as any, res as any);
     expect(res.code).toBe(503);
+  });
+});
+
+describe("signed replies to the photo report", () => {
+  it("routes a verified reply to one visit and gives Resend a stable notification key", async () => {
+    enableDb();
+    vi.stubEnv("RESEND_REPORT_REPLY_DOMAIN", "gatehouse-test.resend.app");
+    vi.stubEnv("RESEND_REPORT_REPLIES_ENABLED", "1");
+    const visit = "00000000-0000-4000-8000-000000000001";
+    const address = reportReplyAddress(visit);
+    expect(address).toBeDefined();
+    vi.stubEnv("RESEND_REPORT_REPLIES_ENABLED", "0");
+    expect(reportReplyAddress(visit)).toBeUndefined();
+    const original = globalThis.fetch;
+    const rpc = vi.fn();
+    const notify = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/rpc/gh_accept_report_email_reply")) {
+        rpc(JSON.parse(String(init?.body)));
+        return Response.json({ outcome: "held", booking_id: "qa-booking" });
+      }
+      if (String(input) === "https://api.resend.com/emails") notify(new Headers(init?.headers).get("Idempotency-Key"));
+      return original(input, init);
+    }));
+    const raw = (to: string) => JSON.stringify({ type: "email.received", data: { email_id: "qa-reply", from: "client@example.com", to: [to] } });
+    const invalid = response();
+    await resendWebhookHandler(svixReq(raw(address!.replace("4000", "4001"))) as never, invalid as never);
+    expect(invalid.body.ignored).toBe(true);
+    expect(rpc).not.toHaveBeenCalled();
+    const valid = response();
+    await resendWebhookHandler(svixReq(raw(address!)) as never, valid as never);
+    expect(valid.body.outcome).toBe("held");
+    expect(rpc).toHaveBeenCalledExactlyOnceWith({ p_visit_id: visit, p_email_id: "qa-reply", p_sender: "client@example.com" });
+    expect(notify).toHaveBeenCalledExactlyOnceWith(`report-reply-owner/${visit}/qa-reply`);
+    expect(dbEvents).toEqual([expect.objectContaining({ event: "notification_email_sent", visit_id: visit })]);
   });
 });
 
