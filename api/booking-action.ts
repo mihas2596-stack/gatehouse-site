@@ -24,6 +24,7 @@
 //  - amount comes from the request but is capped server-side sanity check
 //  - 24h auto-charge is NOT implemented here (owner enables it explicitly)
 
+import { reportReplyAddress } from "./_report_reply.js";
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
@@ -571,6 +572,7 @@ type VisitRowLite = {
   status: string;
   report_status: string;
   report_sent_at: string | null;
+  report_email_id?: string | null;
   issue_open?: boolean | null;
   checklist: unknown;
   visit_date: string | null;
@@ -1967,8 +1969,8 @@ export default async function handler(req: Req, res: Res) {
       // claimed the row, but its report_sent journal event was lost.
       // The timer requires that event, so repair it WITHOUT re-emailing
       // (the Resend message id in metadata proves the email went out).
-      if (visitRow && visitRow.report_status === "sent" && meta["gh_report_email_id"]
-        && !events.some((e) => e.event === "report_sent")) {
+      if (visitRow && visitRow.report_status === "sent" && visitRow.report_email_id
+        && visitRow.report_email_id === meta["gh_report_email_id"] && !events.some((e) => e.event === "report_sent")) {
         const repaired = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
           version: parseInt(meta["gh_report_version"] ?? "1", 10) || 1,
           email_sent: true, photos: 0, journal_repaired: true,
@@ -1995,6 +1997,8 @@ export default async function handler(req: Req, res: Res) {
           report_status: "sent",
           report_sent_at: sentAt,
           status: "report_sent",
+          report_email_id: null,
+          report_bounced: true,
           // Publishing a fresh report supersedes any earlier issue
           // (matches the metadata, which send_report clears below).
           issue_open: false,
@@ -2075,7 +2079,8 @@ export default async function handler(req: Req, res: Res) {
               body: JSON.stringify({
                 from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
                 to: [custEmail],
-                reply_to: "hello@gatehousehomecleaning.com",
+                reply_to: reportReplyAddress(visitRow?.id) ?? "hello@gatehousehomecleaning.com",
+                tags: [{ name: "gh_report", value: "1" }],
                 subject: "Your cleaning report is ready",
                 text: renderedReportEmail.text,
                 html: renderedReportEmail.html,
@@ -2160,10 +2165,15 @@ export default async function handler(req: Req, res: Res) {
         // delivery proof (N07). If the journal write fails, the
         // operator retries and the repair path above heals it
         // without a duplicate email.
-        await dbUpdate("gh_visits", `id=eq.${visitRow.id}`, {
-          report_email_id: reportEmailId || null,
-          report_bounced: false,
-        });
+        if (!reportEmailId) {
+          return json(502, { ok: false, error: "report_email_tracking_failed", email_sent: true });
+        }
+        const tracked = await dbUpdateCount("gh_visits",
+          `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(sentAt)}&report_status=eq.sent`,
+          { report_email_id: reportEmailId, report_bounced: false });
+        if (tracked !== 1) {
+          return json(502, { ok: false, error: "report_email_tracking_failed", email_sent: true });
+        }
         const journaled = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
           version, email_sent: true, photos: finalPhotos.length,
         });
