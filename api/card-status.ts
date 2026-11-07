@@ -713,12 +713,15 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const si = await stripeGet(STRIPE_SECRET_KEY, `/setup_intents/${encodeURIComponent(siId)}`);
-    if (!si.ok || si.data["status"] !== "succeeded") {
-      res.status(200).json({
-        requestId, ok: true, verified: false,
-        status: si.ok && si.data["status"] === "requires_action" ? "pending" : "failed",
-        booking,
-      });
+    if (!si.ok) {
+      logErr("setup_intent_retrieve", `stripe ${si.status}`);
+      res.status(503).json({ requestId, ok: false, verified: false, status: "unknown", booking });
+      return;
+    }
+    const setupStatus = si.data["status"];
+    if (setupStatus !== "succeeded") {
+      const failed = setupStatus === "requires_payment_method" || setupStatus === "canceled";
+      res.status(200).json({ requestId, ok: true, verified: false, status: failed ? "failed" : "pending", booking });
       return;
     }
 
