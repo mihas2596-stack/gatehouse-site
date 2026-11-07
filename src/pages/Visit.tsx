@@ -204,7 +204,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           {visitWindow && (
             <div className="flex justify-between gap-4 text-sm">
               <dt className="text-muted-foreground">Arrival window (Atlanta time)</dt>
-              <dd className="font-semibold text-right">{visitWindow}</dd>
+              <dd className="font-semibold text-right">{formatArrivalWindow(visitWindow)}</dd>
             </div>
           )}
           {rep.amount && (
