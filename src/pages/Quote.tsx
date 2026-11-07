@@ -224,6 +224,7 @@ const Quote = () => {
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   // Extras start collapsed so the price form stays short; the summary
   // line always shows what is selected, even while collapsed.
@@ -383,7 +384,7 @@ const Quote = () => {
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (submitLock.current) return;
     if (needsCleaningHistory) {
       document.getElementById("q-recent-yes")?.focus();
       return;
@@ -406,6 +407,7 @@ const Quote = () => {
       if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
       return;
     }
+    submitLock.current = true;
     setIsSubmitting(true);
     try {
       const included = ADDONS_INCLUDED_IN[service];
@@ -501,6 +503,7 @@ const Quote = () => {
         addons: { insideOven, insideFridge, insideCabinets, interiorWindows, pets },
         recurring: isRecurring && breakdown ? String(breakdown.recurring_total) : "",
         test_token: testMode ? testToken : undefined,
+        test_price_window: globalCut,
         source: "quote",
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
@@ -539,7 +542,7 @@ const Quote = () => {
       // Booking accepted: the next booking in this tab gets a fresh request_id.
       try { sessionStorage.removeItem("gh_request_id"); sessionStorage.removeItem("gh_request_sig"); } catch { /* ignore */ }
       requestRef.current = null;
-      trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" });
+      trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" }, payload.request_id);
       // Recap shown on /thank-you: price, date, arrival window, current
       // status and response time. Never a "confirmed" promise — the date is
       // a request until Gatehouse confirms availability by email.
@@ -584,6 +587,7 @@ const Quote = () => {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "delivery" });
       setSubmitError("Something went wrong. Please try again or email us at hello@gatehousehomecleaning.com.");
     } finally {
+      submitLock.current = false;
       setIsSubmitting(false);
     }
   };
