@@ -391,6 +391,7 @@ const ContactSchema = z.object({
   consent_record: z.string().max(2000).optional().or(z.literal("")),
   founding: z.boolean().optional(),
   test_token: z.string().max(300).optional(),
+  test_price_window: z.boolean().optional(),
   extra_zones: z.string().max(200).optional(),
   scope_review: z.boolean().optional(),
   scope_reasons: z.string().max(300).optional(),
@@ -709,6 +710,13 @@ export default async function handler(req: Req, res: Res) {
       let tokenRecurring: string | undefined;
       if (server) {
         const browserPriceNum = tokenPrice ? parseFloat(tokenPrice.replace(/[^0-9.]/g, "")) : NaN;
+        const displayedTestWindow = parsed.data.test_price_window;
+        const staleTestPrice = !cutScale && browserPriceNum === Math.min(1.5, moneyRound(server.first_total * TEST_PRICE_SCALE));
+        if (!testScale && browserPriceNum !== server.first_total && (
+          (displayedTestWindow !== undefined && displayedTestWindow !== cutScale) || staleTestPrice
+        )) {
+          return json(409, { ok: false, errors: { price: "Prices have changed. Review the updated total before sending your request." } });
+        }
         if (!Number.isFinite(browserPriceNum) || browserPriceNum !== server.first_total) {
           logErr(
             "price_mismatch",
