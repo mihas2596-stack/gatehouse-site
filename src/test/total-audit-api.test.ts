@@ -85,6 +85,23 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
  it("a new requested booking does not inherit the cancelled state of an older booking with the same email",async()=>{foreignBinding=true;const r=response();await ownerActionHandler({method:"POST",headers:{authorization:"Bearer audit-owner"},body:{action:"status",booking_id:BID}},r as never);expect(r.code).toBe(200);expect(r.body.state).not.toBe("cancelled");});
  it("a cancellation does not claim success when both its visit and journal writes failed",async()=>{failVisitUpdates=true;failEventWrites=true;const r=response();await visitHandler({method:"POST",headers:{},body:{action:"cancel",scope:"once",bt:token()}},r as never);expect(r.body.ok).toBe(false);});
  it("a failed booking insert sends no success emails",async()=>{failVisitInsert=true;const r=response();await quoteHandler(quoteRequest(),r as never);expect(r.body.ok).toBe(false);expect(emails).toHaveLength(0);});
+ it("asks the client to review the regular price when the test window expires", async () => {
+  const home = { bedrooms: "3", bathrooms: "2", full_baths: "2" };
+  for (const mode of [true, undefined]) {
+   const result = response();
+   await quoteHandler(quoteRequest({ ...home, price: "1.50", test_price_window: mode }), result as never);
+   expect(result.code).toBe(409);
+   expect(result.body.errors).toMatchObject({ price: expect.stringMatching(/review the updated total/i) });
+  }
+  expect(inserts).toHaveLength(0);
+  expect(emails).toHaveLength(0);
+  const confirmed = response();
+  await quoteHandler(quoteRequest({ ...home, price: "219", test_price_window: false }), confirmed as never);
+  expect(confirmed.code).toBe(200);
+  expect(inserts[0]?.amount_cents).toBe(21900);
+  expect(emails).toHaveLength(2);
+  for (const email of emails) expect(JSON.stringify(email)).toContain("$219");
+ });
  it("first deep clean is explicit in the stored service and work scope",async()=>{const r=response();await quoteHandler(quoteRequest({cleaned_recently:false}),r as never);expect(r.code).toBe(200);expect(inserts[0]?.service).toMatch(/deep/i);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside oven cleaned/);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside fridge cleaned/);});
  it("untrusted extra-area and scope text stays escaped in owner email",async()=>{const r=response();await quoteHandler(quoteRequest({extra_zones:'<img src="x" onerror="bad">',scope_review:true,scope_reasons:'<a href="x">fake</a>'}),r as never);expect(r.code).toBe(200);const html=String(emails.find(e=>String(e.subject).startsWith("New quote"))?.html);expect(html).not.toContain('<img src="x"');expect(html).not.toContain('<a href="x">');expect(html).toContain('&lt;img');});
  it("confirmation deadline is pinned to the original request",async()=>{events=[{booking_id:BID,event:"visit_created",created_at:"2026-11-02T12:00:00Z",detail:{}}];const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token()}},r as never);expect((r.body.booking as Record<string,string>).confirm_by).toContain("November 3");});
