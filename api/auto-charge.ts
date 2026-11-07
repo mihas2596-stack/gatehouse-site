@@ -471,7 +471,12 @@ export default async function handler(req: Req, res: Res) {
               text:
                 `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
-                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended. If something isn't right, reply to this email — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nGatehouse Home Cleaning\n`,
+                // M4: the reply_to of this reminder is hello@, not the
+                // signed report-reply address, so a reply here does NOT
+                // open a dispute automatically. Never tell the client
+                // to reply — point them at "Report an issue" on the
+                // report page instead.
+                `${sentMs + 24 * 3600 * 1000 <= now ? "The 24-hour review period has ended. If something isn't right, tap \"Report an issue\" on your report page — we'll review it with you." : `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.`}\n\nGatehouse Home Cleaning\n`,
             }),
             signal: AbortSignal.timeout(15000),
           });

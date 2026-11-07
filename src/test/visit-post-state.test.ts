@@ -252,3 +252,56 @@ describe("V8: confirm_by is pinned to the request time", () => {
     expect(r.body["confirm_by"]).toBe("Wednesday, October 21 at 6:00 PM ET");
   });
 });
+
+describe("H1 (visit): an unknown charge outcome is never shown as approved", () => {
+  const sentAt = "2026-10-22T10:00:00.000Z";
+  const setupUnknown = () => {
+    rows = [makeRow({
+      status: "report_sent", report_status: "sent", report_sent_at: sentAt,
+      amount_cents: 14900,
+    })];
+    // Stale shared metadata still says "approved" (the pre-fix
+    // report.ts wrote it before the charge); the row + journal are
+    // the truth for this booking.
+    storeMeta = { gh_booking_id: BID, gh_state: "approved", gh_first_price_cents: "14900", gh_payment_method: "pm_x" };
+    events = [
+      created,
+      ev("visit_confirmed", { date: "2027-01-15", window: "midday" }, "2026-10-21T10:00:00.000Z"),
+      ev("report_sent", { version: 1, email_sent: true }, sentAt),
+      ev("report_approved", { via: "client_approve" }, "2026-10-22T10:05:00.000Z"),
+      ev("payment_unknown", { error: "payment_unknown" }, "2026-10-22T10:06:00.000Z"),
+    ];
+  };
+
+  it("GET shows payment_unknown, never approved; cancel is blocked while unknown", async () => {
+    setupUnknown();
+    const r = await call("GET");
+    expect(r.body["state"]).toBe("payment_unknown");
+    expect(r.body["state"]).not.toBe("approved");
+    // Reload shows the same state — the unknown marker is durable.
+    const again = await call("GET");
+    expect(again.body["state"]).toBe("payment_unknown");
+    // Fail closed: the payment may already have gone through, so
+    // cancelling while the outcome is unknown is refused.
+    const cancel = await call("POST", { action: "cancel", scope: "once" });
+    expect(cancel.code).toBe(409);
+    expect(cancel.body["error"]).toBe("visit_already_done");
+    expect(rows[0]["status"]).toBe("report_sent");
+  });
+
+  it("a later confirmed failure supersedes the unknown, and a later success pays", async () => {
+    setupUnknown();
+    // A confirmed failure wins over the unknown marker.
+    events.push(ev("payment_failed", { error: "card_declined" }, "2026-10-22T10:08:00.000Z"));
+    const failed = await call("GET");
+    expect(failed.body["state"]).toBe("payment_issue");
+    // Recovery: the charge is reconciled and the row is marked paid
+    // (as recordPaid does); the visit is paid. The retry itself pays
+    // exactly once — covered by the H1 test in report-api.test.ts
+    // (piCalls length 1); here the visit side follows the outcome.
+    events.push(ev("payment_succeeded", { payment_intent: "pi_test_1" }, "2026-10-22T10:10:00.000Z"));
+    rows[0]["status"] = "paid";
+    const paid = await call("GET");
+    expect(paid.body["state"]).toBe("paid");
+  });
+});

@@ -16,9 +16,11 @@ No secrets, no real personal data, no private tokens in this file.
 
 ## Total audit release — 06.11.2026
 
-- Prepared against production/main `68a07bfea329faea7a9904e737265d3cfd7e21e7`.
-  See `docs/total-audit-release-2026-11-06.md` for the acceptance scope and
-  explicit operational limits. No database migration or new secret required.
+- Prepared against production/main `9deb6156c2a5b044bc231c63bc19804be61564a4`
+  (PR #6). See `docs/total-audit-release-2026-11-06.md` for the acceptance scope and
+  explicit operational limits. PR #6 adds one database migration
+  (`20261107_report_email_reply.sql`) and two env vars
+  (`RESEND_REPORT_REPLY_DOMAIN`, `RESEND_REPORT_REPLIES_ENABLED`).
 - Test prices extended through 13 November 2026, 23:59 Minsk
   (`2026-11-13T20:59:59Z`). Both calculator and API use the same cutoff.
   This remains a LIVE Stripe environment with reduced prices; it is not a
@@ -176,6 +178,11 @@ No secrets, no real personal data, no private tokens in this file.
   customer metadata as the shared booking record.
 - `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` — transactional email + bounce
   webhook.
+- `RESEND_REPORT_REPLY_DOMAIN`, `RESEND_REPORT_REPLIES_ENABLED` — automatic
+  processing of replies to the photo-report email (PR #6): a verified client
+  reply opens an issue and blocks the charge
+  (`gh_accept_report_email_reply`, migration
+  `20261107_report_email_reply.sql`).
 - `ADMIN_TOKEN` — owner-panel auth (Bearer) and operator API auth.
 - `BOOKING_LINK_SECRET`, `CLEANER_LINK_SECRET`, `VISIT_ACCESS_KEY` —
   signed client/cleaner/visit links and entry-secret encryption.
@@ -200,8 +207,9 @@ No secrets, no real personal data, no private tokens in this file.
   `gh_cleaners` (+ indexes). Entry secrets live in `gh_visit_access`
   (migration `20261026_visit_access.sql`).
 - Migrations in `supabase/migrations/` (newest first in application order):
-  `20261024_cleaner_link_v2.sql`, `20261026_visit_access.sql`,
-  `20261027_fee_and_reminder.sql`, `20261028_entry_method.sql`.
+  `20261107_report_email_reply.sql`, `20261024_cleaner_link_v2.sql`,
+  `20261026_visit_access.sql`, `20261027_fee_and_reminder.sql`,
+  `20261028_entry_method.sql`.
 - There is a standing Supabase Advisor warning about a table without RLS
   (believed to be `gh_cleaners`). It is NOT fixed silently: it needs the
   owner's confirmation of the exact table plus an explicit yes for one SQL
@@ -212,9 +220,9 @@ No secrets, no real personal data, no private tokens in this file.
 - `POST /api/stripe-webhook` — Stripe events (card save, payment outcomes).
   Verified with `STRIPE_WEBHOOK_SECRET`; without it the endpoint refuses.
 - `POST /api/resend-webhook` — Resend delivery events (Svix-signed). A
-  confirmed bounce of the report email flags the booking, clears
-  `gh_report_sent_at`, and returns it to `card_ready` — the timer never runs
-  on an undelivered report.
+  confirmed bounce of the report email flags the booking
+  (`report_bounced=true`); `gh_report_sent_at` is NOT cleared — the timer
+  never runs on an undelivered report.
 - Vercel cron (`vercel.json`): `GET /api/auto-charge` twice daily
   (10:00 and 22:00 UTC = 13:00 and 01:00 Europe/Minsk). It sends the early
   reminder (first run after 4h), then charges reports 24h+ old with no issue
@@ -230,7 +238,7 @@ No secrets, no real personal data, no private tokens in this file.
   calculator in `api/send-contact-email.ts`. The two must stay in parity
   (see `price-parity` tests).
 - Test-pricing mode (active at handover time): prices ×0.01 capped at $1.50
-  with a "Test pricing is active" banner, until **06.11.2026 13:33
+  with a "Test pricing is active" banner, until **13.11.2026 23:59
   Europe/Minsk**. Bookings made inside the window keep test prices forever
   by design. Do NOT start ads while test prices are public. After the owner
   says "test complete", remove the `tp1` test-price code and the window
@@ -241,8 +249,11 @@ No secrets, no real personal data, no private tokens in this file.
 ## Order and payment state machine
 
 - Visit row (`gh_visits.status`): `requested` → `confirmed` →
-  `report_sent` → `approved` → `paid`, plus `cancelled` and `issue_open`
-  (issue flags are separate booleans: `issue_open`, `issue_ever`).
+  `report_sent` → `payment_pending` (charge in flight; a retry reconciles
+  the in-flight intent before any new charge) → `paid`, plus `cancelled`
+  and `issue_open` (issue flags are separate booleans: `issue_open`,
+  `issue_ever`). `approved` is the client-consent state in the journal /
+  Stripe metadata, not a row status.
 - Report (`report_status`): `none` → `draft` → `submitted` (owner review
   queue) → `sent` (published to the client). `submitted` is NOT delivered.
 - Payment model (Terms §5.2): $0 at booking, card saved via Stripe. Approve
@@ -327,7 +338,7 @@ No secrets, no real personal data, no private tokens in this file.
 
 ## Open problems and known limits
 
-1. Test prices public until 06.11.2026 13:33 Minsk (see above); ads blocked
+1. Test prices public until 13.11.2026 23:59 Minsk (see above); ads blocked
    until they are gone and the owner confirms real prices (he intends to
    change prices before ads anyway).
 2. No verified cleaners: trial cleanings were cancelled by the owner

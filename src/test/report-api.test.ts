@@ -42,6 +42,7 @@ let bt: string;
 let dbRows: Record<string, unknown>[];
 let dbEvents: Record<string, unknown>[];
 let failEventPost = false;
+let failPiCreate = false;
 function matchCond(row: Record<string, unknown>, field: string, op: string, val: string): boolean {
   const v = row[field];
   const dec = decodeURIComponent(val);
@@ -95,7 +96,7 @@ beforeEach(() => {
   currentMeta = { ...CUSTOMER.metadata };
   resendCalls = [];
   piCalls = [];
-  dbRows = []; dbEvents = []; failEventPost = false;
+  dbRows = []; dbEvents = []; failEventPost = false; failPiCreate = false;
   bt = signBooking("link-secret", {
     bid: BID, email: CUSTOMER.email, name: CUSTOMER.name,
   }).token;
@@ -137,6 +138,11 @@ beforeEach(() => {
       return { ok: true, status: 200, json: async () => ({ data: [] }) };
     }
     if (u.includes("/payment_intents")) {
+      // H1: simulate the Stripe create call failing with a network
+      // error, so the charge outcome is unknown (not failed).
+      if (failPiCreate && (init?.method ?? "GET").toUpperCase() === "POST") {
+        throw new Error("stripe unreachable");
+      }
       piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: undefined });
       return { ok: true, status: 200, json: async () => ({ id: "pi_test_1", status: "succeeded" }) };
     }
@@ -341,6 +347,57 @@ describe("report portal", () => {
     expect(dbRows[0]["issue_open"]).toBe(true);
     expect(piCalls).toHaveLength(0);
     expect(currentMeta["gh_state"]).not.toBe("paid");
+  });
+
+  it("H1: approve with an unknown charge outcome returns payment_unknown, never approved — reload shows the same state, retry pays once", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-3", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-3", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    const viewBefore = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, viewBefore as any);
+    expect(viewBefore.body["state"]).toBe("awaiting");
+
+    failPiCreate = true;
+    const approve = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, approve as any);
+    expect(approve.code).toBe(502);
+    expect(approve.body["error"]).toBe("payment_unknown");
+    expect(approve.body["state"]).toBe("payment_unknown");
+    expect(approve.body["state"]).not.toBe("approved");
+    // The pre-charge write must not have stamped "approved" anywhere.
+    expect(currentMeta["gh_state"]).not.toBe("approved");
+    // The claim is held (payment_pending) for recovery; nothing was charged.
+    expect(dbRows[0]["status"]).toBe("payment_pending");
+    expect(piCalls).toHaveLength(0);
+
+    // Reload: the unknown outcome survives — still payment_unknown,
+    // never the "Approved — thank you" screen.
+    const reload = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, reload as any);
+    expect(reload.body["state"]).toBe("payment_unknown");
+
+    // Retry after Stripe recovers: the held claim reconciles, the
+    // visit pays exactly once.
+    failPiCreate = false;
+    const retry = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, retry as any);
+    expect(retry.code).toBe(200);
+    expect(retry.body["state"]).toBe("paid");
+    expect(piCalls).toHaveLength(1);
+    expect(dbRows[0]["status"]).toBe("paid");
   });
 
   it("operator approve is closed: it is not client payment approval (G3)", async () => {

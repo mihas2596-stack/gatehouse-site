@@ -14,7 +14,8 @@ type ReportStateName =
   | "approved"
   | "issue_open"
   | "paid"
-  | "payment_issue";
+  | "payment_issue"
+  | "payment_unknown";
 
 type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
 
@@ -164,6 +165,12 @@ const Report = () => {
         }
         if (j.error === "payment_processing") {
           setActionError("Processing payment — a charge for this visit is already in progress. Please wait a moment and refresh; you won't be charged twice.");
+        }
+        // H1: the charge outcome is unknown — the payment may or may
+        // not have gone through. Never show this as approved; the
+        // retry re-checks the payment status first.
+        if (j.error === "payment_unknown" || j.error === "payment_unconfirmed") {
+          setActionError("We couldn't confirm whether your payment went through — please try again. You won't be charged twice; we'll check the payment status first.");
         }
       } else {
         setActionError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
@@ -502,6 +509,30 @@ const Report = () => {
               </Button>
             </div>
             <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>
+          </div>
+        )}
+
+        {!loading && data?.state === "payment_unknown" && (
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-destructive mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">We couldn&apos;t confirm your payment</h1>
+            <p className="text-lg text-foreground mb-6">
+              Your payment may or may not have gone through — we don&apos;t know yet, so we&apos;re not showing
+              this as paid or approved. Nothing has been confirmed either way.
+            </p>
+            {summary}
+            {actionError && (
+              <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
+            )}
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
+                {busy ? "Checking payment…" : data.amount ? `Try charging ${data.amount} again` : "Try again"}
+              </Button>
+            </div>
+            <p className="mt-3 text-sm text-muted-foreground text-center">
+              Trying again first checks the payment status — you won&apos;t be charged twice. If this keeps
+              happening, email hello@gatehousehomecleaning.com.
+            </p>
           </div>
         )}
 

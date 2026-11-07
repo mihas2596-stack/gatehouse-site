@@ -173,6 +173,20 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
   const paymentFailed = Boolean(
     failedEv && (!succeededEv || succeededEv.created_at < failedEv.created_at),
   );
+  // H1 (visit remainder): an unknown charge outcome must survive a
+  // reload like a failed charge does (M5 pattern, mirrored from
+  // api/report.ts buildEffectiveMeta) — never resurface as
+  // "approved". Any of the unknown-outcome journal events counts; a
+  // later success or a later confirmed failure supersedes it.
+  const unknownEv = events.reduce<BookingEvent | null>((best, e) => {
+    if (e.event !== "payment_unknown" && e.event !== "payment_unconfirmed" && e.event !== "payment_create_unknown") return best;
+    return !best || e.created_at > best.created_at ? e : best;
+  }, null);
+  const paymentUnknown = Boolean(
+    unknownEv &&
+    (!succeededEv || succeededEv.created_at < unknownEv.created_at) &&
+    (!failedEv || failedEv.created_at < unknownEv.created_at),
+  );
   // V2: a client proposal is a date_proposed WITHOUT alt_dates, newer
   // than the latest confirmation. It is pending, not a new agreement:
   // the old confirmed date stays until the owner confirms the new one.
@@ -190,6 +204,7 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
     : cancelledEv ? "cancelled"
     : issueOpen ? "issue_open"
     : paymentFailed ? "payment_failed"
+    : paymentUnknown ? "payment_unknown"
     : approvedEv ? "approved"
     : declined ? "date_declined"
     : row.report_sent_at ? ""
@@ -448,7 +463,7 @@ async function findCustomerByBooking(
 export type VisitState =
   | "card_needed" | "card_failed" | "awaiting_confirmation" | "confirmed"
   | "date_declined" | "report_sent" | "issue_open" | "approved" | "paid"
-  | "payment_issue" | "cancelled";
+  | "payment_issue" | "payment_unknown" | "cancelled";
 
 export function deriveVisitState(meta: Record<string, string>): VisitState {
   const state = meta["gh_state"] ?? "";
@@ -457,6 +472,9 @@ export function deriveVisitState(meta: Record<string, string>): VisitState {
   if (state === "payment_failed") return "payment_issue";
   if (state === "date_declined") return "date_declined";
   if (meta["gh_issue_open"] === "1" || state === "issue_open") return "issue_open";
+  // H1: an unknown charge outcome is its own state — it must never
+  // surface as "approved": no outcome has been confirmed yet.
+  if (state === "payment_unknown") return "payment_unknown";
   if (state === "approved" || state === "payment_pending") return "approved";
   if (meta["gh_report_sent_at"]) return "report_sent";
   if (meta["gh_confirmed_date"]) return "confirmed";
@@ -904,7 +922,11 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "cancel") {
       const scope = body["scope"] === "stop" ? "stop" : "once";
-      if (state === "paid" || state === "report_sent" || state === "approved") {
+      // H1: an unknown charge outcome blocks cancel like a done visit
+      // does — the payment may already have gone through, so the
+      // client retries the payment first; once the outcome is known
+      // (paid or failed) cancel behaves normally again.
+      if (state === "paid" || state === "report_sent" || state === "approved" || state === "payment_unknown") {
         res.status(409).json({ requestId, ok: false, error: "visit_already_done" });
         return;
       }

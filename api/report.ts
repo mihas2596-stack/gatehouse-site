@@ -104,11 +104,25 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
   const paymentFailed = Boolean(
     failedEv && (!succeededEv || succeededEv.created_at < failedEv.created_at),
   );
+  // H1: an unknown charge outcome must survive a reload like a failed
+  // charge does (M5) — never resurface as "approved". Any of the
+  // unknown-outcome journal events counts; a later success or a later
+  // confirmed failure supersedes it.
+  const unknownEv = events.reduce<BookingEvent | null>((best, e) => {
+    if (e.event !== "payment_unknown" && e.event !== "payment_unconfirmed" && e.event !== "payment_create_unknown") return best;
+    return !best || e.created_at > best.created_at ? e : best;
+  }, null);
+  const paymentUnknown = Boolean(
+    unknownEv &&
+    (!succeededEv || succeededEv.created_at < unknownEv.created_at) &&
+    (!failedEv || failedEv.created_at < unknownEv.created_at),
+  );
   return {
     gh_state: row.status === "paid" ? "paid"
       : cancelledEv ? "cancelled"
       : issueOpen ? "issue_open"
       : paymentFailed ? "payment_failed"
+      : paymentUnknown ? "payment_unknown"
       : approvedEv ? "approved" : "",
     gh_report_sent_at: row.report_sent_at ?? "",
     gh_report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
@@ -361,13 +375,16 @@ async function reconcilePaymentMethod(
   return pm;
 }
 
-type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue";
+type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown";
 
 function deriveState(meta: Record<string, string>): ReportState {
   const state = meta["gh_state"] ?? "";
   if (state === "paid") return "paid";
   if (state === "payment_failed") return "payment_issue";
   if (meta["gh_issue_open"] === "1" || state === "issue_open") return "issue_open";
+  // H1: an unknown charge outcome is its own state — it must never
+  // surface as "approved": no outcome has been confirmed yet.
+  if (state === "payment_unknown") return "payment_unknown";
   if (state === "approved" || state === "payment_pending") {
     return "approved";
   }
@@ -808,8 +825,13 @@ export default async function handler(req: Req, res: Res) {
       }
       const approvalLogged = Boolean(clientApprovedEvent(events));
       if (!approvalLogged) {
+        // H1: record the client's action, but do NOT write
+        // gh_state="approved" yet — "approved" claims a confirmed
+        // outcome, and the charge below may end unknown. The journal
+        // event (the consent basis for chargeVisit) is recorded
+        // first; the outcome state is written only once the charge
+        // result is known (paid / payment_failed / payment_unknown).
         const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-          "metadata[gh_state]": "approved",
           ...(issueOpenNow ? {
             "metadata[gh_issue_open]": "",
             "metadata[gh_issue_reason]": "",
@@ -823,7 +845,6 @@ export default async function handler(req: Req, res: Res) {
           return;
         }
         Object.assign(meta, {
-          gh_state: "approved",
           ...(issueOpenNow ? { gh_issue_open: "", gh_issue_reason: "" } : {}),
         });
         if (row) {
@@ -908,6 +929,19 @@ export default async function handler(req: Req, res: Res) {
           });
           return;
         }
+        // H1: the charge outcome is UNKNOWN — no confirmed success,
+        // no confirmed failure. Never report this as "approved": log
+        // a durable marker (so a reload shows the same state, M5
+        // pattern) and return the distinct payment_unknown state
+        // with a retry path. The payment_pending claim stays held;
+        // a retry reconciles it before any new charge.
+        if (row) {
+          await logEvent(row.id, payload.bid, "system", "payment_unknown", {
+            error: outcome.error,
+            ...(outcome.payment_intent ? { payment_intent: outcome.payment_intent } : {}),
+          });
+        }
+        meta["gh_state"] = "payment_unknown";
         res.status(502).json({ ...view(), error: outcome.error });
         return;
       }

@@ -73,6 +73,9 @@ const STATE_HEADLINE: Record<string, string> = {
   approved: "Visit approved",
   paid: "Paid — all done",
   payment_issue: "Your payment needs attention",
+  // H1: an unknown charge outcome is never "Visit approved" — the
+  // payment may or may not have gone through.
+  payment_unknown: "We couldn't confirm your payment",
   cancelled: "Cancelled",
 };
 
@@ -152,6 +155,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
         if (j.error === "payment_processing") {
           setErr("Processing payment — a charge for this visit is already in progress. Please wait a moment and refresh; you won't be charged twice.");
         }
+        // H1: the charge outcome is unknown — the payment may or may
+        // not have gone through. Never show this as approved; the
+        // retry re-checks the payment status first.
+        if (j.error === "payment_unknown" || j.error === "payment_unconfirmed") {
+          setErr("We couldn't confirm whether your payment went through — please try again. You won't be charged twice; we'll check the payment status first.");
+        }
       } else {
         setErr("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
       }
@@ -188,8 +197,10 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       </div>
     );
   }
-  const canAct = rep.state === "awaiting" || rep.state === "payment_issue";
-  const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue";
+  // H1: an unknown charge outcome is actionable — the client must be
+  // able to retry (the retry re-checks the payment status first).
+  const canAct = rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown";
+  const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown";
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
@@ -250,6 +261,22 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                 </Button>
                 <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
                   Report an issue
+                </Button>
+              </div>
+            </>
+          ) : rep.state === "payment_unknown" ? (
+            <>
+              <p className="font-semibold mb-1">We couldn&apos;t confirm your payment.</p>
+              <p className="text-sm mb-3">
+                Your payment may or may not have gone through — we don&apos;t know yet, so we&apos;re not showing
+                this as paid or approved. Trying again first checks the payment status; you won&apos;t be charged twice.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+                  {busy ? "Checking payment…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Change card</Link>
                 </Button>
               </div>
             </>
@@ -627,6 +654,13 @@ const Visit = () => {
                 nothing is charged.
               </p>
             )}
+            {data.state === "payment_unknown" && (
+              <p className="text-lg text-foreground mb-6 text-center">
+                We couldn&apos;t confirm whether your payment went through — your visit isn&apos;t
+                shown as approved or paid. Try again in the report section below: checking first
+                makes sure you won&apos;t be charged twice.
+              </p>
+            )}
             {data.state === "cancelled" && (
               <p className="text-lg text-foreground mb-6 text-center">
                 {data.cancelled_scope === "stop"
@@ -667,14 +701,14 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue") && (
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown") && (
               <section id="report" className="scroll-mt-28">
                 <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={data.has_card && data.card_last4 ? `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••${data.card_last4}` : null} onChanged={() => void load()} />
               </section>
             )}
 
 
-            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue"].includes(data.state) && (
+            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue", "payment_unknown"].includes(data.state) && (
               <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
                 <dl className="space-y-1.5">
                   {rows.map(([k, v]) => (
@@ -716,7 +750,7 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue") && (
+            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown") && (
               <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
                 <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>

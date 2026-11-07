@@ -7,9 +7,12 @@ vi.mock("@/components/SEO", () => ({ default: () => null }));
 let confirmed: boolean;
 let hasCard: boolean;
 let choices: number;
+let visitStateOverride: string | null;
+let reportStateOverride: string | null;
 
 beforeEach(() => {
   confirmed = false; hasCard = true; choices = 0;
+  visitStateOverride = null; reportStateOverride = null;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/card-status" && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
@@ -17,9 +20,15 @@ beforeEach(() => {
       confirmed = true; choices++;
       return { ok: true, json: async () => ({ ok: true }) };
     }
+    if (String(url).startsWith("/api/report?")) {
+      return { ok: true, json: async () => ({
+        ok: true, state: reportStateOverride ?? "awaiting", amount: "$1.50",
+        photo_items: [], checklist: null,
+      }) };
+    }
     if (!String(url).startsWith("/api/visit?")) throw new Error("Unexpected request");
     return { ok: true, json: async () => ({
-      ok: true, state: hasCard ? "awaiting_confirmation" : "card_needed",
+      ok: true, state: visitStateOverride ?? (hasCard ? "awaiting_confirmation" : "card_needed"),
       has_card: hasCard, card_confirmed: confirmed, card_brand: "visa", card_last4: "4242",
       booking: { service: "Standard", requested_date: "2027-01-15", first: "$1.50" },
       confirm_by: "tomorrow", entry_available: false,
@@ -52,5 +61,19 @@ describe("a card from another booking still needs this customer's explicit choic
     expect(await screen.findByRole("heading", { name: "Request received — one step left" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Save card — $0 today" })).toBeInTheDocument();
     expect(screen.queryByText("Next step is ours.")).not.toBeInTheDocument();
+  });
+});
+
+describe("H1 (visit): an unknown payment outcome is never shown as approved", () => {
+  it("shows the payment-unknown headline and retry, not 'Visit approved'", async () => {
+    visitStateOverride = "payment_unknown";
+    reportStateOverride = "payment_unknown";
+    open();
+    expect(await screen.findByRole("heading", { name: "We couldn't confirm your payment" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Visit approved" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Try charging $1.50 again" })).toBeInTheDocument();
+    // Change card is offered both next to the card label and in the
+    // retry block.
+    expect(screen.getAllByRole("link", { name: "Change card" })).toHaveLength(2);
   });
 });
