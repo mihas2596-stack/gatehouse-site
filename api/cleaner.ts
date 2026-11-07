@@ -11,6 +11,7 @@
 // short-lived signed URLs, and uploads go straight to Storage with a
 // signed upload URL (bytes never pass through this function).
 
+import { reportReplyAddress } from "./_report_reply.js";
 import {
   dbConfigured,
   dbSelect,
@@ -389,6 +390,7 @@ async function publishReportToClient(
     {
       report_status: "sent",
       report_sent_at: sentAt,
+      report_email_id: null,
       report_bounced: true,
       status: "report_sent",
     },
@@ -449,7 +451,8 @@ async function publishReportToClient(
         body: JSON.stringify({
           from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
           to: [custEmail],
-          reply_to: "hello@gatehousehomecleaning.com",
+          reply_to: reportReplyAddress(visit.id) ?? "hello@gatehousehomecleaning.com",
+          tags: [{ name: "gh_report", value: "1" }],
           subject: "Your cleaning report is ready",
           text: renderedReportEmail.text,
           html: renderedReportEmail.html,
@@ -480,13 +483,13 @@ async function publishReportToClient(
       "metadata[gh_report_bounced]": "1",
     });
   }
-  await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
-    report_status: "sent",
-    report_sent_at: sentAt,
-    report_email_id: reportEmailId || null,
-    report_bounced: !emailSent,
-    status: "report_sent",
-  });
+  if (emailSent) {
+    if (!reportEmailId) return { status: "failed", error: "report_email_tracking_failed" };
+    const tracked = await dbUpdateCount("gh_visits",
+      `id=eq.${visit.id}&report_sent_at=eq.${encodeURIComponent(sentAt)}&report_status=eq.sent`,
+      { report_email_id: reportEmailId, report_bounced: false });
+    if (tracked !== 1) return { status: "failed", error: "report_email_tracking_failed" };
+  }
   await logEvent(visit.id, visit.booking_id, "cleaner", "report_sent", {
     version, email_sent: emailSent, photos: photos.length, auto: true,
   });
