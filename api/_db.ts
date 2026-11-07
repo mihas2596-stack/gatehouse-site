@@ -87,6 +87,14 @@ export async function dbSelectStrict<T = Record<string, unknown>>(
   return { ok: true, rows: r.data as T[] };
 }
 
+// Service-role RPC for transitions that must update a visit and its journal atomically.
+export async function dbRpc<T>(name: string, params: Record<string, unknown>): Promise<T | null> {
+  const cfg = dbConfig();
+  if (!cfg) return null;
+  const result = await rest(cfg, `rpc/${name}`, { method: "POST", body: JSON.stringify(params) });
+  return result.ok ? result.data as T : null;
+}
+
 export async function dbInsert<T = Record<string, unknown>>(
   table: string,
   row: Record<string, unknown>,

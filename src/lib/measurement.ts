@@ -34,10 +34,15 @@ export function campaignAttribution(): Record<string, string> {
 
 // These are GTM integration events, not proof that a GA4/Ads tag is configured.
 // Never pass names, email, phone, address, ZIP, notes, or quote values here.
-export function trackFunnel(event: FunnelEvent, details: EventDetails = {}): boolean {
+const emitted = new Set<string>();
+
+export function trackFunnel(event: FunnelEvent, details: EventDetails = {}, oncePer?: string): boolean {
   if (!analyticsAllowed()) return false;
+  const dedupeKey = oncePer ? `${event}:${oncePer}` : undefined;
+  if (dedupeKey && emitted.has(dedupeKey)) return false;
   const target = window as MeasurementWindow;
   target.dataLayer ??= [];
-  target.dataLayer.push({ event, ...details });
+  target.dataLayer.push({ event, ...landingCampaign, ...details });
+  if (dedupeKey) emitted.add(dedupeKey);
   return true;
 }
