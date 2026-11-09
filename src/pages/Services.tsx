@@ -107,6 +107,13 @@ const Services = () => {
         </div>
       </section>
 
+      <div className="container max-w-3xl">
+        <p className="text-center text-muted-foreground">
+          Prices above are for a Small home — up to 2 bedrooms and 1–2 full bathrooms. Your size tier is set by the
+          higher of your bedroom and full-bathroom counts: 3 of either is Medium, 4 or more of either is Large.
+        </p>
+      </div>
+
       {/* Comparison — factual differences only, prices from the same config
           the calculator and the server charge by. One data source renders
           the desktop table and the mobile cards, so they can never drift. */}
