@@ -611,11 +611,11 @@ const Quote = () => {
   const includedAddons = ADDONS_INCLUDED_IN[service];
   // Human-readable add-on summary for the price block, e.g. "Inside oven +$35 (every visit)".
   const priceBlockAddons = [
-    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +${fmt$(dispPrice(ADDONS.insideOven.price))}` : "",
-    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +${fmt$(dispPrice(ADDONS.insideFridge.price))}` : "",
-    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +${fmt$(dispPrice(ADDONS.insideCabinets.price))}` : "",
-    interiorWindows > 0 ? `${interiorWindows} interior windows +${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))}` : "",
-    pets ? `Pets +${fmt$(dispPrice(ADDONS.pets.price))}` : "",
+    insideOven && !includedAddons.includes("insideOven") ? `Inside oven +${fmt$(dispPrice(ADDONS.insideOven.price))} ${addonNote}` : "",
+    insideFridge && !includedAddons.includes("insideFridge") ? `Inside fridge +${fmt$(dispPrice(ADDONS.insideFridge.price))} ${addonNote}` : "",
+    insideCabinets && !includedAddons.includes("insideCabinets") ? `Inside cabinets +${fmt$(dispPrice(ADDONS.insideCabinets.price))} ${addonNote}` : "",
+    interiorWindows > 0 ? `${interiorWindows} interior windows +${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))} ${addonNote}` : "",
+    pets ? `Pets +${fmt$(dispPrice(ADDONS.pets.price))} ${addonNote}` : "",
   ].filter(Boolean).join(", ");
 
   return (
@@ -964,7 +964,7 @@ const Quote = () => {
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
               <details className="mt-6 rounded-lg border border-border bg-background p-4">
-                <summary className="cursor-pointer font-heading text-base font-bold">Planning your visit (optional)</summary>
+                <summary className="cursor-pointer font-heading text-base font-bold">More about your home (optional)</summary>
                 <div className="mt-3">
                   <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Approximate home size — if you know it</label>
                   <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>

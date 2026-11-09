@@ -1679,6 +1679,9 @@ const Owner = () => {
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">Proposing emails the client an alternative date — a proposal is not a confirmation.</p>
                     </details>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button variant="outline" size="sm" onClick={() => void previewClientView()}>Preview client view (view only)</Button>
+                    </div>
                   </div>
                 )}
               </section>

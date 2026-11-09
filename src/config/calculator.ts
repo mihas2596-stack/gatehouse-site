@@ -12,15 +12,15 @@ export type SizeBandKey = "notsure" | "under2500" | "2500" | "3000" | "3500" | "
 
 
 export const TIERS: { key: TierKey; label: string; rooms: string }[] = [
-  { key: "S", label: "Small home", rooms: "1–2 bedrooms, up to 2 full bathrooms" },
-  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms, fewer than 4 of either" },
+  { key: "S", label: "Small home", rooms: "1–2 bedrooms and 1–2 full bathrooms" },
+  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms (under 4 of either)" },
   { key: "L", label: "Large home", rooms: "4–5 bedrooms or 4+ full bathrooms" },
 ];
 
 export const TIER_ROOM_LABEL: Record<TierKey, string> = {
   S: "1–2 bed / 1–2 bath",
-  M: "3 bed / 2–3 bath",
-  L: "4–5 bed / 3+ bath",
+  M: "3 bed or 3 bath",
+  L: "4+ bed or 4+ bath",
 };
 
 /** Returns the tier for a home, or null when the home is larger than tier L. */

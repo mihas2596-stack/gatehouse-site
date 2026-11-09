@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Menu, X } from "lucide-react";
+import { Menu, Phone, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navLinks = [
@@ -92,12 +92,23 @@ const Header = () => {
               North Atlanta, GA
             </span>
           </Link>
-          <a
-            href="mailto:hello@gatehousehomecleaning.com"
-            className="flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-primary underline"
-          >
-            Need help?<span className="hidden sm:inline">&nbsp;hello@gatehousehomecleaning.com</span>
-          </a>
+          <div className="flex shrink-0 items-center gap-4">
+            <a
+              href="tel:+17705258599"
+              aria-label="Call (770) 525-8599"
+              className="flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-primary underline"
+            >
+              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="hidden sm:inline">(770) 525-8599</span>
+              <span className="sm:hidden">Call</span>
+            </a>
+            <a
+              href="mailto:hello@gatehousehomecleaning.com"
+              className="flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-primary underline"
+            >
+              Need help?<span className="hidden sm:inline">&nbsp;hello@gatehousehomecleaning.com</span>
+            </a>
+          </div>
         </div>
       </header>
     );

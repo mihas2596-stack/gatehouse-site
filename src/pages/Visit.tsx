@@ -100,7 +100,8 @@ type ReportData = {
   receipt_sent?: boolean;
   issue_reason?: string;
   // C10: "client" = the client's own words; "operator" (or missing) =
-  // an operator note — never render it as "You told us".
+  // an operator note — operator notes are NEVER shown to the client:
+  // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
   no_photo_zones?: string[];
@@ -310,14 +311,8 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       {rep.state === "issue_open" && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
           Issue reported — automatic payment is blocked for this visit.
-          {rep.issue_reason ? (
-            // C10: only the client's own words render as "You told us";
-            // an operator note renders under a neutral label.
-            rep.issue_source === "client" ? (
-              <> You told us: “{rep.issue_reason}”.</>
-            ) : (
-              <> Our note: “{rep.issue_reason}”.</>
-            )
+          {rep.issue_reason && rep.issue_source === "client" ? (
+            <> You told us: “{rep.issue_reason}”.</>
           ) : null}
         </p>
       )}

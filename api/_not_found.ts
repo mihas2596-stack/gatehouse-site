@@ -66,6 +66,8 @@ main{flex:1;display:flex;align-items:center;justify-content:center;text-align:ce
 h1{font-size:2rem;margin:0 0 1rem}
 main p{font-size:1.125rem;color:#6b6560;margin:0 0 1.5rem}
 main p a{margin:0 .75rem}
+main p.popular{font-size:1rem}
+main p.areas{font-size:.95rem;margin-bottom:0}
 footer{background:#f2c7a1;color:#3d2b1f}
 .footer-inner{max-width:72rem;margin:0 auto;padding:2rem 1rem}
 .footer-top{display:flex;flex-wrap:wrap;gap:1rem 3rem;justify-content:space-between}
@@ -96,6 +98,8 @@ footer{background:#f2c7a1;color:#3d2b1f}
 <h1>404 — Page not found</h1>
 <p>That page doesn&rsquo;t exist. Try the homepage or see your price.</p>
 <p><a href="/">Back to home</a><a href="/quote">See my price</a></p>
+<p class="popular">Popular pages: <a href="/services">Services</a> &middot; <a href="/whats-included">What&rsquo;s Included</a> &middot; <a href="/areas">Areas</a> &middot; <a href="/faq">FAQ</a> &middot; <a href="/contact">Contact</a></p>
+<p class="areas">We clean homes in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.</p>
 </div>
 </main>
 <footer>

@@ -32,7 +32,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How do I pause or cancel?",
     group: "Booking",
-    a: "Cancel or reschedule on your visit page or by email. Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. There's no long-term commitment, so you can pause the schedule any time.",
+    a: "Cancel or reschedule on your visit page or by email. Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. There's no long-term commitment, so you can pause or stop the recurring schedule any time — the $25 fee applies only to cancelling a single booked visit inside 48 hours, never to pausing the schedule.",
   },
   {
     q: "What if the cleaner can't make it?",
@@ -47,7 +47,18 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "Who will be cleaning my home?",
     group: "Booking",
-    a: "Cleans are done by independent cleaning professionals, matched to your home by Gatehouse. Before your visit, your visit page shows your cleaner's name (and a photo when they've agreed to share one). If your cleaner ever changes, we tell you before the visit.",
+    a: "Cleans are done by independent cleaning professionals, matched to your home by Gatehouse. We speak with every cleaner before matching them to your home. Before your visit, your visit page shows your cleaner's name (and a photo when they've agreed to share one). If your cleaner ever changes, we tell you before the visit.",
+  },
+  {
+    q: "How long does a visit take?",
+    group: "Booking",
+    a: "We book your visit in an arrival window — morning (7–11 AM), midday (11 AM–2 PM) or afternoon (2–5 PM), Atlanta time. Your cleaner arrives within that window and works through the full room-by-room checklist for your home. How long the clean itself takes depends on your home's size and the type of clean — a deep or move-in/out clean takes longer than a standard visit.",
+  },
+  {
+    q: "What isn't included in a visit?",
+    group: "Booking",
+    a: "Exterior windows, walls, laundry, dishes, pet waste and biohazards are not part of a visit. Inside the oven, inside the fridge, inside cabinets and interior windows are optional add-ons with fixed prices — except on deep and move-in/out cleans, where oven, fridge and cabinet interiors are already included.",
+    link: { href: "/whats-included", label: "See the full list" },
   },
   {
     q: "What happens with the photos in my report?",

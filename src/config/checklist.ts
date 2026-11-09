@@ -66,10 +66,10 @@ export const CHECKLIST = [
 ] as const;
 
 export const NOT_INCLUDED = [
-  "Exterior windows",
-  "Walls",
-  "Laundry",
-  "Dishes",
-  "Pet waste",
-  "Biohazards",
+  "Exterior windows — we clean interior windows only (available as an add-on).",
+  "Walls — we don't wash walls; we do wipe light switches and door handles.",
+  "Laundry — we don't wash, dry or fold laundry; we do make beds with the linens left on the bed.",
+  "Dishes — we don't wash dishes; we do wipe the sink and clean the countertops.",
+  "Pet waste — we don't handle pet waste or litter boxes.",
+  "Biohazards — we don't handle blood, mold or other hazardous materials.",
 ];

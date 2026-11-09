@@ -1084,6 +1084,27 @@ export default async function handler(req: Req, res: Res) {
     }
 
     // action === "issue"
+    // Best-effort Resend sender, shared by the first issue and a
+    // follow-up on an already-open issue (hoisted so the already-open
+    // branch below can notify the owner too).
+    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+    const firstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
+    const sendMail = async (payload: Record<string, unknown>) => {
+      if (!RESEND_API_KEY) return;
+      try {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15000),
+        });
+      } catch {
+        /* best-effort */
+      }
+    };
     // N03: "already open" is decided from DURABLE state (row +
     // journal), never from shared metadata alone. A previous attempt
     // that updated metadata but failed the journal/row writes must
@@ -1093,7 +1114,51 @@ export default async function handler(req: Req, res: Res) {
       ? issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open
       : meta["gh_issue_open"] === "1";
     if (durableIssueOpen) {
-      res.status(200).json({ ...view(), already: true });
+      // A follow-up on an already-open issue: the original issue stays
+      // exactly as recorded (gh_issue_reason untouched — the first
+      // report is the record), but the client's new words are journaled
+      // and emailed to the owner instead of being silently dropped.
+      // The old code returned already:true here and the message never
+      // reached anyone.
+      let followupRecorded = false;
+      if (reason.trim()) {
+        followupRecorded = row
+          ? await logEventStrict(row.id, payload.bid, "client", "issue_followup", {
+              reason: reason.slice(0, 200), room: room.slice(0, 60),
+            })
+          : true;
+        if (followupRecorded) {
+          await sendMail({
+            from: "Gatehouse site <info@gatehousehomecleaning.com>",
+            to: [ownerNotificationEmail()],
+            reply_to: "hello@gatehousehomecleaning.com",
+            subject: `Client added to an open issue — booking ${payload.bid}`,
+            text:
+              `A client added to an already-open issue from the photo report. The charge stays PAUSED and will not resume on its own — the client approves again to pay after the fix.\n\n` +
+              `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
+              `Room: ${room || "(not specified)"}\nWhat they added: ${reason || "(no description)"}\n` +
+              (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`),
+            ...(photoB64
+              ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
+              : {}),
+          });
+          if (customer.email) {
+            await sendMail({
+              from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: [customer.email],
+              reply_to: "hello@gatehousehomecleaning.com",
+              subject: "We added your note to your open issue",
+              text:
+                `Hi ${firstName},\n\nThanks — we've added your note to your open issue. The charge stays paused — nothing will be charged while we look into it, and it will not resume on its own.\n` +
+                `We'll reply within one business day.\n\n` +
+                (room ? `Room: ${room}\n` : "") +
+                (reason ? `What you added: ${reason}\n\n` : "\n") +
+                `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,
+            });
+          }
+        }
+      }
+      res.status(200).json({ ...view(), already: true, ...(followupRecorded ? { followup_recorded: true } : {}) });
       return;
     }
     // C26 / Terms §7: the "Report an issue" button on the report page
@@ -1191,24 +1256,7 @@ export default async function handler(req: Req, res: Res) {
     // client. The subject must not promise a pause when a payment was
     // already in flight: that charge may still complete, and the
     // issue then becomes a re-clean-or-refund case, not a block.
-    const RESEND_API_KEY = process.env["RESEND_API_KEY"];
     if (RESEND_API_KEY) {
-      const firstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
-      const sendMail = async (payload: Record<string, unknown>) => {
-        try {
-          await fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${RESEND_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(15000),
-          });
-        } catch {
-          /* best-effort */
-        }
-      };
       // Owner: full detail + the client's photo when one was attached.
       await sendMail({
         from: "Gatehouse site <info@gatehousehomecleaning.com>",

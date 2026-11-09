@@ -37,7 +37,7 @@ const howItWorks = [
   {
     n: "03",
     title: "Review your clean",
-    text: "Get your photos and checklist. Approve to pay, or report an issue.",
+    text: "Get your photos and checklist. Approve to pay, or report an issue — otherwise your card is charged automatically 24 hours after we send the report.",
   },
 ];
 
@@ -64,7 +64,7 @@ const homeFaqs = [
   },
   {
     q: "How do I cancel?",
-    a: "Free up to 48 hours before your visit; $25 inside 48 hours. See our access policy in the Terms. There's no long-term commitment: pause or stop the schedule any time.",
+    a: "Free up to 48 hours before your visit; $25 inside 48 hours. See our access policy in the Terms. There's no long-term commitment: pause or stop the recurring schedule any time. The $25 fee is only for cancelling a single visit inside 48 hours.",
   },
 ];
 
@@ -119,13 +119,13 @@ const Index = () => {
     <section className="hero-section border-b border-border/60 bg-background pt-10 pb-12 md:pt-14 md:pb-16">
       <div className="container max-w-[1320px]">
         <div className="grid grid-cols-1 items-center gap-8 md:grid-cols-[0.9fr_1.1fr] md:gap-10 lg:gap-14">
-          <div className="animate-fade-up text-center md:text-left">
+          <div className="text-center md:text-left">
             <p className="mb-4 text-base font-semibold tracking-wide text-primary">HOUSE CLEANING IN NORTH ATLANTA</p>
             <h1 className="hero-h1 font-heading text-[34px] font-extrabold leading-[1.18] text-sage-foreground md:text-[44px] lg:text-[60px]">
               A cleaner home.<br />More time for you.
             </h1>
             <p className="mt-5 max-w-lg mx-auto md:mx-0 text-lg leading-relaxed text-foreground">
-              One-time, recurring, and deep cleaning for your home. See your price online. Review your photo report after the clean.
+              One-time, recurring, and deep cleaning for homes in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online. Review your photo report after the clean.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
@@ -224,7 +224,7 @@ const Index = () => {
         <p className="mx-auto max-w-2xl text-center text-base leading-relaxed text-foreground">
           Every-other-week visits from {fmtPrice(disp(PRICES.recurring.S))} per visit. Your exact price depends on your home.
         </p>
-        <h2 className="mb-3 mt-6 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">What&apos;s included in each visit</h2>
+        <h2 className="mb-3 mt-6 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">What&apos;s included in a standard visit</h2>
         <div className="mx-auto max-w-2xl text-center sm:hidden">
           <p className="text-base leading-relaxed text-foreground">We clean your kitchen, bathrooms, bedrooms, and living areas.</p>
           <Link to="/whats-included" className="mt-3 inline-flex min-h-[44px] items-center font-semibold text-primary underline">
@@ -284,6 +284,7 @@ const Index = () => {
                 ))}
               </tbody>
             </table>
+            <p className="mt-3 text-sm text-foreground">Your size tier is set by the higher of your bedroom and full-bathroom counts: up to 2 of both is Small, 3 of either is Medium, 4 or more of either is Large.</p>
             <p className="mt-3 text-sm text-foreground">If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. Most homes can see an estimate online. Larger homes — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
           </div>
         </div>

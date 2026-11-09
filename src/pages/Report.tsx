@@ -35,7 +35,8 @@ type ReportData = {
   charge_timer_block_reason?: string | null;
   issue_reason?: string;
   // C10: "client" = the client's own words; "operator" (or missing) =
-  // an operator note — never render it as "You told us".
+  // an operator note — operator notes are NEVER shown to the client:
+  // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
   no_photo_zones?: string[];
@@ -47,6 +48,10 @@ type ReportData = {
   postpay_issue?: boolean;
   resolution?: { resolved_at: string; reclean_date: string } | null;
   error?: string;
+  // Follow-up on an already-open issue: the server records it and
+  // returns already=true; followup_recorded confirms it was saved.
+  already?: boolean;
+  followup_recorded?: boolean;
 };
 
 const fmtDeadline = (iso: string): string => {
@@ -63,6 +68,87 @@ const fmtDeadline = (iso: string): string => {
   });
 };
 
+// The "Report an issue" form, shared by the awaiting view (first issue)
+// and the open-issue view (follow-up on an already-open issue). Defined
+// at module level so typing never remounts it and loses focus. The two
+// uses differ only in the submit label and the helper text.
+type IssueFormProps = {
+  rooms: string[];
+  room: string;
+  onRoom: (v: string) => void;
+  text: string;
+  onText: (v: string) => void;
+  photoNote: string;
+  onPhotoPick: (file: File | null) => void;
+  busy: boolean;
+  submitLabel: string;
+  helper: string;
+  onSubmit: () => void;
+  onCancel: () => void;
+};
+
+function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhotoPick, busy, submitLabel, helper, onSubmit, onCancel }: IssueFormProps) {
+  return (
+    <div className="text-left">
+      <label htmlFor="issue-room" className="block font-semibold mb-2">
+        Which room?
+      </label>
+      <select
+        id="issue-room"
+        value={room}
+        onChange={(e) => onRoom(e.target.value)}
+        className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
+      >
+        <option value="">Choose a room…</option>
+        {rooms.map((r) => (
+          <option key={r} value={r}>{r}</option>
+        ))}
+        <option value="Kitchen">Kitchen</option>
+        <option value="Bathroom">Bathroom</option>
+        <option value="Bedroom">Bedroom</option>
+        <option value="Living areas">Living areas</option>
+        <option value="Other">Other / not listed</option>
+      </select>
+      <label htmlFor="issue-text" className="block font-semibold mb-2">
+        What isn&apos;t right?
+      </label>
+      <textarea
+        id="issue-text"
+        value={text}
+        onChange={(e) => onText(e.target.value)}
+        rows={4}
+        maxLength={500}
+        placeholder="Tell us what we missed — the automatic charge is blocked for this visit."
+        className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
+      />
+      <label htmlFor="issue-photo" className="block font-semibold mb-2">
+        Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
+      </label>
+      <input
+        id="issue-photo"
+        type="file"
+        accept="image/*"
+        onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
+        className="w-full text-sm mb-1"
+      />
+      {photoNote && (
+        <p className="text-xs text-muted-foreground mb-2">{photoNote}</p>
+      )}
+      <p className="text-xs text-muted-foreground mb-3">
+        {helper}
+      </p>
+      <div className="flex flex-col sm:flex-row gap-3">
+        <Button variant="hero" size="lg" disabled={busy || !text.trim()} onClick={onSubmit}>
+          {busy ? "Sending…" : submitLabel}
+        </Button>
+        <Button variant="outline" size="lg" disabled={busy} onClick={onCancel}>
+          Back
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 const Report = () => {
   const [searchParams] = useSearchParams();
   const bt = searchParams.get("bt") ?? "";
@@ -77,6 +163,10 @@ const Report = () => {
   const [needsCardChoice, setNeedsCardChoice] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
   const [paidIssueOpen, setPaidIssueOpen] = useState(false);
+  // Follow-up on an already-open issue (issue_open state): same form,
+  // separate toggle — the original issue stays open either way.
+  const [followupOpen, setFollowupOpen] = useState(false);
+  const [followupMsg, setFollowupMsg] = useState("");
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
   const [failedPhotos, setFailedPhotos] = useState<Set<string>>(new Set());
@@ -182,7 +272,29 @@ const Report = () => {
         setActionError("The window for reporting an issue after this visit has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
       } else if (j && j.state && j.state !== "invalid_link") {
         setData(j);
-        setIssueOpen(false);
+        if (j.already === true && j.followup_recorded === true) {
+          // A follow-up on an already-open issue was recorded by the
+          // server (journal + owner email) — confirm it and clear the
+          // fields instead of silently closing the form.
+          setFollowupMsg("Thanks — we've added this to your open issue and emailed the team. We'll reply within one business day.");
+          setFollowupOpen(false);
+          setIssueText("");
+          setIssueRoom("");
+          setIssuePhoto("");
+          setIssuePhotoNote("");
+        } else if (j.already === true) {
+          // Already open but the follow-up was NOT recorded — keep the
+          // form open and say so honestly instead of pretending it went
+          // through.
+          setActionError("We couldn't save your note — please email hello@gatehousehomecleaning.com and we'll add it to your issue.");
+        } else {
+          setIssueOpen(false);
+          setFollowupOpen(false);
+          setIssueText("");
+          setIssueRoom("");
+          setIssuePhoto("");
+          setIssuePhotoNote("");
+        }
         if (j.error === "report_changed") {
           setActionError("This report was updated since you opened it — please review the latest version before approving. No charge was made.");
         }
@@ -233,6 +345,85 @@ const Report = () => {
       </dl>
     </div>
   );
+
+  // The photo report itself (photos + checklist + photo note), shared by
+  // the awaiting view and the open-issue view: a client with an open
+  // issue must still be able to see what was cleaned.
+  const reportPhotos = (
+    <>
+      {data?.photo_items && data.photo_items.length > 0 ? (
+        <div className="mb-6">
+          <ReportContent
+            photoItems={data.photo_items}
+            checklist={data.checklist}
+            excludedRooms={data.no_photo_zones ?? []}
+            renderPhoto={(p) => (
+              <figure>
+                {failedPhotos.has(p.url) ? (
+                  <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
+                    <p className="text-xs text-muted-foreground">
+                      This photo couldn&apos;t load. Check your connection, or email
+                      hello@gatehousehomecleaning.com and we&apos;ll resend it.
+                    </p>
+                    <button
+                      type="button"
+                      className="text-xs underline"
+                      onClick={() => void load()}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
+                    <img
+                      src={p.url}
+                      alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                      loading="lazy"
+                      onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
+                      className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                    />
+                  </ZoomablePhoto>
+                )}
+                <figcaption className="text-xs text-muted-foreground mt-1">
+                  <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                  {p.note ? <> — {p.note}</> : null}
+                </figcaption>
+              </figure>
+            )}
+          />
+        </div>
+      ) : data?.photos && data.photos.length > 0 ? (
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          {data.photos.map((src, i) => (
+            <ZoomablePhoto key={i} src={src} alt={`Cleaning photo ${i + 1}`}>
+              <img
+                src={src}
+                alt={`Cleaning photo ${i + 1}`}
+                loading="lazy"
+                className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+              />
+            </ZoomablePhoto>
+          ))}
+        </div>
+      ) : (
+        <p className="text-foreground mb-6 text-center">
+          The photos for this visit are attached to the email we sent you.
+        </p>
+      )}
+      {hasAfterPhotos && !hasBeforePhotos && (
+        <p className="text-sm text-muted-foreground mb-6 text-left">After photos only — no before photos were taken for this visit.</p>
+      )}
+      <p className="text-xs text-muted-foreground mb-6 text-left">
+        About these photos: they exist only for your private report. We photograph rooms, not
+        people — faces, documents and screens are avoided. Only you and the Gatehouse team can
+        open this page. Photos are kept for 90 days, then deleted, and never published without
+        your separate written permission.
+      </p>
+    </>
+  );
+
+  // Rooms that appear in the report, for the issue-form room picker.
+  const reportRooms = Array.from(new Set((data?.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[]));
 
   return (
     <div className="page-shell min-h-[80vh] bg-background">
@@ -306,74 +497,7 @@ const Report = () => {
               Here&apos;s your home after the visit — check every room.
             </p>
             {summary}
-            {data.photo_items && data.photo_items.length > 0 ? (
-              <div className="mb-6">
-                <ReportContent
-                  photoItems={data.photo_items}
-                  checklist={data.checklist}
-                  excludedRooms={data.no_photo_zones ?? []}
-                  renderPhoto={(p) => (
-                    <figure>
-                      {failedPhotos.has(p.url) ? (
-                        <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
-                          <p className="text-xs text-muted-foreground">
-                            This photo couldn&apos;t load. Check your connection, or email
-                            hello@gatehousehomecleaning.com and we&apos;ll resend it.
-                          </p>
-                          <button
-                            type="button"
-                            className="text-xs underline"
-                            onClick={() => void load()}
-                          >
-                            Try again
-                          </button>
-                        </div>
-                      ) : (
-                        <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
-                          <img
-                            src={p.url}
-                            alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
-                            loading="lazy"
-                            onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
-                            className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
-                          />
-                        </ZoomablePhoto>
-                      )}
-                      <figcaption className="text-xs text-muted-foreground mt-1">
-                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
-                        {p.note ? <> — {p.note}</> : null}
-                      </figcaption>
-                    </figure>
-                  )}
-                />
-              </div>
-            ) : data.photos && data.photos.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                {data.photos.map((src, i) => (
-                  <ZoomablePhoto key={i} src={src} alt={`Cleaning photo ${i + 1}`}>
-                    <img
-                      src={src}
-                      alt={`Cleaning photo ${i + 1}`}
-                      loading="lazy"
-                      className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
-                    />
-                  </ZoomablePhoto>
-                ))}
-              </div>
-            ) : (
-              <p className="text-foreground mb-6 text-center">
-                The photos for this visit are attached to the email we sent you.
-              </p>
-            )}
-            {hasAfterPhotos && !hasBeforePhotos && (
-              <p className="text-sm text-muted-foreground mb-6 text-left">After photos only — no before photos were taken for this visit.</p>
-            )}
-            <p className="text-xs text-muted-foreground mb-6 text-left">
-              About these photos: they exist only for your private report. We photograph rooms, not
-              people — faces, documents and screens are avoided. Only you and the Gatehouse team can
-              open this page. Photos are kept for 90 days, then deleted, and never published without
-              your separate written permission.
-            </p>
+            {reportPhotos}
 
 {!reportEmpty && (<>
             {actionError && (
@@ -397,64 +521,20 @@ const Report = () => {
               <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>
               </>
             ) : (
-              <div className="text-left">
-                <label htmlFor="issue-room" className="block font-semibold mb-2">
-                  Which room?
-                </label>
-                <select
-                  id="issue-room"
-                  value={issueRoom}
-                  onChange={(e) => setIssueRoom(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-                >
-                  <option value="">Choose a room…</option>
-                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[])).map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                  <option value="Kitchen">Kitchen</option>
-                  <option value="Bathroom">Bathroom</option>
-                  <option value="Bedroom">Bedroom</option>
-                  <option value="Living areas">Living areas</option>
-                  <option value="Other">Other / not listed</option>
-                </select>
-                <label htmlFor="issue-text" className="block font-semibold mb-2">
-                  What isn&apos;t right?
-                </label>
-                <textarea
-                  id="issue-text"
-                  value={issueText}
-                  onChange={(e) => setIssueText(e.target.value)}
-                  rows={4}
-                  maxLength={500}
-                  placeholder="Tell us what we missed — the automatic charge is blocked for this visit."
-                  className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-                />
-                <label htmlFor="issue-photo" className="block font-semibold mb-2">
-                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
-                </label>
-                <input
-                  id="issue-photo"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
-                  className="w-full text-sm mb-1"
-                />
-                {issuePhotoNote && (
-                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
-                )}
-                <p className="text-xs text-muted-foreground mb-3">
-                  Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one
-                  business day.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("issue")}>
-                    {busy ? "Sending…" : "Send — block auto-charge"}
-                  </Button>
-                  <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(false)}>
-                    Back
-                  </Button>
-                </div>
-              </div>
+              <IssueForm
+                rooms={reportRooms}
+                room={issueRoom}
+                onRoom={setIssueRoom}
+                text={issueText}
+                onText={setIssueText}
+                photoNote={issuePhotoNote}
+                onPhotoPick={onPhotoPick}
+                busy={busy}
+                submitLabel="Send — block auto-charge"
+                helper="Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one business day."
+                onSubmit={() => void act("issue")}
+                onCancel={() => setIssueOpen(false)}
+              />
             )}
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
               <p className="text-sm text-foreground">
@@ -500,38 +580,81 @@ const Report = () => {
         )}
 
         {!loading && data?.state === "issue_open" && (
-          <div className="text-center">
-            <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Issue reported — automatic payment is blocked for this visit</h1>
-            <p className="text-lg text-foreground mb-6">
-              We&apos;ve blocked the automatic charge for this visit. We&apos;ll reply within one business day —
-              a confirmation is also in your email.
-              {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
-              {data.issue_reason ? (
-                // C10: only the client's own words render as "You told us";
-                // an operator note renders under a neutral label.
-                data.issue_source === "client" ? (
+          <div>
+            <div className="text-center">
+              <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+              <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Issue reported — automatic payment is blocked for this visit</h1>
+              <p className="text-lg text-foreground mb-6">
+                We&apos;ve blocked the automatic charge for this visit. We&apos;ll reply within one business day —
+                a confirmation is also in your email.
+                {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
+                {data.issue_reason && data.issue_source === "client" ? (
                   <> You told us: “{data.issue_reason}”</>
-                ) : (
-                  <> Our note: “{data.issue_reason}”</>
-                )
-              ) : null}
-            </p>
-            {actionError && (
-              <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
-            )}
-            {needsCardChoice && (
-              <p className="text-sm mb-4 text-center">
-                <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+                ) : null}
               </p>
-            )}
-            <p className="text-base text-foreground mb-6">
-              If the fix looks good, tap below to approve the report — that charges your saved
-              card{data.amount ? <> {data.amount}</> : null} right away.
-            </p>
-            <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-              {busy ? "Processing payment…" : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
-            </Button>
+              {summary}
+              {actionError && (
+                <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
+              )}
+              {needsCardChoice && (
+                <p className="text-sm mb-4 text-center">
+                  <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+                </p>
+              )}
+              {data.resolution?.reclean_date ? (
+                <p className="text-base text-foreground mb-6">
+                  A re-clean is agreed for <strong>{data.resolution.reclean_date}</strong>. When you&apos;re happy
+                  with the result, tap below to approve the report — that charges your saved
+                  card{data.amount ? <> {data.amount}</> : null} right away.
+                </p>
+              ) : data.resolution ? (
+                <p className="text-base text-foreground mb-6">
+                  We&apos;ve replied to your issue. When you&apos;re happy with the result, tap below to approve
+                  the report — that charges your saved card{data.amount ? <> {data.amount}</> : null} right away.
+                  Nothing will be charged until you approve — the automatic charge stays blocked for this visit.
+                </p>
+              ) : (
+                <p className="text-base text-foreground mb-6">
+                  We&apos;re looking into it and will reply within one business day. Nothing will be charged
+                  while your issue is open — the automatic charge is blocked for this visit and will
+                  never run on its own. When you&apos;re satisfied, tap below to approve the report — that
+                  charges your saved card{data.amount ? <> {data.amount}</> : null} right away.
+                </p>
+              )}
+              <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
+                {busy ? "Processing payment…" : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
+              </Button>
+              <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>
+            </div>
+            <div className="mt-8 text-center">
+              {followupMsg && (
+                <p className="text-sm text-foreground mb-4" role="status">{followupMsg}</p>
+              )}
+              {!followupOpen ? (
+                <Button variant="outline" size="lg" disabled={busy} onClick={() => setFollowupOpen(true)}>
+                  Add to your open issue
+                </Button>
+              ) : (
+                <IssueForm
+                  rooms={reportRooms}
+                  room={issueRoom}
+                  onRoom={setIssueRoom}
+                  text={issueText}
+                  onText={setIssueText}
+                  photoNote={issuePhotoNote}
+                  onPhotoPick={onPhotoPick}
+                  busy={busy}
+                  submitLabel="Send"
+                  helper="This adds to your open issue — the charge stays blocked, and we'll reply within one business day."
+                  onSubmit={() => void act("issue")}
+                  onCancel={() => setFollowupOpen(false)}
+                />
+              )}
+            </div>
+            <div className="mt-10">
+              <h2 className="font-heading text-2xl font-bold mb-4 text-center">Your report</h2>
+              {reportPhotos}
+            </div>
           </div>
         )}
 

@@ -34,8 +34,8 @@ const mainService: ServiceCard = {
 const alsoAvailable: ServiceCard[] = [
   {
     icon: Sparkles, title: "Deep clean", link: "/quote?service=deep", serviceKey: "deep",
-    desc: "A more detailed reset, including appliance and cabinet interiors. Recommended when your home needs more than regular upkeep.",
-    includes: ["All standard-clean checklist items", "Detailed cleaning for a fresh start", "Inside oven, fridge and cabinets", "See the full checklist before requesting a visit"],
+    desc: "A detailed reset for a lived-in home — the full standard checklist, plus inside the oven, fridge and cabinets. Choose it when your home needs more than regular upkeep, or as your first visit after 3 months without a professional clean.",
+    includes: ["All standard-clean checklist items", "Inside oven, fridge and cabinets", "Detailed dusting and scrubbing in kitchens and bathrooms"],
   },
   {
     icon: Sparkles,
@@ -50,8 +50,8 @@ const alsoAvailable: ServiceCard[] = [
     title: "Move-in / Move-out",
     link: "/quote?service=moveinout",
     serviceKey: "moveinout",
-    desc: "A thorough clean for an empty home, including appliance interiors and cabinets.",
-    includes: ["Complete deep clean of all rooms", "Inside all cabinets & drawers", "All appliances cleaned inside/out", "Interior windows available as an add-on"],
+    desc: "A thorough clean for an empty home — every cabinet, drawer and appliance cleaned inside and out, so the home is ready to move into or hand over.",
+    includes: ["Complete deep clean of all rooms", "Inside every cabinet & drawer", "Every appliance cleaned inside and out", "Interior windows available as an add-on"],
   },
 ];
 
@@ -114,7 +114,7 @@ const Services = () => {
         <div className="container max-w-4xl">
           <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
           <p className="text-center text-muted-foreground mb-8">
-            All three follow the same published room-by-room checklist. The difference is the interiors — and when each one applies.
+            All three follow the same published room-by-room checklist. The difference is the interiors — and whether the home is lived-in or empty: a deep clean resets a lived-in home, a move-in/out clean prepares an empty one.
           </p>
           <div className="hidden md:block overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
@@ -170,16 +170,17 @@ type ComparisonRow = { label: string; standard: React.ReactNode; deep: React.Rea
 
 const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
   { label: "Best for", standard: "Regular upkeep of a lived-in home", deep: "A reset — or no professional clean in the last 3 months", move: "An empty home, moving in or out" },
+  { label: "Home state", standard: "Lived-in home", deep: "Lived-in home", move: "Empty home — nothing left inside" },
   { label: "Room-by-room checklist", standard: "Included", deep: "Included", move: "Included" },
-  { label: "Inside oven", standard: <>Add-on +${disp(ADDONS.insideOven.price)}</>, deep: "Included", move: "Included" },
-  { label: "Inside fridge", standard: <>Add-on +${disp(ADDONS.insideFridge.price)}</>, deep: "Included", move: "Included" },
-  { label: "Inside cabinets & drawers", standard: <>Add-on +${disp(ADDONS.insideCabinets.price)}</>, deep: "Included", move: "Included" },
-  { label: "Interior windows", standard: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</>, deep: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</>, move: <>Add-on +${disp(ADDONS.interiorWindow.price)} each</> },
+  { label: "Inside oven", standard: <>Add-on +${disp(ADDONS.insideOven.price)} per visit</>, deep: "Included", move: "Included" },
+  { label: "Inside fridge", standard: <>Add-on +${disp(ADDONS.insideFridge.price)} per visit</>, deep: "Included", move: "Included" },
+  { label: "Inside cabinets & drawers", standard: <>Add-on +${disp(ADDONS.insideCabinets.price)} per visit</>, deep: "Included", move: "Included — every cabinet & drawer" },
+  { label: "Interior windows", standard: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</>, deep: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</>, move: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</> },
   {
     label: "Price — small / medium / large",
     standard: <>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</>,
-    deep: <>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))}</>,
-    move: <>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))}</>,
+    deep: <>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))} per visit</>,
+    move: <>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))} per visit</>,
   },
 ];
 

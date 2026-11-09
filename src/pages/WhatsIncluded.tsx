@@ -7,11 +7,11 @@ import { ADDONS, globalTestCutActive, scaleTestPrice } from "@/config/calculator
 import { useState } from "react";
 
 const addons = [
-  ADDONS.insideOven,
-  ADDONS.insideFridge,
-  ADDONS.interiorWindow,
-  ADDONS.insideCabinets,
-  ADDONS.pets,
+  { ...ADDONS.insideOven, unit: "per visit" },
+  { ...ADDONS.insideFridge, unit: "per visit" },
+  { ...ADDONS.interiorWindow, unit: "per window" },
+  { ...ADDONS.insideCabinets, unit: "per visit" },
+  { ...ADDONS.pets, unit: "per visit" },
 ];
 
 const WhatsIncluded = () => {
@@ -38,10 +38,10 @@ const WhatsIncluded = () => {
       <div className="container max-w-3xl text-center">
         <p className="font-script text-xl text-golden mb-2">The full list</p>
         <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-3">
-          What's Included in Every Visit
+          What's Included in a Standard Visit
         </h1>
         <p className="text-foreground text-lg">
-          Everything in the room lists below is included in every visit. Add-ons are listed separately with their prices. Deep and move-in/out cleans already include oven, fridge and cabinet interiors; these are not charged twice.
+          Everything in the room lists below is included in a standard visit. Add-ons are listed separately with their prices. Deep and move-in/out cleans already include oven, fridge and cabinet interiors; these are not charged twice.
         </p>
       </div>
     </section>
@@ -106,10 +106,10 @@ const WhatsIncluded = () => {
           <div id="addons" className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Add-ons (fixed price)</h2>
             <ul className="space-y-2">
-              {addons.map(({ label, price }) => (
+              {addons.map(({ label, price, unit }) => (
                 <li key={label} className="flex items-center justify-between gap-4 text-base text-foreground">
                   <span>{label}</span>
-                  <span className="font-semibold text-primary">+${disp(price)}</span>
+                  <span className="font-semibold text-primary">+${disp(price)} {unit}</span>
                 </li>
               ))}
             </ul>

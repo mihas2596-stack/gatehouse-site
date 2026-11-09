@@ -114,9 +114,9 @@ describe("quote steps", () => {
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
   });
 
-  it("planning lives on step 2, not step 1, and step changes land focus on the new heading", () => {
+  it("home details live on step 2, not step 1, and step changes land focus on the new heading", () => {
     openQuote();
-    expect(screen.queryByText("Planning your visit (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
     expect(screen.getByText(/Fixed when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
@@ -127,13 +127,13 @@ describe("quote steps", () => {
     // the testable half of the scroll fix (the effect scrolls the
     // heading into view, then focuses it).
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your visit" }));
-    expect(screen.getByText("Planning your visit (optional)")).toBeInTheDocument();
+    expect(screen.getByText("More about your home (optional)")).toBeInTheDocument();
     expect(screen.getByLabelText("Approximate home size — if you know it")).toBeInTheDocument();
     expect(screen.getByText("Any extra areas to clean?")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
     expect(screen.getByRole("heading", { name: "A clear price for your home" })).toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "A clear price for your home" }));
-    expect(screen.queryByText("Planning your visit (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
   });
 
   it("step 3 payment block answers why the card, without the wall of text", () => {

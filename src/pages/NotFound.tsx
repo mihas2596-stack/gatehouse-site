@@ -25,6 +25,17 @@ const NotFound = () => {
           <Link to="/" className="text-primary underline">Back to home</Link>
           <Link to="/quote" className="text-primary underline">See my price</Link>
         </div>
+        <p className="mt-6 text-base text-muted-foreground">
+          Popular pages:{" "}
+          <Link to="/services" className="text-primary underline">Services</Link>{" · "}
+          <Link to="/whats-included" className="text-primary underline">What&rsquo;s Included</Link>{" · "}
+          <Link to="/areas" className="text-primary underline">Areas</Link>{" · "}
+          <Link to="/faq" className="text-primary underline">FAQ</Link>{" · "}
+          <Link to="/contact" className="text-primary underline">Contact</Link>
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          We clean homes in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.
+        </p>
       </div>
     </div>
   );

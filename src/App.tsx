@@ -7,19 +7,25 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Layout from "./components/Layout";
 import ScrollToTop from "./components/ScrollToTop";
 import Index from "./pages/Index";
+// Public pages are statically imported, not lazy: every one of them is
+// prerendered, and a lazy route suspends during hydration — React then
+// replaces the prerendered page with the blank Suspense fallback until
+// the chunk loads, which is the white screen on first load. Only the
+// account/cabinet pages (owner, cleaner, report, visit, save-card) and
+// the 404 stay lazy; they are never prerendered.
+import Services from "./pages/Services";
+import About from "./pages/About";
+import Areas from "./pages/Areas";
+import Contact from "./pages/Contact";
+import Quote from "./pages/Quote";
+import WhatsIncluded from "./pages/WhatsIncluded";
+import FAQ from "./pages/FAQ";
+import CityPage from "./pages/CityPage";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
+import ThankYou from "./pages/ThankYou";
 
-const Services = lazy(() => import("./pages/Services"));
-const About = lazy(() => import("./pages/About"));
-const Areas = lazy(() => import("./pages/Areas"));
-const Contact = lazy(() => import("./pages/Contact"));
 const NotFound = lazy(() => import("./pages/NotFound"));
-const Quote = lazy(() => import("./pages/Quote"));
-const WhatsIncluded = lazy(() => import("./pages/WhatsIncluded"));
-const FAQ = lazy(() => import("./pages/FAQ"));
-const CityPage = lazy(() => import("./pages/CityPage"));
-const Privacy = lazy(() => import("./pages/Privacy"));
-const Terms = lazy(() => import("./pages/Terms"));
-const ThankYou = lazy(() => import("./pages/ThankYou"));
 const SaveCard = lazy(() => import("./pages/SaveCard"));
 const Cleaner = lazy(() => import("./pages/Cleaner"));
 const Owner = lazy(() => import("./pages/Owner"));
