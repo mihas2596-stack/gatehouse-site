@@ -88,7 +88,7 @@ const Services = () => {
       {testPricing && (
         <div className="container">
           <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
-            Test booking: prices on this page are reduced for a payment test. During this test, every home size is temporarily priced the same.
+            Test booking: prices on this page are reduced for a payment test.
           </p>
         </div>
       )}

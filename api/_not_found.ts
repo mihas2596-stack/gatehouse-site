@@ -21,6 +21,12 @@
 // merge host, see its header — answers it for the catch-all rewrite
 // (`/api/owner-auth?notfound=1`) before any origin/auth check.
 // Behavior is unchanged.
+//
+// Header/footer note (09.11.2026): the page carries the site header and
+// footer as static inline HTML (same logo, nav, phone and footer links
+// as src/components/Header.tsx and src/components/Footer.tsx), so a
+// visitor landing on a bad URL still sees the site chrome. Still no
+// JavaScript and no external assets.
 type Req = {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
@@ -34,6 +40,8 @@ type Res = {
   end(body?: string): void;
 };
 
+const YEAR = new Date().getFullYear();
+
 const HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -41,14 +49,82 @@ const HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Page Not Found | Gatehouse</title>
-<style>body{font-family:system-ui,-apple-system,sans-serif;background:#faf7f2;color:#2d2a26;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center}main{max-width:34rem;padding:2rem}h1{font-size:2rem;margin:0 0 1rem}p{font-size:1.125rem;color:#6b6560;margin:0 0 1.5rem}a{color:#3d6b4f;margin:0 .75rem}</style>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#faf7f2;color:#2d2a26;margin:0;display:flex;flex-direction:column;min-height:100vh}
+a{color:#3d6b4f}
+header{background:#faf7f2;border-bottom:1px solid rgba(0,0,0,.06)}
+.header-inner{max-width:72rem;margin:0 auto;padding:.75rem 1rem;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1.5rem}
+.logo{color:#6b3a1f;text-decoration:none;line-height:1.1}
+.logo b{display:block;font-size:1.25rem}
+.logo span{font-size:.6rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase}
+header nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem}
+header nav a{color:#2d2a26;text-decoration:none;font-size:.95rem;font-weight:600}
+header nav a:hover{color:#3d6b4f}
+.cta{margin-left:auto;background:#9d5830;color:#fff;text-decoration:none;font-weight:600;font-size:.95rem;padding:.5rem 1rem;border-radius:.5rem;white-space:nowrap}
+main{flex:1;display:flex;align-items:center;justify-content:center;text-align:center}
+.main-inner{max-width:34rem;padding:2rem}
+h1{font-size:2rem;margin:0 0 1rem}
+main p{font-size:1.125rem;color:#6b6560;margin:0 0 1.5rem}
+main p a{margin:0 .75rem}
+footer{background:#f2c7a1;color:#3d2b1f}
+.footer-inner{max-width:72rem;margin:0 auto;padding:2rem 1rem}
+.footer-top{display:flex;flex-wrap:wrap;gap:1rem 3rem;justify-content:space-between}
+.footer-brand b{color:#6b3a1f;font-size:1.5rem;display:block;line-height:1.1}
+.footer-brand span{font-size:.65rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:#6b3a1f}
+.footer-contact{font-size:.95rem;line-height:1.8}
+.footer-contact a{color:#3d2b1f}
+.footer-bottom{border-top:1px solid rgba(61,43,31,.2);margin-top:1.5rem;padding-top:1rem;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;justify-content:space-between;font-size:.875rem}
+.footer-bottom nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem}
+.footer-bottom nav a{color:#3d2b1f;text-decoration:none}
+</style>
 </head>
 <body>
+<header>
+<div class="header-inner">
+<a class="logo" href="/" aria-label="Gatehouse Home Cleaning — home"><b>Gatehouse Home Cleaning</b><span>North Atlanta, GA</span></a>
+<nav aria-label="Main navigation">
+<a href="/services">Services</a>
+<a href="/whats-included">What&rsquo;s Included</a>
+<a href="/areas">Areas</a>
+<a href="/faq">FAQ</a>
+</nav>
+<a class="cta" href="/quote">See My Price</a>
+</div>
+</header>
 <main>
+<div class="main-inner">
 <h1>404 — Page not found</h1>
 <p>That page doesn&rsquo;t exist. Try the homepage or see your price.</p>
 <p><a href="/">Back to home</a><a href="/quote">See my price</a></p>
+</div>
 </main>
+<footer>
+<div class="footer-inner">
+<div class="footer-top">
+<div class="footer-brand">
+<b>Gatehouse Home Cleaning</b>
+<span>North Atlanta, GA</span>
+<p>House cleaning with a clear price and a private photo report. One-time and every-other-week visits, confirmed with you.</p>
+</div>
+<div class="footer-contact">
+<a href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a><br>
+<a href="tel:+17705258599">(770) 525-8599</a><br>
+Sugar Hill &middot; Suwanee &middot; Buford &middot; Duluth &middot; Johns Creek &middot; Alpharetta &middot; Roswell
+</div>
+</div>
+<div class="footer-bottom">
+<p>&copy; ${YEAR} Gatehouse Home Cleaning. All rights reserved.</p>
+<nav aria-label="Footer navigation">
+<a href="/about">About Gatehouse</a>
+<a href="/contact">Contact</a>
+<a href="/whats-included">What&rsquo;s Included</a>
+<a href="/faq">FAQ</a>
+<a href="/privacy">Privacy Policy</a>
+<a href="/terms">Terms of Service</a>
+</nav>
+</div>
+</div>
+</footer>
 </body>
 </html>
 `;

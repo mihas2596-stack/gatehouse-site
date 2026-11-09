@@ -37,6 +37,28 @@ describe("api/not-found (via api/_not_found)", () => {
     expect(res.body).not.toContain("<script");
   });
 
+  it("GET page carries the site header and footer (09.11 live finding)", async () => {
+    const res = mockRes();
+    await notFoundHandler({ method: "GET", headers: {}, query: {} }, res);
+    // Header: logo + nav + See My Price, matching Header.tsx.
+    expect(res.body).toContain("<header>");
+    expect(res.body).toContain("Gatehouse Home Cleaning");
+    expect(res.body).toContain('href="/services"');
+    expect(res.body).toContain('href="/whats-included"');
+    expect(res.body).toContain('href="/areas"');
+    expect(res.body).toContain('href="/faq"');
+    expect(res.body).toContain("See My Price");
+    // Footer: phone, email, cities and footer nav, matching Footer.tsx.
+    expect(res.body).toContain("<footer>");
+    expect(res.body).toContain('href="tel:+17705258599"');
+    expect(res.body).toContain("(770) 525-8599");
+    expect(res.body).toContain("hello@gatehousehomecleaning.com");
+    expect(res.body).toContain("Sugar Hill");
+    expect(res.body).toContain('href="/terms"');
+    expect(res.body).toContain('href="/privacy"');
+    expect(res.body).toContain("Gatehouse Home Cleaning. All rights reserved.");
+  });
+
   it("HEAD returns 404 headers with no body", async () => {
     const res = mockRes();
     await notFoundHandler({ method: "HEAD", headers: {}, query: {} }, res);

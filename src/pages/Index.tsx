@@ -90,7 +90,7 @@ const Index = () => {
         Self-expires with the window; no deploy needed to remove it. */}
     {globalTestCutActive() && (
       <p className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm">
-        Test pricing is active. The prices shown are reduced for payment testing. During this test, every home size is temporarily priced the same.
+        Test pricing is active. The prices shown are reduced for payment testing.
       </p>
     )}
     <SEO
