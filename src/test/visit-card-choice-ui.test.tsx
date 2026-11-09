@@ -26,6 +26,19 @@ beforeEach(() => {
         photo_items: [], checklist: null,
       }) };
     }
+    if (url === "/api/report" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      expect(body.action).toBe("approve");
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({
+          ok: true, state: "awaiting", amount: "$1.50",
+          photo_items: [], checklist: null, publication_id: "pub-1",
+          error: "card_confirmation_required",
+        }),
+      };
+    }
     if (!String(url).startsWith("/api/visit?")) throw new Error("Unexpected request");
     return { ok: true, json: async () => ({
       ok: true, state: visitStateOverride ?? (hasCard ? "awaiting_confirmation" : "card_needed"),
@@ -75,5 +88,17 @@ describe("H1 (visit): an unknown payment outcome is never shown as approved", ()
     // Change card is offered both next to the card label and in the
     // retry block.
     expect(screen.getAllByRole("link", { name: "Change card" })).toHaveLength(2);
+  });
+});
+
+describe("S13 (visit): Approve with an ambiguous card leads to the card-choice flow", () => {
+  it("shows the card-choice message and a link to /save-card in the report section", async () => {
+    visitStateOverride = "report_sent";
+    reportStateOverride = "awaiting";
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Approve & pay $1.50" }));
+    expect(await screen.findByText(/We found more than one card on file/)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Choose a card for this visit" });
+    expect(link.getAttribute("href")).toBe("/save-card?bt=test-booking");
   });
 });

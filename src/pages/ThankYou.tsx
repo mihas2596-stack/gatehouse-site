@@ -20,6 +20,9 @@ type SubmissionState = {
   bt?: string;
   recap?: { price?: string; email?: string; date?: string; window?: string; entry?: string; status?: string; response?: string };
   plan?: Plan;
+  // N23: the server recalculated the total after the quote tab priced
+  // it — the summary below already shows the server totals.
+  serverPriceChanged?: boolean;
 };
 
 type CardStatusBooking = {
@@ -229,6 +232,13 @@ const ThankYou = () => {
 
   const summaryCard = (
     <div className="mb-8 rounded-xl border border-border bg-card p-6 text-left">
+      {submission.serverPriceChanged && (
+        <p role="status" className="mb-4 rounded-lg bg-peach/50 p-4 text-base leading-relaxed">
+          <strong>Updated price:</strong> the total shown when you booked was recalculated on our
+          server from your home details — the amounts below are the verified ones, and the same
+          amounts will be charged after your cleaning. Nothing is charged today.
+        </p>
+      )}
       <dl className="space-y-3 text-base">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4">
           <dt className="font-semibold">Service</dt>

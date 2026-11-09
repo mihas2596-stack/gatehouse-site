@@ -18,4 +18,12 @@ describe("promised work reaches the cleaner", () => {
     expect(rooms.filter((r) => r.name.startsWith("Bathroom"))).toHaveLength(2);
     expect(rooms.find((r) => r.name === "Half bathroom")?.items.some((i) => /Tub|Shower/.test(i.label))).toBe(false);
   });
+  it("B7: one-letter extra zones never become rooms", () => {
+    const rooms = buildWorkRooms({ bedrooms: "1", fullBaths: "1", deep: false, extraZones: "H, Den, x, Home office" });
+    const names = rooms.map((r) => r.name);
+    expect(names).toContain("Den");
+    expect(names).toContain("Home office");
+    expect(names).not.toContain("H");
+    expect(names).not.toContain("x");
+  });
 });

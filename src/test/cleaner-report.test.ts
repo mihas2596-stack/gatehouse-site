@@ -52,4 +52,19 @@ describe("sanitizeChecklist", () => {
     expect(sanitizeChecklist({ rooms: [] })).toBeNull();
     expect(sanitizeChecklist({ rooms: [{ name: "Kitchen", items: "nope" }] })).toBeNull();
   });
+
+  it("B7: rejects one-letter rooms — a split-string corruption must never be stored", () => {
+    const oneLetter = { rooms: [{ name: "H", items: [{ label: "Cleaned as agreed", done: false }] }] };
+    expect(sanitizeChecklist(oneLetter)).toBeNull();
+    const letters = {
+      rooms: [
+        { name: "Kitchen", items: [{ label: "Counters wiped", done: false }] },
+        { name: "o", items: [{ label: "Cleaned as agreed", done: false }] },
+      ],
+    };
+    expect(sanitizeChecklist(letters)).toBeNull();
+    expect(sanitizeChecklist({ rooms: [{ name: " ", items: [{ label: "x", done: false }] }] })).toBeNull();
+    const ok = sanitizeChecklist({ rooms: [{ name: "  Den  ", items: [{ label: "x", done: false }] }] });
+    expect(ok?.rooms[0].name).toBe("Den");
+  });
 });

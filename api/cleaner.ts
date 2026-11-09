@@ -12,6 +12,7 @@
 // signed upload URL (bytes never pass through this function).
 
 import { reportReplyAddress } from "./_report_reply.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 import {
   dbConfigured,
   dbSelect,
@@ -87,7 +88,6 @@ type PhotoRow = {
   created_at: string;
 };
 
-const OWNER_EMAIL = "nikolajmihasenok@gmail.com";
 const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const EDITABLE = new Set(["none", "draft", "returned"]);
 
@@ -100,13 +100,17 @@ export function sanitizeChecklist(raw: unknown): Checklist | null {
   if (!Array.isArray(c.rooms) || c.rooms.length === 0 || c.rooms.length > 20) return null;
   const rooms: ChecklistRoom[] = [];
   for (const r of c.rooms as Array<Record<string, unknown>>) {
-    if (!r || typeof r.name !== "string" || !Array.isArray(r.items) || r.items.length > 40) return null;
+    // B7: a one-letter "room" is never a real room — it is a split-string
+    // corruption ("Home off…" → "H","o","m","e",…) that blocks the cleaner
+    // from ever submitting the report (every room needs an after photo
+    // or a skip reason). Reject the whole payload, like any malformed one.
+    if (!r || typeof r.name !== "string" || r.name.trim().length < 2 || !Array.isArray(r.items) || r.items.length > 40) return null;
     const items: ChecklistItem[] = [];
     for (const it of r.items as Array<Record<string, unknown>>) {
       if (!it || typeof it.label !== "string") return null;
       items.push({ label: it.label.slice(0, 120), done: it.done === true });
     }
-    const room: ChecklistRoom = { name: r.name.slice(0, 60), items };
+    const room: ChecklistRoom = { name: r.name.trim().slice(0, 60), items };
     if (typeof r.skip_reason === "string" && r.skip_reason.trim()) {
       room.skip_reason = r.skip_reason.slice(0, 200);
     }
@@ -120,10 +124,10 @@ export function sanitizeChecklist(raw: unknown): Checklist | null {
 
 async function resolveVisit(
   token: string,
-): Promise<{ visit: VisitRow } | { error: string; status: number }> {
+): Promise<{ visit: VisitRow; restricted?: boolean } | { error: string; status: number }> {
   if (!dbConfigured()) return { error: "db_not_configured", status: 501 };
   if (!token || token.length < 20 || token.length > 200) {
-    return { error: "invalid_link", status: 404 };
+    return { error: "invalid_link", status: 200 };
   }
   // v2 deterministic tokens: strict verification — structure, HMAC under
   // the server secret, issuance recorded on the row, and the stored hash
@@ -138,36 +142,42 @@ async function resolveVisit(
       verified = verifyCleanerLinkV2(secret, token);
       if (verified) break;
     }
-    if (!verified) return { error: "invalid_link", status: 404 };
+    if (!verified) return { error: "invalid_link", status: 200 };
     const rows = await dbSelect<VisitRow>(
       "gh_visits",
       `id=eq.${verified.visitId}&limit=1`,
     );
     const visit = rows[0];
-    if (!visit) return { error: "invalid_link", status: 404 };
+    if (!visit) return { error: "invalid_link", status: 200 };
     if (
       visit.cleaner_link_version !== "v2" ||
       visit.cleaner_link_issuance !== verified.issuanceId ||
       !visit.cleaner_token_hash ||
       !tokenHashEquals(hashToken(token), visit.cleaner_token_hash)
     ) {
-      return { error: "invalid_link", status: 404 };
+      return { error: "invalid_link", status: 200 };
     }
     if (visit.cleaner_token_expires && Date.parse(visit.cleaner_token_expires) < Date.now()) {
       return { error: "link_expired", status: 410 };
     }
-    return { visit };
+    // C12: a paid or cancelled visit no longer needs a working
+    // cleaner link — but the link lives until expiry, so a leaked or
+    // forwarded token would still show the client's address. The
+    // token still resolves (the owner preview and the cleaner's own
+    // history keep working), but the view is a summary only: no
+    // address, no entry, no phone, no photos (see view()).
+    return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" };
   }
   const rows = await dbSelect<VisitRow>(
     "gh_visits",
     `cleaner_token_hash=eq.${hashToken(token)}&limit=1`,
   );
   const visit = rows[0];
-  if (!visit) return { error: "invalid_link", status: 404 };
+  if (!visit) return { error: "invalid_link", status: 200 };
   if (visit.cleaner_token_expires && Date.parse(visit.cleaner_token_expires) < Date.now()) {
     return { error: "link_expired", status: 410 };
   }
-  return { visit };
+  return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" };
 }
 
 /** Rooms that still block submission: no after-photo and no skip reason. */
@@ -202,7 +212,40 @@ async function visitConfirmed(visitId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-async function view(visit: VisitRow) {
+async function view(visit: VisitRow, restricted = false) {
+  const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
+  if (restricted) {
+    // C12: paid/cancelled visit — summary only. No address, no entry,
+    // no phone, no client notes, no photos, no checklist: a forwarded
+    // link must not hand a stranger the client's home details after
+    // the job is done. The client report itself is untouched — it
+    // lives behind the client's own /report link, not this one.
+    return {
+      ok: true,
+      restricted: true,
+      confirmed: await visitConfirmed(visit.id),
+      visit: {
+        service: visit.service,
+        date: visit.visit_date,
+        window: visit.window,
+        address: null,
+        access_notes: null,
+        entry_choice: { method: null, detail: null, notes: null },
+        entry: null,
+        client_notes: null,
+        no_photo_zones: null,
+        client_first_name: firstName,
+        client_phone: null,
+      },
+      checklist: { rooms: [] },
+      photos: [],
+      report_status: visit.report_status,
+      report_bounced: visit.report_bounced ?? false,
+      cancelled: visit.status === "cancelled",
+      editable: false,
+      owner_note: null,
+    };
+  }
   const { loadClientPhone } = await import("./_client_contact.js");
   const photos = await photosOf(visit.id);
   const withUrls = await Promise.all(
@@ -232,7 +275,6 @@ async function view(visit: VisitRow) {
     "gh_events",
     `visit_id=eq.${visit.id}&event=in.(visit_cancelled,report_submitted)&order=created_at.desc&limit=20`,
   );
-  const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
   return {
     ok: true,
     confirmed: await visitConfirmed(visit.id),
@@ -503,7 +545,7 @@ async function sendOwnerEmail(subject: string, text: string): Promise<boolean> {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: FROM_EMAIL, to: [OWNER_EMAIL], subject, text }),
+      body: JSON.stringify({ from: FROM_EMAIL, to: [ownerNotificationEmail()], subject, text }),
       signal: AbortSignal.timeout(15000),
     });
     return r.ok;
@@ -543,7 +585,7 @@ export default async function handler(req: Req, res: Res) {
           }
         } catch { /* tracking is best-effort */ }
       }
-      return json(200, await view(resolved.visit));
+      return json(200, await view(resolved.visit, resolved.restricted ?? false));
     }
     if (req.method !== "POST") return json(405, { ok: false, error: "method_not_allowed" });
 
@@ -553,6 +595,14 @@ export default async function handler(req: Req, res: Res) {
     const resolved = await resolveVisit(ct);
     if ("error" in resolved) return json(resolved.status, { ok: false, error: resolved.error });
     const visit = resolved.visit;
+
+    // C12: a paid or cancelled visit is closed for cleaner work —
+    // the link resolves only to a summary on GET, and every POST
+    // action is refused here (the gate below would let a paid visit
+    // through whenever its report is still in an editable state).
+    if (resolved.restricted) {
+      return json(409, { ok: false, error: "visit_closed" });
+    }
 
     // Pipeline gate: no ordinary work on an unconfirmed or cancelled
     // booking. Starting work (checklist/photos) and finishing it (submit)

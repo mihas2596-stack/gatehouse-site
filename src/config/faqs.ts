@@ -57,7 +57,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "Do you bring your own supplies and equipment?",
     group: "Booking",
-    a: "Yes. Every visit includes professional-grade supplies, vacuum, mop, microfiber cloths, and standard household cleaning products. You don't need to provide anything.",
+    a: "Your cleaner brings the supplies and equipment for the visit — vacuum, mop, microfiber cloths, and standard household cleaning products — following the room-by-room checklist. You don't need to provide anything.",
   },
   {
     q: "What if you can't get into my home?",
@@ -67,6 +67,6 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if something gets damaged?",
     group: "Quality",
-    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly.",
+    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly. Two things worth knowing before you book: under our Terms, damage claims made after 48 hours are waived, and disputes we can't resolve together go to binding arbitration (AAA) instead of court — see our Terms of Service for the details.",
   },
 ];

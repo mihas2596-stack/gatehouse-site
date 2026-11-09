@@ -11,9 +11,13 @@
 //   - claim: an atomic row transition report_sent → payment_pending
 //     (CAS on status + report_status + issue_open + publication time)
 //     is the boundary an issue/cancel must beat. An issue landing
-//     BEFORE the claim blocks the charge; one landing AFTER it leaves
-//     the payment to complete but stays open (never silently cleared),
-//     and the issue response must say so honestly.
+//     before the claim blocks the charge; one landing after the claim
+//     but before the intent is created is caught by a fresh re-check
+//     just before the create (C11, 09.11.2026) and blocks it too,
+//     releasing the claim. Only an issue landing after the Stripe
+//     create call has started can still complete — and it stays open
+//     (never silently cleared), and the issue response must say so
+//     honestly.
 //   - reconciliation runs BEFORE any create: known intent ids are read
 //     directly from Stripe, then search (paginated, fail-closed). Any
 //     unknown outcome refuses a new charge.
@@ -360,6 +364,40 @@ export async function chargeVisit(input: {
       return { outcome: "processing", payment_intent: rec.intent.id };
     }
     return confirmExisting(rec.intent.id, rec.intent.amount);
+  }
+
+  // --- C11: re-check the issue on FRESH data immediately before
+  // creating the intent. The claim→create window is short but real
+  // (reconcile reads Stripe first), and a complaint landing in it
+  // must stop the payment instead of racing it. The claim is
+  // released so the visit returns to report_sent and the dispute
+  // stays open. An issue landing AFTER the create call below has
+  // started can still complete (the Stripe call is already in
+  // flight) — that residual window is unavoidable, and the dispute
+  // stays open. A DB read failure here fails closed WITHOUT
+  // releasing the claim (a retry then reconciles it).
+  const preCreateRow = await loadRow(bookingId);
+  if (!preCreateRow.ok) return { outcome: "unknown", error: "db_unreadable" };
+  const preRow = preCreateRow.row;
+  if (!preRow) {
+    await releaseClaim();
+    return { outcome: "blocked", error: "no_row" };
+  }
+  if (preRow.status === "paid") return { outcome: "blocked", error: "already_paid" };
+  if (preRow.status === "cancelled") {
+    await releaseClaim();
+    return { outcome: "blocked", error: "visit_not_chargeable" };
+  }
+  if (preRow.report_status !== "sent") {
+    await releaseClaim();
+    return { outcome: "blocked", error: "report_not_current" };
+  }
+  const preCreateEv = await loadEvents(bookingId);
+  if (!preCreateEv.ok) return { outcome: "unknown", error: "db_unreadable" };
+  if (issueStateFrom(preCreateEv.events, preRow.issue_open ?? null, preRow.issue_ever ?? null).open) {
+    await releaseClaim();
+    await logEvent(row.id, bookingId, "system", "payment_blocked_by_issue", { source });
+    return { outcome: "blocked", error: "issue_open" };
   }
 
   // --- Create (one obligation, one idempotency key). ---

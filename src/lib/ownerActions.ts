@@ -56,6 +56,15 @@ export const visitLabel = (s: string): string => {
   }
 };
 
+// C7: the visit badge must reflect the report, not just the row
+// status — a "confirmed" row with a sent report is a visit whose
+// report is already with the client. Terminal rows keep their own
+// label: a paid visit is Paid, not "Report sent".
+export const visitBadgeLabel = (status: string, reportStatus?: string): string => {
+  if (reportStatus === "sent" && status !== "paid" && status !== "cancelled") return "Report sent";
+  return visitLabel(status);
+};
+
 export const reportLabel = (s: string): string => {
   switch (s) {
     case "none": return "Waiting for cleaner’s report";

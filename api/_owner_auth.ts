@@ -2,8 +2,8 @@
 // The /owner page historically takes ADMIN_TOKEN typed by hand. Email login
 // adds a second credential so the owner never has to copy the key:
 //   1. POST /api/owner-auth { action: "send" } -> server emails a
-//      short-lived link token (ol1) to the fixed OWNER_EMAIL
-//      (nikolajmihasenok@gmail.com).
+//      short-lived link token (ol1) to the owner address
+//      (OWNER_NOTIFICATION_EMAIL env, see api/_owner_email.ts).
 //   2. /owner?ol=<token> -> POST /api/owner-auth { action: "verify" }
 //      exchanges it for a
 //      24h session token (os1), stored in sessionStorage like the key.
@@ -11,7 +11,7 @@
 // Both token types are HMAC-signed with keys derived from ADMIN_TOKEN, so
 // rotating ADMIN_TOKEN in Vercel invalidates every outstanding link/session.
 // The link token carries no email claim: the send endpoint only ever mails
-// the fixed owner address, so there is nothing to bind it to.
+// the owner address, so there is nothing to bind it to.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 /** Seconds a login link stays clickable (24 hours). */

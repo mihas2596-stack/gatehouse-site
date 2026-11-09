@@ -396,8 +396,12 @@ describe("pinned report amount", () => {
   });
 });
 
+let svixCounter = 0;
 function svixReq(raw: string, sigOverride?: string) {
-  const id = "msg_test_1";
+  // C14: the Svix delivery id IS the dedup key, so every distinct
+  // delivery needs its own id — reusing one id across deliveries
+  // would (correctly) be treated as a redelivery of the first.
+  const id = `msg_test_${++svixCounter}`;
   const ts = String(Math.floor(Date.now() / 1000));
   const key = Buffer.from(WHSEC.slice(6), "base64");
   const sig = "v1," + createHmac("sha256", key).update(`${id}.${ts}.${raw}`).digest("base64");

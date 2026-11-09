@@ -158,6 +158,9 @@ describe("owner charge matrix", () => {
     rows = [{ id: ROW_ID, booking_id: BID, client_email: EMAIL, client_name: "Casey Client", status: "report_sent", report_status: "sent", amount_cents: 20000, report_sent_at: sent, issue_open: false, issue_ever: false, report_bounced: false, payment_intent_id: null }];
     evts = [
       { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sent },
+      // C16: a 30h-old report carries its 20h reminder, so the manual
+      // timer-basis charge passes the reminder guard.
+      { visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: iso(Date.now() - 10 * 3600 * 1000) },
       { visit_id: ROW_ID, booking_id: BID, event: "card_confirmed", detail: { payment_method_id: "pm_booking_A" }, created_at: iso(Date.now() - 40 * 3600 * 1000) },
     ];
     custMeta = { gh_booking_id: BID, gh_state: "report_sent", gh_payment_method: "pm_customer_B", gh_report_sent_at: sent, gh_report_version: "1" };
@@ -211,6 +214,12 @@ describe("owner charge matrix", () => {
                   evts = [];
                   if (sentEvMs !== null) {
                     evts.push({ visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: iso(sentEvMs) });
+                  }
+                  // C16: a publication 20h+ old carries its 20h reminder,
+                  // so timer-basis combos reach chargeVisit instead of
+                  // stopping at the manual-charge reminder guard.
+                  if (sentEvMs !== null && pubMs !== null && now - pubMs >= 20 * 3600 * 1000) {
+                    evts.push({ visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: iso(pubMs + 20 * 3600 * 1000) });
                   }
                   if (report === "returned" && pubMs !== null) {
                     evts.push({ visit_id: ROW_ID, booking_id: BID, event: "report_returned", detail: {}, created_at: iso(pubMs + 3600 * 1000) });

@@ -28,6 +28,7 @@ import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce, bookingEmailContact } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbDeleteCount, dbUpdate, dbUpdateCount, logEvent, storageRemove } from "./_db.js";
 import { chargeVisit } from "./_payment_obligation.js";
+import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { loadAccess } from "./_visit_access.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
 
@@ -42,6 +43,7 @@ type BookingRow = {
   client_email: string | null; report_sent_at: string | null;
   report_bounced: boolean | null; report_status: string | null;
   issue_open: boolean | null; issue_ever: boolean | null;
+  stripe_customer_id?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
@@ -53,19 +55,42 @@ async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
+
+// N29: a bounced reminder is not a delivered reminder. True when a
+// <bounceEvent> journal event exists for this booking after <afterIso>
+// (the time the reminder flag was set). The caller then clears the flag
+// so the next run re-sends the reminder instead of skipping the client.
+async function reminderBouncedAfter(bookingId: string, afterIso: string, bounceEvent: string): Promise<boolean> {
+  if (!dbConfigured() || !bookingId) return false;
+  try {
+    const rows = await dbSelect<{ created_at: string; event: string }>(
+      "gh_events",
+      `booking_id=eq.${encodeURIComponent(bookingId)}&event=eq.${bounceEvent}&order=created_at.desc&limit=1`,
+    );
+    const hit = rows.find((r) => r.event === bounceEvent);
+    const at = hit?.created_at ?? "";
+    return Boolean(at) && at > afterIso;
+  } catch {
+    return false;
+  }
+}
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
+  bookingId?: string | null,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
   const list = res.ok
     ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
     : [];
-  return list.length > 0
-    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+  // C13: never take list[0] unchecked — the pick requires an exact
+  // email match and prefers the customer bound to this booking.
+  const picked = pickCustomerByEmail(list, email, bookingId);
+  return picked
+    ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
 async function hydrateCustomerMeta(
@@ -86,6 +111,7 @@ async function hydrateCustomerMeta(
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
   const remindedEv = latestEvent(events, "reminder_sent");
+  const earlyRemindedEv = latestEvent(events, "early_reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
     : cancelledEv ? "cancelled"
@@ -108,6 +134,12 @@ async function hydrateCustomerMeta(
     gh_issue_open: issueOpen ? "1" : "",
     gh_issue_ever: issueEver ? "1" : "",
     gh_reminded_at: remindedEv ? remindedEv.created_at : "",
+    // C18: per-booking reminder flags (see the early/20h passes):
+    // hydration from this booking's own journal rebuilds them after a
+    // rebind, so a repeat client's new visit gets its own reminders.
+    gh_reminder_for: remindedEv ? row.booking_id : "",
+    gh_early_reminded_at: earlyRemindedEv ? earlyRemindedEv.created_at : "",
+    gh_early_reminder_for: earlyRemindedEv ? row.booking_id : "",
     gh_card_email_sent: cardEmailEv ? "1" : "",
   };
   const params: Record<string, string> = {};
@@ -216,14 +248,41 @@ export function selectDue(customers: Cust[], nowMs: number): DueCharge[] {
   return out;
 }
 
+// N27: oldest report first, in place. A candidate without a parseable
+// report_sent_at sorts last — it can never jump ahead of a dated one,
+// so the MAX_PER_RUN slice always takes the longest-waiting charges.
+export function sortCandidatesOldestFirst(candidates: Cust[]): Cust[] {
+  const sentMs = (c: Cust): number => {
+    const t = Date.parse(c.metadata["gh_report_sent_at"] ?? "");
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
+  candidates.sort((a, b) => sentMs(a) - sentMs(b));
+  return candidates;
+}
+
 async function findByState(secretKey: string, state: string): Promise<Cust[]> {
   const query = `metadata['gh_state']:'${state}'`;
-  const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "100" })}`);
   type Raw = { id: string; email?: string; name?: string; metadata?: Record<string, string> };
-  if (res.ok) {
+  // N27: Stripe search is paged (limit=100 is a page, not the set) — walk
+  // next_page so a 101st report-sent customer is not invisible to the
+  // cron forever. Capped at 10 pages to bound one run.
+  const out: Cust[] = [];
+  let page: string | undefined;
+  let searchOk = false;
+  for (let p = 0; p < 10; p++) {
+    const params = new URLSearchParams({ query, limit: "100", ...(page ? { page } : {}) });
+    const res = await stripeGet(secretKey, `/customers/search?${params}`);
+    if (!res.ok) break;
+    searchOk = true;
     const list = (res.data["data"] as Raw[] | undefined) ?? [];
-    return list.map((c) => ({ id: c.id, email: c.email, name: c.name, metadata: c.metadata ?? {} }));
+    for (const c of list) out.push({ id: c.id, email: c.email, name: c.name, metadata: c.metadata ?? {} });
+    const next = typeof res.data["next_page"] === "string" ? (res.data["next_page"] as string) : "";
+    if (!next) break;
+    page = next;
   }
+  // The list fallback is only for a failed search — a search that ran
+  // and found nothing means there is nothing to list.
+  if (searchOk) return out;
   const listRes = await stripeGet(secretKey, `/customers?${new URLSearchParams({ limit: "100" })}`);
   if (!listRes.ok) return [];
   const list = (listRes.data["data"] as Raw[] | undefined) ?? [];
@@ -249,7 +308,11 @@ function authed(req: Req): boolean {
 // Reconcile the saved-card state with Stripe itself: the webhook normally
 // maintains gh_payment_method, but a missing webhook secret or a dropped
 // event must not hide a card that Stripe actually holds. Backfills the
-// metadata cache when a card is found.
+// metadata cache when a card is found — but only an UNAMBIGUOUS one
+// (C13): several cards with no booking signal means no backfill, and
+// the booking is skipped by selection instead of charged on a guessed
+// card. chargeVisit still prefers the booking's card_confirmed event
+// at charge time.
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
@@ -258,12 +321,13 @@ async function reconcileCard(
   if (existing) return existing;
   const res = await stripeGet(
     secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
   );
   if (!res.ok) return "";
   const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
-  const pm = list[0]?.id ?? "";
-  if (!pm) return "";
+  const picked = pickCard(list);
+  if (picked.status !== "ok") return "";
+  const pm = picked.pm;
   const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
   const state = customer.metadata["gh_state"] ?? "";
   if (!state || state === "awaiting_card" || state === "card_failed") {
@@ -313,27 +377,59 @@ export default async function handler(req: Req, res: Res) {
     }
     // DB pass: reports sent for bookings the shared customer is not
     // currently bound to (invisible to the metadata search above).
+    // N27: the DB pass is the ordered source of truth — pages of 50
+    // by report_sent_at ascending (oldest first), up to 200 rows, so a
+    // due charge cannot starve behind an arbitrary Stripe-search
+    // order. A page that repeats already-seen booking ids stops the
+    // walk (a backend that ignores offset would otherwise repeat the
+    // same page forever).
     try {
       if (dbConfigured()) {
-        const rows = await dbSelect<BookingRow>(
-          "gh_visits",
-          "report_status=eq.sent&order=report_sent_at.asc&limit=50",
-        );
         const seen = new Set(candidates.map((c) => c.metadata["gh_booking_id"]));
-        for (const r of rows) {
-          if (!r.booking_id || seen.has(r.booking_id) || !r.client_email) continue;
-          const cust = await findCustomerByEmail(STRIPE_SECRET_KEY, r.client_email);
-          if (!cust) continue;
-          const events = await bookingEvents(r.booking_id);
-          await hydrateCustomerMeta(STRIPE_SECRET_KEY, cust, r, events);
-          const contact = await bookingEmailContact(r.booking_id, r.client_email, cust.name ?? "");
-          candidates.push({ id: cust.id, email: cust.email, name: contact.name, metadata: cust.metadata });
-          seen.add(r.booking_id);
+        let offset = 0;
+        for (let page = 0; page < 4; page++) {
+          const rows = await dbSelect<BookingRow>(
+            "gh_visits",
+            `report_status=eq.sent&order=report_sent_at.asc&limit=50&offset=${offset}`,
+          );
+          if (rows.length === 0) break;
+          offset += rows.length;
+          // A page that repeats booking ids seen before means the
+          // backend ignored offset — stop instead of looping the same
+          // page. A page of new ids that simply has no Stripe customer
+          // yet is NOT a reason to stop: later pages may resolve.
+          const seenBefore = new Set(seen);
+          const repeated = rows.some((r) => r.booking_id && seenBefore.has(r.booking_id));
+          let newIds = 0;
+          for (const r of rows) {
+            if (!r.booking_id || seen.has(r.booking_id) || !r.client_email) continue;
+            seen.add(r.booking_id);
+            newIds++;
+            const byRow = r.stripe_customer_id
+              ? await resolveCustomerByRowId(
+                  (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+                  r.stripe_customer_id, r.client_email)
+              : null;
+            const cust = byRow
+              ? { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name }
+              : await findCustomerByEmail(STRIPE_SECRET_KEY, r.client_email, r.booking_id);
+            if (!cust) continue;
+            const events = await bookingEvents(r.booking_id);
+            await hydrateCustomerMeta(STRIPE_SECRET_KEY, cust, r, events);
+            const contact = await bookingEmailContact(r.booking_id, r.client_email, cust.name ?? "");
+            candidates.push({ id: cust.id, email: cust.email, name: contact.name, metadata: cust.metadata });
+          }
+          if (newIds === 0 && repeated) break;
+          if (rows.length < 50) break;
         }
       }
     } catch (err) {
       logErr("db_pass", err);
     }
+    // N27: deterministic oldest-first order for every pass below
+    // (reminders, then the MAX_PER_RUN charge slice): the longest-waiting
+    // report is always served first, whatever order Stripe returned.
+    sortCandidatesOldestFirst(candidates);
     // Reconcile saved cards with Stripe before selecting due charges: a
     // booking whose card-save webhook was missed still has its card.
     for (const c of candidates) {
@@ -368,7 +464,22 @@ export default async function handler(req: Req, res: Res) {
     if (RESEND_API_KEY) {
       for (const c of candidates) {
         const m = c.metadata;
-        if (m["gh_early_reminded_at"]) continue;
+        // C18: the flag alone proves nothing — it may belong to a
+        // previous visit of the same (shared) customer. Only a flag
+        // FOR this booking counts as "already reminded": _for must
+        // name this booking, or be absent (legacy shape — then assume
+        // it is this booking's, never duplicate). A _for naming
+        // another booking means this visit was never early-reminded,
+        // so the N29 bounce check below does not apply either.
+        const earlyForThisBooking = Boolean(m["gh_early_reminded_at"])
+          && (!m["gh_early_reminder_for"] || m["gh_early_reminder_for"] === m["gh_booking_id"]);
+        if (earlyForThisBooking) {
+          // N29: a bounced early reminder does not count as delivered —
+          // clear the flag so this run re-sends it.
+          if (!m["gh_booking_id"] || !(await reminderBouncedAfter(m["gh_booking_id"], m["gh_early_reminded_at"], "early_reminder_bounced"))) continue;
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, { "metadata[gh_early_reminded_at]": "" });
+          m["gh_early_reminded_at"] = "";
+        }
         if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
         if (m["gh_report_bounced"] === "1") continue;
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
@@ -412,6 +523,14 @@ export default async function handler(req: Req, res: Res) {
             signal: AbortSignal.timeout(15000),
           });
           if (resp.ok) {
+            // N29: keep the Resend id — the bounce webhook matches it
+            // to this booking, so a bounced reminder is journaled and
+            // never counts as delivered.
+            let sentEmailId = "";
+            try {
+              const sent = (await resp.json()) as { id?: string };
+              if (typeof sent.id === "string") sentEmailId = sent.id;
+            } catch { /* the Resend id is best-effort */ }
             await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
               "metadata[gh_early_reminded_at]": new Date().toISOString(),
               ...(m["gh_booking_id"] ? { "metadata[gh_early_reminder_for]": m["gh_booking_id"] } : {}),
@@ -421,7 +540,7 @@ export default async function handler(req: Req, res: Res) {
                 "gh_visits",
                 `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
               );
-              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "early_reminder_sent", {});
+              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "early_reminder_sent", sentEmailId ? { email_id: sentEmailId } : {});
             }
             earlyReminded++;
           }
@@ -433,7 +552,18 @@ export default async function handler(req: Req, res: Res) {
     if (RESEND_API_KEY) {
       for (const c of candidates) {
         const m = c.metadata;
-        if (m["gh_reminded_at"]) continue;
+        // C18: same per-booking rule as the early pass — a flag whose
+        // _for names another booking does not satisfy this visit.
+        const remindedForThisBooking = Boolean(m["gh_reminded_at"])
+          && (!m["gh_reminder_for"] || m["gh_reminder_for"] === m["gh_booking_id"]);
+        if (remindedForThisBooking) {
+          // N29: a bounced 20h reminder does not count as delivered —
+          // clear the flag so this run re-sends it; the charge guard
+          // below also refuses to charge on a bounced reminder.
+          if (!m["gh_booking_id"] || !(await reminderBouncedAfter(m["gh_booking_id"], m["gh_reminded_at"], "reminder_bounced"))) continue;
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, { "metadata[gh_reminded_at]": "" });
+          m["gh_reminded_at"] = "";
+        }
         if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
         if (m["gh_report_bounced"] === "1") continue;
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
@@ -481,6 +611,12 @@ export default async function handler(req: Req, res: Res) {
             signal: AbortSignal.timeout(15000),
           });
           if (resp.ok) {
+            // N29: keep the Resend id — see the early-reminder pass.
+            let sentEmailId = "";
+            try {
+              const sent = (await resp.json()) as { id?: string };
+              if (typeof sent.id === "string") sentEmailId = sent.id;
+            } catch { /* the Resend id is best-effort */ }
             await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
               "metadata[gh_reminded_at]": new Date().toISOString(),
               ...(m["gh_booking_id"] ? { "metadata[gh_reminder_for]": m["gh_booking_id"] } : {}),
@@ -490,7 +626,7 @@ export default async function handler(req: Req, res: Res) {
                 "gh_visits",
                 `booking_id=eq.${encodeURIComponent(m["gh_booking_id"])}&order=visit_no.desc&limit=1`,
               );
-              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", {});
+              await logEvent(vrows[0]?.id ?? null, m["gh_booking_id"], "system", "reminder_sent", sentEmailId ? { email_id: sentEmailId } : {});
               remindedThisRun.add(m["gh_booking_id"]);
             }
             reminded++;
@@ -519,11 +655,18 @@ export default async function handler(req: Req, res: Res) {
           let firstReminder = remindedThisRun.has(item.bookingId);
           if (!firstReminder) {
             try {
-              const prior = await dbSelect<{ created_at: string }>(
+              // N29: the latest reminder event decides — a bounce after
+              // the send means the client was never reminded, so the
+              // charge waits for a fresh reminder. Filtered client-side
+              // too, so a backend that ignores the `in.` filter cannot
+              // mistake an unrelated journal event for a reminder.
+              const prior = await dbSelect<{ created_at: string; event: string }>(
                 "gh_events",
-                `booking_id=eq.${encodeURIComponent(item.bookingId)}&event=eq.reminder_sent&order=created_at.desc&limit=1`,
+                `booking_id=eq.${encodeURIComponent(item.bookingId)}&event=in.(reminder_sent,reminder_bounced)&order=created_at.desc&limit=1`,
               );
-              firstReminder = prior.length === 0;
+              const reminderEvents = prior.filter((e) => e.event === "reminder_sent" || e.event === "reminder_bounced");
+              const latest = reminderEvents[0];
+              firstReminder = !latest || latest.event === "reminder_bounced";
             } catch {
               firstReminder = false;
             }
@@ -755,7 +898,7 @@ export default async function handler(req: Req, res: Res) {
           // never by the shared metadata binding, which may currently
           // point at another booking of the same client.
           if (!prow.client_email) continue;
-          const match = await findCustomerByEmail(STRIPE_SECRET_KEY, prow.client_email);
+          const match = await findCustomerByEmail(STRIPE_SECRET_KEY, prow.client_email, prow.booking_id);
           if (!match) continue;
           const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, match.id, {
             gh_state: "paid",

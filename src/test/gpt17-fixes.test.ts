@@ -53,7 +53,10 @@ beforeEach(() => {
     visit_date: "2027-01-15", window: "midday", issue_open: false, issue_ever: false,
     receipt_email_id: null,
   };
-  events = [created(), ev("report_sent", { version: 1 }, hoursAgo(30))];
+  // C16: the default 30h-old report carries its 20h reminder (sent at
+  // +20h), so timer-basis charge tests reach chargeVisit instead of
+  // stopping at the reminder guard.
+  events = [created(), ev("report_sent", { version: 1 }, hoursAgo(30)), ev("reminder_sent", {}, hoursAgo(10))];
   storeMeta = {
     gh_booking_id: BID, gh_state: "report_sent", gh_report_sent_at: hoursAgo(30),
     gh_report_amount_cents: "20000", gh_first_price_cents: "20000",
@@ -152,7 +155,7 @@ const call = async (body: Record<string, unknown>) => {
 
 describe("P04: the payment version comes from the journal, never the request", () => {
   it("a caller-supplied report_version 999 does not mint a second obligation", async () => {
-    events = [created(), ev("report_sent", { version: 2 }, hoursAgo(30))];
+    events = [created(), ev("report_sent", { version: 2 }, hoursAgo(30)), ev("reminder_sent", {}, hoursAgo(10))];
     const r = await call({ action: "charge", amount_cents: 20000, report_version: 999 });
     expect(r.code).toBe(200);
     expect(piCalls).toHaveLength(1);

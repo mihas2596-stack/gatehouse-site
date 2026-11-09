@@ -159,6 +159,9 @@ describe("G3: charge needs a saved payment basis", () => {
   });
 
   it("report sent 30h ago with no issue charges on the timer rule", async () => {
+    // C16: a timer-basis manual charge needs the 20h reminder first —
+    // a 30h-old report has one (sent at +20h).
+    events = [created(), ev("report_sent", { version: 1 }, hoursAgo(30)), ev("reminder_sent", {}, hoursAgo(10))];
     const r = await call({ action: "charge", amount_cents: 20000, report_version: 1 });
     expect(r.code).toBe(200);
     expect(r.body["state"]).toBe("paid");

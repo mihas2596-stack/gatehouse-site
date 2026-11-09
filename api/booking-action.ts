@@ -39,11 +39,15 @@ import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy, reportE
 import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
+import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { deleteAccess, revokeAccessForCleanerChange, saveAccessNote } from "./_visit_access.js";
 import {
   cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
   cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
 } from "./_cleaner_link.js";
+// C5: the owner-cancel fee is the client's own 48h / $25 rule —
+// imported, never re-derived here (api/visit.ts cancelFeeCents).
+import { cancelFeeCents } from "./visit.js";
 
 type BookingPayload = {
   bid: string;
@@ -121,7 +125,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -152,6 +156,10 @@ const ActionSchema = z.object({
   // send_report: explicit owner decision to resolve an open customer
   // issue together with the re-send (C3 — never silently).
   resolve_issue: z.boolean().optional(),
+  // charge: owner confirms charging a report whose 20h reminder never
+  // went out (C16 — the cron's reminder-before-charge guard, applied
+  // to the manual charge too). False/absent without a reminder = 409.
+  confirm_no_reminder: z.boolean().optional(),
   cleaner_photo: z.string().max(1000).optional(),
   // assign_confirm / set_cleaner / roster_update: stable roster ID.
   cleaner_id: z.string().max(50).optional(),
@@ -441,6 +449,16 @@ async function sendReceiptAfterClaim(
   const dateLine = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric",
   }).format(new Date());
+  // C19: a reply to this receipt does not open a dispute — point the
+  // client at "Report an issue" on the report page instead. Same token
+  // minting as send_report in this file.
+  const reportToken = encryptBookingPayload(bookingLinkSecret(secretKey), {
+    bid: bookingId,
+    email: custEmail,
+    name: custName,
+    ts: Math.floor(Date.now() / 1000),
+  });
+  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -461,7 +479,7 @@ async function sendReceiptAfterClaim(
           `Hi ${firstName},\n\nThank you — your cleaning is paid.\n\n` +
           `Amount paid: $${dollars}\nDate: ${dateLine} (Atlanta time)\nBooking: ${bookingId.slice(0, 8)}\n\n` +
           `Your card on file was charged after your photo report, as agreed. ` +
-          `If anything about the visit isn't right, just reply to this email — we'll review it.\n\n` +
+          `If anything about the visit isn't right, open your report page and tap "Report an issue" — we'll review it and reply within one business day: ${reportLink}\n\n` +
           `Gatehouse Home Cleaning\n`,
       }),
       signal: AbortSignal.timeout(15000),
@@ -539,7 +557,7 @@ export async function sendFeeReceiptEmailOnce(
           `Amount paid: $${dollars}\nBooking: ${bookingId.slice(0, 8)}\n\n` +
           `This fee applies because the visit was cancelled within 48 hours, as agreed. ` +
           `It is separate from the cleaning itself — no cleaning charge was made for this booking.\n\n` +
-          `If anything looks wrong, just reply to this email — we'll review it.\n\n` +
+          `If anything looks wrong, email hello@gatehousehomecleaning.com and we'll review it.\n\n` +
           `Gatehouse Home Cleaning\n`,
       }),
       signal: AbortSignal.timeout(15000),
@@ -724,17 +742,23 @@ const DEFAULT_CHECKLIST = {
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
+  confirmedPmId?: string | null,
 ): Promise<string> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
   const res = await stripeGet(
     secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
   );
   if (!res.ok) return "";
   const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
-  const pm = list[0]?.id ?? "";
-  if (!pm) return "";
+  // C13: the booking's card_confirmed event wins; else a lone card.
+  // Several cards with no booking signal is ambiguous — no backfill
+  // of an arbitrary card, so a charge then fails closed with
+  // no_payment_method instead of charging a guessed card.
+  const picked = pickCard(list, { confirmedPmId, cachedPmId: null });
+  if (picked.status !== "ok") return "";
+  const pm = picked.pm;
   const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
   const state = customer.metadata["gh_state"] ?? "";
   if (!state || state === "awaiting_card" || state === "card_failed") {
@@ -763,6 +787,7 @@ type BookingRow = {
   // resend, client approval); PostgREST returns them even though the
   // lite type used to omit them.
   issue_open?: boolean | null; issue_ever?: boolean | null;
+  stripe_customer_id?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 // RA04: strict loaders that tell "no row" apart from "the DB could
@@ -802,14 +827,18 @@ export async function bookingEmailContact(bookingId: string, email: string, name
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
+  bookingId?: string | null,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
   const list = res.ok
     ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
     : [];
-  return list.length > 0
-    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+  // C13: never take list[0] unchecked — the pick requires an exact
+  // email match and prefers the customer bound to this booking.
+  const picked = pickCustomerByEmail(list, email, bookingId);
+  return picked
+    ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
 async function hydrateCustomerMeta(
@@ -830,6 +859,7 @@ async function hydrateCustomerMeta(
   // for the new report either.
   const approvedEv = clientApprovedEvent(events);
   const remindedEv = latestEvent(events, "reminder_sent");
+  const earlyRemindedEv = latestEvent(events, "early_reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const proposal = latestEvent(events, "date_proposed");
   const declined = Boolean(proposal && typeof proposal.detail?.["alt_dates"] === "string" && (!confirmEv || proposal.created_at > confirmEv.created_at));
@@ -858,6 +888,13 @@ async function hydrateCustomerMeta(
     gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
     gh_issue_room: issueOpen ? evStr(opened, "room") : "",
     gh_reminded_at: remindedEv ? remindedEv.created_at : "",
+    // C18: the reminder flags are per-booking (the _for key names the
+    // booking the flag belongs to). Hydration from this booking's own
+    // journal rebuilds them after a rebind, so a repeat client's new
+    // visit is not silenced by the previous visit's reminder.
+    gh_reminder_for: remindedEv ? row.booking_id : "",
+    gh_early_reminded_at: earlyRemindedEv ? earlyRemindedEv.created_at : "",
+    gh_early_reminder_for: earlyRemindedEv ? row.booking_id : "",
     gh_card_email_sent: cardEmailEv ? "1" : "",
     gh_no_photo_zones: row.no_photo_zones ?? "",
     gh_proposed_date: evStr(proposal, "date"),
@@ -1175,6 +1212,110 @@ export default async function handler(req: Req, res: Res) {
       return json(200, { ok: true });
     }
 
+    // C5: the owner cancels the visit from the panel. The fee is the
+    // client's own 48h / $25 rule (cancelFeeCents from api/visit.ts,
+    // computed from the visit row — never re-derived here), and the
+    // durable order mirrors the client cancel: conditional row update,
+    // then the journal event, with a rollback if the journal write
+    // fails. Runs BEFORE the Stripe-customer lookup on purpose: a
+    // booking with no Stripe customer at all (Kate 86548240) must
+    // still be cancellable, and its fee is recorded on the row for
+    // charge_fee. A report already sent means the visit is done —
+    // cancel is refused, like the client cancel refuses report_sent.
+    if (action === "owner_cancel") {
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok) return json(503, { ok: false, error: "db_unreadable" });
+      const visit = result.row;
+      if (!visit) return json(404, { ok: false, error: "booking_not_found" });
+      const rowStatus = visit.status ?? "";
+      if (rowStatus === "cancelled") return json(409, { ok: false, error: "already_cancelled" });
+      if (rowStatus === "paid") return json(409, { ok: false, error: "already_paid" });
+      if (visit.report_status === "sent" || visit.report_sent_at) {
+        return json(409, { ok: false, error: "report_already_sent" });
+      }
+      // The row's visit_date is the effective visit date (confirm
+      // writes it there), so it feeds the same 48h rule the client
+      // cancel uses — including the free cancel for a past date.
+      const feeMeta: Record<string, string> = {
+        gh_state: rowStatus,
+        gh_confirmed_date: visit.visit_date ?? "",
+      };
+      const fee = cancelFeeCents(feeMeta, visit.visit_date ?? "", Date.now());
+      const changed = await dbUpdateCount(
+        "gh_visits",
+        `id=eq.${visit.id}&status=eq.${encodeURIComponent(rowStatus)}`,
+        { status: "cancelled" },
+      );
+      if (changed !== 1) return json(503, { ok: false, error: "cancellation_not_saved" });
+      const journaled = await logEventStrict(visit.id, bookingId, "owner", "visit_cancelled", { scope: "once", fee_cents: fee });
+      if (!journaled) {
+        await dbUpdateCount("gh_visits", `id=eq.${visit.id}&status=eq.cancelled`, { status: rowStatus });
+        return json(503, { ok: false, error: "cancellation_not_saved" });
+      }
+      const accessDeleted = await deleteAccess(visit.id);
+      await logEvent(visit.id, bookingId, "owner", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
+      // Best-effort mirrors: the row + journal above are the durable
+      // record; a missing Stripe customer (or a failed sync/email)
+      // must not fail a cancel that already happened.
+      let emailSent = false;
+      try {
+        const cust = (await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId))
+          ?? (visit.client_email ? await findCustomerByEmail(STRIPE_SECRET_KEY, visit.client_email, bookingId) : null);
+        if (cust) {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${cust.id}`, {
+            "metadata[gh_state]": "cancelled",
+            "metadata[gh_cancel_scope]": "once",
+            "metadata[gh_cancel_fee_cents]": String(fee),
+            "metadata[gh_cancelled_at]": new Date().toISOString(),
+          });
+        }
+        if (visit.client_email) {
+          emailSent = await sendShortClientEmail({
+            secretKey: STRIPE_SECRET_KEY, bookingId,
+            customer: { email: visit.client_email, name: visit.client_name ?? "" },
+            subject: "Your visit is cancelled — Gatehouse Home Cleaning",
+            heading: "Your visit is cancelled",
+            lines: [
+              "Your visit has been cancelled. Any other confirmed visits are unchanged.",
+              fee > 0
+                ? "Because this is inside 48 hours before the visit, the $25 late-cancellation fee from our Terms applies and will be charged to your saved card."
+                : "No fee — the visit was cancelled more than 48 hours before it.",
+            ],
+            buttonLabel: "View my visit",
+          });
+        }
+      } catch { /* best-effort: the cancel itself already stands */ }
+      log("owner_cancel", { booking: bookingId, fee_cents: fee });
+      return json(200, { ok: true, fee_cents: fee, email_sent: emailSent });
+    }
+
+    // C12: revoke the cleaner's link WITHOUT rotating it. Revoke is
+    // not rotation: no new issuance, no new expiry — the stored hash,
+    // issuance and expiry are cleared, so the current token (v2 or
+    // legacy) stops resolving at once. DB-only, like owner_cancel:
+    // it runs before the Stripe-customer lookup, so a booking with
+    // no Stripe customer can still have its link revoked. Idempotent:
+    // revoking an already-revoked (or never-issued) link succeeds
+    // with revoked: false.
+    if (action === "revoke_cleaner_link") {
+      if (!dbConfigured()) {
+        return json(501, { ok: false, error: "db_not_configured" });
+      }
+      const visit = (await latestVisit(bookingId)) as CleanerRow | null;
+      if (!visit) return json(404, { ok: false, error: "visit_not_found" });
+      const hadLink = Boolean(visit.cleaner_token_hash ?? visit.cleaner_link_issuance);
+      const cleared = await dbUpdateCount("gh_visits", `id=eq.${visit.id}`, {
+        cleaner_token_hash: null,
+        cleaner_token_expires: null,
+        cleaner_link_version: null,
+        cleaner_link_issuance: null,
+      });
+      if (cleared !== 1) return json(502, { ok: false, error: "db_error" });
+      await logEvent(visit.id, bookingId, "owner", "cleaner_link_revoked", { had_link: hadLink });
+      log("revoke_cleaner_link", { booking: bookingId, had_link: hadLink });
+      return json(200, { ok: true, revoked: hadLink });
+    }
+
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);
     const rowRes = await latestBookingRowStrict(bookingId);
     if (!rowRes.ok) {
@@ -1192,8 +1333,77 @@ export default async function handler(req: Req, res: Res) {
       events = evRes.events;
     }
     let customer = boundCustomer;
+    // C13: the visit row's own stripe_customer_id, where present, is
+    // the strongest binding — resolve it directly and verify its
+    // email, before falling back to the email search.
+    if (!customer && row?.stripe_customer_id && row.client_email) {
+      const byRow = await resolveCustomerByRowId(
+        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+        row.stripe_customer_id, row.client_email,
+      );
+      if (byRow) customer = { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name };
+    }
     if (!customer && row?.client_email) {
-      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, row.client_email);
+      customer = await findCustomerByEmail(STRIPE_SECRET_KEY, row.client_email, bookingId);
+    }
+    // B4: a booking with no Stripe customer at all (Kate 86548240)
+    // must still answer status/client_link from its own visit row —
+    // the row carries the email and name the client link needs, and
+    // the payment state is "no card can be charged", not "not found".
+    // Every other action keeps the 404: without a customer there is
+    // nothing to charge, detach, or sync.
+    if (!customer && row && (action === "status" || action === "client_link")) {
+      if (action === "status") {
+        const rowState = row.status === "cancelled" ? "cancelled"
+          : row.status === "paid" ? "paid"
+          : row.report_status === "sent" ? "report_sent"
+          : row.status ?? "requested";
+        return json(200, {
+          ok: true,
+          booking_id: bookingId,
+          state: rowState,
+          issue_open: row.issue_open === true,
+          payment_method: "none",
+          booking_confirmed: events.some((e) => e.event === "visit_confirmed"),
+          confirmed_date: "",
+          confirmed_window: "",
+          no_stripe_customer: true,
+          ops: {
+            proposed_date: "",
+            alt_dates: "",
+            cleaner_name: row.cleaner_name ?? "",
+            no_photo_zones: row.no_photo_zones ?? "",
+            issue_room: "",
+            issue_reason: "",
+            issue_resolved_at: "",
+            reclean_date: "",
+            report_version: "",
+            report_sent_at: row.report_sent_at ?? "",
+            report_amount_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+            report_bounced: row.report_bounced === true,
+            cancel_scope: "",
+            cancel_fee_cents: "",
+            fee_charged: false,
+            last_payment: "",
+            first_price_cents: row.amount_cents != null ? String(row.amount_cents) : "",
+            recurring_price_cents: "",
+          },
+        });
+      }
+      // client_link from the row: same v2 token minting as the
+      // customer-backed path below, with the row's own email/name.
+      const email = row.client_email ?? "";
+      const name = row.client_name ?? "";
+      if (!email) return json(502, { ok: false, error: "no_client_email" });
+      const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+        bid: bookingId, email, name, ts: Math.floor(Date.now() / 1000),
+      });
+      await logEvent(null, bookingId, "owner", "client_link_issued");
+      return json(200, {
+        ok: true,
+        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
+        no_stripe_customer: true,
+      });
     }
     if (!customer) {
       logErr("lookup", "booking not found");
@@ -1207,8 +1417,12 @@ export default async function handler(req: Req, res: Res) {
         /* actions below re-check state before writing */
       }
     }
+    // C9: keep the reconciled payment-method id — the status branch
+    // resolves its brand/last4 from Stripe (or, for a paid booking
+    // whose card is gone, from this booking's card_confirmed event).
+    let reconciledPm = "";
     try {
-      await reconcileCard(STRIPE_SECRET_KEY, customer);
+      reconciledPm = await reconcileCard(STRIPE_SECRET_KEY, customer, confirmedPaymentMethodId(events));
     } catch {
       /* cached metadata still applies */
     }
@@ -1217,12 +1431,51 @@ export default async function handler(req: Req, res: Res) {
     const issueOpen = meta["gh_issue_open"] === "1";
 
     if (action === "status") {
+      // C9: the saved-card flag alone lies for paid bookings (the card
+      // may have been detached after payment, so gh_payment_method is
+      // empty while a card DID pay). Brand/last4 come from the live
+      // Stripe card when one is on file, else from this booking's own
+      // card_confirmed journal event — never from another booking's
+      // shared metadata. payment_method stays "saved" for a paid
+      // booking whose card_confirmed event proves a card paid it;
+      // card_on_file is the live truth (a card is attached right now).
+      let cardBrand = "";
+      let cardLast4 = "";
+      if (reconciledPm) {
+        try {
+          const pmRes = await stripeGet(
+            STRIPE_SECRET_KEY,
+            `/payment_methods/${encodeURIComponent(reconciledPm)}`,
+          );
+          const card = pmRes.data["card"] as { brand?: string; last4?: string } | undefined;
+          if (card) {
+            cardBrand = String(card.brand ?? "");
+            cardLast4 = String(card.last4 ?? "");
+          }
+        } catch {
+          /* journal fallback below */
+        }
+      }
+      const confirmedCardEv = latestEvent(events, "card_confirmed");
+      if (!cardBrand && typeof confirmedCardEv?.detail?.["brand"] === "string") {
+        cardBrand = confirmedCardEv.detail["brand"];
+      }
+      if (!cardLast4 && typeof confirmedCardEv?.detail?.["last4"] === "string") {
+        cardLast4 = confirmedCardEv.detail["last4"];
+      }
+      const isPaid = row?.status === "paid" || state === "paid";
+      const paymentMethod =
+        reconciledPm || (isPaid && confirmedCardEv) ? "saved" : "none";
       return json(200, {
         ok: true,
         booking_id: bookingId,
         state,
         issue_open: issueOpen,
-        payment_method: meta["gh_payment_method"] ? "saved" : "none",
+        payment_method: paymentMethod,
+        card_brand: cardBrand,
+        card_last4: cardLast4,
+        card_on_file: Boolean(reconciledPm),
+        card_used_for_booking: Boolean(confirmedCardEv),
         booking_confirmed: meta["gh_booking_confirmed"] === "1",
         confirmed_date: meta["gh_confirmed_date"] ?? "",
         confirmed_window: meta["gh_confirmed_window"] ?? "",
@@ -1659,12 +1912,20 @@ export default async function handler(req: Req, res: Res) {
         // financial block, including after the journal's retention window.
         if (!recorded) return json(502, { ok: false, error: "issue_audit_failed", issue_blocked: true });
       }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      // N28: the Stripe mirror write is checked — a failed sync must
+      // not look like a fully-recorded dispute. The block itself is
+      // already durable (row CAS + journal above), so the client email
+      // still goes out; the 502 below says honestly that the Stripe
+      // mirror failed and the panel may show stale state.
+      const metaUpd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "issue_open",
         "metadata[gh_issue_open]": "1",
         "metadata[gh_issue_ever]": "1",
         "metadata[gh_issue_reason]": (parsed.data.reason ?? "").slice(0, 200),
       });
+      if (!metaUpd.ok) {
+        logErr("dispute", `stripe ${metaUpd.status} (issue already blocked in DB)`);
+      }
       // The client must learn the email complaint was accepted: the
       // confirmation mirrors the /report issue flow, including the
       // payment-in-flight caveat (a charge already moving may still
@@ -1690,6 +1951,9 @@ export default async function handler(req: Req, res: Res) {
         buttonLabel: "View my visit",
       });
       log("dispute", { booking: bookingId, emailSent });
+      if (!metaUpd.ok) {
+        return json(502, { ok: false, error: "stripe_unavailable", issue_blocked: true, email_sent: emailSent });
+      }
       return json(200, { ok: true, state: "issue_open", email_sent: emailSent });
     }
 
@@ -1705,6 +1969,42 @@ export default async function handler(req: Req, res: Res) {
       if (!issueIsOpen) {
         logErr("resolve", `blocked: no open issue (shared state=${state})`);
         return json(409, { ok: false, error: "nothing_to_resolve" });
+      }
+      // C26 / Terms §7: "We fix missed checklist items free within 72
+      // hours after you report the issue." The agreed re-clean date is
+      // therefore validated, not stored verbatim: YYYY-MM-DD, a real
+      // calendar date, not in the past, and within 72h of the issue
+      // being reported (issue_opened event). Without an issue_opened
+      // anchor (legacy rows) only format/past are enforced — the 72h
+      // check cannot be computed and fails open, never closed.
+      const recleanRaw = (parsed.data.reclean_date ?? "").trim();
+      if (recleanRaw) {
+        const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(recleanRaw);
+        const d = dm
+          ? new Date(Date.UTC(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])))
+          : null;
+        const realDate =
+          d !== null &&
+          dm !== null &&
+          d.getUTCFullYear() === Number(dm[1]) &&
+          d.getUTCMonth() === Number(dm[2]) - 1 &&
+          d.getUTCDate() === Number(dm[3]);
+        const todayUtc = new Date();
+        todayUtc.setUTCHours(0, 0, 0, 0);
+        if (!realDate || (d !== null && d.getTime() < todayUtc.getTime())) {
+          return json(400, { ok: false, error: "invalid_reclean_date" });
+        }
+        const openedEv = latestEvent(events, "issue_opened");
+        if (openedEv && d !== null) {
+          const recleanByMs = Date.parse(openedEv.created_at) + 72 * 3600 * 1000;
+          if (Number.isFinite(recleanByMs) && d.getTime() > recleanByMs) {
+            return json(409, {
+              ok: false,
+              error: "reclean_date_too_late",
+              reclean_by: new Date(recleanByMs).toISOString(),
+            });
+          }
+        }
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "approved",
@@ -1761,6 +2061,38 @@ export default async function handler(req: Req, res: Res) {
         if (!paymentMethod) {
           logErr("charge", "blocked: no saved payment method");
           return json(409, { ok: false, error: "no_payment_method" });
+        }
+        // C16: the cron's reminder-before-charge guard, applied to the
+        // manual charge too — but only where it protects someone: a
+        // TIMER-basis charge to a client who never responded. A client
+        // approval (clientApprovedEvent: current publication, not
+        // voided by a later dispute) IS the client's engagement, so
+        // approved charges skip it; a charge with no basis at all keeps
+        // its existing error from chargeVisit below, not this one.
+        // The journal event is per-booking, so another booking's
+        // reminder never satisfies this booking's guard.
+        const basis = paymentBasis(
+          {
+            reportSentAt: row.report_sent_at ?? null,
+            events,
+            issueOpenRow: row.issue_open ?? null,
+            issueEverRow: row.issue_ever ?? null,
+            bounced: row.report_bounced ?? null,
+          },
+          Date.now(),
+        );
+        const reminded = events.some((e) => e.event === "reminder_sent");
+        if (basis === "timer_rule" && !reminded) {
+          if (parsed.data.confirm_no_reminder !== true) {
+            logErr("charge", "blocked: no reminder sent for this report");
+            return json(409, {
+              ok: false,
+              error: "needs_reminder_confirm",
+              needs_reminder_confirm: true,
+              hint: "No reminder was sent for this report yet. Confirm to charge without a reminder.",
+            });
+          }
+          await logEvent(row.id, bookingId, "owner", "charge_without_reminder", {});
         }
         const outcome = await chargeVisit({
           secretKey: STRIPE_SECRET_KEY,
@@ -1853,6 +2185,12 @@ export default async function handler(req: Req, res: Res) {
             ok: false, error: "payment_in_flight",
             hint: "A payment for this visit is in progress. Wait for it to settle, then re-send if still needed.",
           });
+        }
+        // C17: a cancelled visit never gets a (re-)sent report — the
+        // email would restart the 24h clock on a visit that no longer
+        // happens. Same 409 shape as confirm/assign_confirm.
+        if (visitRow.status === "cancelled") {
+          return json(409, { ok: false, error: "visit_cancelled", status: visitRow.status });
         }
         if (visitRow.report_status !== "submitted" && visitRow.report_status !== "sent") {
           return json(409, { ok: false, error: "report_not_ready", report_status: visitRow.report_status });
@@ -1999,9 +2337,11 @@ export default async function handler(req: Req, res: Res) {
           status: "report_sent",
           report_email_id: null,
           report_bounced: true,
-          // Publishing a fresh report supersedes any earlier issue
-          // (matches the metadata, which send_report clears below).
-          issue_open: false,
+          // B8: the CAS deliberately does NOT close an open issue.
+          // issue_open flips to false only after the report email is
+          // proven sent (success path below). If the email fails, the
+          // failure branch restores the pre-claim publication, so the
+          // dispute survives and the 24h timer is not restarted.
         });
         if (claimed === 0) {
           // N01: a lost CAS is not automatically "already sent". If a
@@ -2027,10 +2367,16 @@ export default async function handler(req: Req, res: Res) {
           return json(502, { ok: false, error: "db_error" });
         }
       }
+      // B8: pre-send metadata snapshot. The issue fields are NOT cleared
+      // here anymore — they clear only on the success path, after the
+      // email is proven sent. On a failed send the failure branch below
+      // restores the timer fields from this snapshot, so a failed send
+      // neither closes the dispute nor restarts the 24h clock.
+      const prevReportSentAt = meta["gh_report_sent_at"] ?? "";
+      const prevReportVersion = meta["gh_report_version"] ?? "";
+      const prevState = meta["gh_state"] ?? "";
       const params: Record<string, string> = {
         "metadata[gh_state]": "report_sent",
-        "metadata[gh_issue_open]": "",
-        "metadata[gh_issue_reason]": "",
         "metadata[gh_report_sent_at]": sentAt,
         "metadata[gh_report_version]": String(version),
         "metadata[gh_report_amount_cents]": String(amountCents),
@@ -2135,12 +2481,41 @@ export default async function handler(req: Req, res: Res) {
           logErr("send_report", "email not sent and bounce write failed — publication rolled back");
           return json(502, { ok: false, error: "db_error" });
         }
+        // B8: the email did not go out, so undo the publication claim:
+        // restore the pre-CAS report_status / report_sent_at / status so
+        // the 24h timer is NOT restarted, and restore issue_open to its
+        // pre-claim value (true when this send carried resolve_issue).
+        // report_bounced stays true — it is what blocks the clock until
+        // a re-send succeeds. The row is the source of truth for the
+        // timer; the metadata timer fields are restored alongside it.
+        const restored = await dbUpdateCount(
+          "gh_visits",
+          `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(sentAt)}&status=eq.report_sent`,
+          {
+            report_status: visitRow.report_status,
+            report_sent_at: visitRow.report_sent_at ?? null,
+            status: visitRow.status,
+            issue_open: visitRow.issue_open === true,
+          },
+        );
+        if (restored !== 1) {
+          logErr("send_report", "email not sent and publication restore failed — row keeps the claimed sent time");
+        }
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_report_bounced]": "1",
+          "metadata[gh_report_sent_at]": prevReportSentAt,
+          "metadata[gh_report_version]": prevReportVersion,
+          "metadata[gh_state]": prevState,
         });
         await logEvent(visitRow.id, bookingId, "system", "report_delivery_failed", {
           version, reason: "email_not_sent",
         });
+        if (issueIsOpen) {
+          await logEvent(visitRow.id, bookingId, "owner", "issue_kept_open", {
+            version, reason: "email_not_sent",
+            note: "The re-sent report email did not go out, so the issue stays open.",
+          });
+        }
         logErr("send_report", "email not sent — auto-charge clock blocked, publication not journaled");
         return json(502, {
           ok: false, error: "report_email_failed",
@@ -2151,8 +2526,13 @@ export default async function handler(req: Req, res: Res) {
         // Legacy (no row): nothing durable to block the clock on, so
         // the metadata bounce flag is the only block — set it and
         // report the failure honestly instead of a silent success.
+        // B8: restore the metadata timer fields too, so the failed send
+        // does not restart the 24h clock in metadata either.
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_report_bounced]": "1",
+          "metadata[gh_report_sent_at]": prevReportSentAt,
+          "metadata[gh_report_version]": prevReportVersion,
+          "metadata[gh_state]": prevState,
         });
         logErr("send_report", "email not sent (legacy, no row)");
         return json(502, { ok: false, error: "report_email_failed" });
@@ -2182,9 +2562,23 @@ export default async function handler(req: Req, res: Res) {
           return json(502, { ok: false, error: "journal_failed", email_sent: true });
         }
         if (issueIsOpen) {
-          await logEvent(visitRow.id, bookingId, "owner", "issue_resolved", {
-            via: "report_resend", note: "Resolved by owner decision together with the re-sent report.",
-          });
+          // B8: the issue closes only now — the report email is proven
+          // sent. The row write comes first: if it fails, no
+          // issue_resolved event is journaled, so the issue stays open
+          // (and keeps blocking the timer) instead of the journal
+          // claiming a resolution the row does not reflect.
+          const closed = await dbUpdateCount("gh_visits", `id=eq.${visitRow.id}`, { issue_open: false });
+          if (closed === 1) {
+            await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+              "metadata[gh_issue_open]": "",
+              "metadata[gh_issue_reason]": "",
+            });
+            await logEvent(visitRow.id, bookingId, "owner", "issue_resolved", {
+              via: "report_resend", note: "Resolved by owner decision together with the re-sent report.",
+            });
+          } else {
+            logErr("send_report", "email sent but issue close failed — issue stays open");
+          }
         }
       }
       if (visitRow) {
@@ -2671,8 +3065,13 @@ export default async function handler(req: Req, res: Res) {
           return json(502, { ok: false, error: "stripe_error" });
         }
       }
+      // C6: with the card gone, "card_ready" would be a lie the panel
+      // keeps showing — drop that state back to awaiting_card. Any
+      // other state (approved, paid, ...) is left alone: detaching a
+      // card must never silently erase an approval or a payment.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_payment_method]": "",
+        ...(state === "card_ready" ? { "metadata[gh_state]": "awaiting_card" } : {}),
       });
       log("delete_card", { booking: bookingId });
       return json(200, { ok: true, card_deleted: true });

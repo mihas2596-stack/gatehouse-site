@@ -4,7 +4,8 @@
 // them (2026-10-24: two login endpoints pushed the count to 14 and every
 // deploy failed until they were merged here).
 //   POST { action: "send" } (or no action) -> emails a 24-hour login
-//     link to the fixed owner address (nikolajmihasenok@gmail.com). The
+//     link to the owner address (OWNER_NOTIFICATION_EMAIL env, see
+//     api/_owner_email.ts). The
 //     recipient is never taken from the caller, so the endpoint cannot be
 //     used to mail links to anyone else, and it always answers ok:true on
 //     throttle so a caller cannot probe whether a link was just sent.
@@ -17,6 +18,7 @@
 // the database is unavailable the throttle fails open — the panel itself
 // needs the database anyway, so this only matters for the send step.
 import { dbSelect, logEvent } from "./_db.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 import { mintOwnerLoginToken, mintOwnerSessionToken, verifyOwnerLoginToken } from "./_owner_auth.js";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 
@@ -39,7 +41,6 @@ const ALLOWED_ORIGINS = [
   "http://localhost:8080",
 ];
 
-const OWNER_EMAIL = "nikolajmihasenok@gmail.com";
 const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const THROTTLE_MS = 5 * 60 * 1000;
 
@@ -112,7 +113,7 @@ export default async function handler(req: Req, res: Res) {
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: FROM_EMAIL,
-        to: [OWNER_EMAIL],
+        to: [ownerNotificationEmail()],
         subject: "Gatehouse owner login link",
         text: `Open this link to enter the Gatehouse owner panel (no key needed):\n\n${link}\n\nThe link works for 24 hours. If you did not request it, ignore this email.`,
       }),

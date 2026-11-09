@@ -39,6 +39,18 @@ describe("/thank-you card states", () => {
     expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
   });
 
+  it("N23: a server-corrected price shows an Updated price note before the card step", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, booking: { first: "15", service: "Standard Cleaning", date: "2026-11-08" } }) }));
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/thank-you", state: { ...bookingState, plan: { service: "Standard Cleaning", first: 1.5, recurring: 1.5, firstIsDeep: false }, serverPriceChanged: true } }]}>
+        <ThankYou />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("One last step: save your card")).toBeInTheDocument();
+    expect(screen.getByText(/Updated price:/)).toBeInTheDocument();
+    expect(screen.getAllByText("$1.50")).toHaveLength(2);
+  });
+
   it("state C: card saved — all set, no action needed, View my visit", async () => {
     renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08", has_card: "1", card_confirmed: "1" } });
     expect(await screen.findByText(/Request received/)).toBeInTheDocument();

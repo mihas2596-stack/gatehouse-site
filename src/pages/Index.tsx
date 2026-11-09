@@ -90,7 +90,7 @@ const Index = () => {
         Self-expires with the window; no deploy needed to remove it. */}
     {globalTestCutActive() && (
       <p className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm">
-        Test pricing is active. The prices shown are reduced for payment testing.
+        Test pricing is active. The prices shown are reduced for payment testing. During this test, every home size is temporarily priced the same.
       </p>
     )}
     <SEO
@@ -210,7 +210,7 @@ const Index = () => {
               <p className="mt-2 text-base leading-relaxed text-foreground">
                 Email a photo to{" "}
                 <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline break-all">hello@gatehousehomecleaning.com</a>{" "}
-                within 24 hours after your photo report is sent. Reporting an issue within that window blocks the automatic charge for this visit. We fix it free within 72 hours after you report it. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
+                within 24 hours after your photo report is sent, or tap Report an issue on your report page for an immediate block — email is registered manually. Reporting an issue within that window blocks the automatic charge for this visit. We fix it free within 72 hours after you report it. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
               </p>
             </details>
           </div>

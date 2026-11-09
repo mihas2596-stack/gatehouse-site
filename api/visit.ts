@@ -22,7 +22,9 @@ import { emailDocument } from "./_email_copy.js";
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 import { issueStateFrom, timerBlockReason } from "./_payment_basis.js";
+import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
   type ClientEntryView, type EntryMethod,
@@ -44,6 +46,7 @@ type BookingRow = {
   entry_method?: string | null; entry_detail?: string | null; entry_notes?: string | null;
   cleaner_id?: string | null;
   cleaner_profile?: unknown;
+  stripe_customer_id?: string | null;
 };
 
 /** Cleaner work phone from the per-visit profile (v2): the row is the
@@ -138,14 +141,18 @@ function issueOpenFrom(events: BookingEvent[]): boolean {
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
+  bookingId?: string | null,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
   const list = res.ok
     ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
     : [];
-  return list.length > 0
-    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+  // C13: never take list[0] unchecked — the pick requires an exact
+  // email match and prefers the customer bound to this booking.
+  const picked = pickCustomerByEmail(list, email, bookingId);
+  return picked
+    ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
 // Rebuild the metadata view of THIS booking from its DB row + journal.
@@ -463,9 +470,20 @@ async function findCustomerByBooking(
 export type VisitState =
   | "card_needed" | "card_failed" | "awaiting_confirmation" | "confirmed"
   | "date_declined" | "report_sent" | "issue_open" | "approved" | "paid"
-  | "payment_issue" | "payment_unknown" | "cancelled";
+  | "payment_issue" | "payment_unknown" | "cancelled" | "date_passed";
 
-export function deriveVisitState(meta: Record<string, string>): VisitState {
+// B6: a visit whose date is already past is its own state. Without it a
+// stale requested/confirmed booking kept asking the client to save a card
+// for a visit that already happened, and the confirm-by deadline read as
+// a live promise. Only pre-visit states map here — cancelled, paid,
+// reported, disputed and approved bookings never become date_passed.
+function todayInNewYork(nowMs: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(nowMs));
+}
+
+export function deriveVisitState(meta: Record<string, string>, requestedDate = "", nowMs = Date.now()): VisitState {
   const state = meta["gh_state"] ?? "";
   if (state === "cancelled") return "cancelled";
   if (state === "paid") return "paid";
@@ -477,39 +495,62 @@ export function deriveVisitState(meta: Record<string, string>): VisitState {
   if (state === "payment_unknown") return "payment_unknown";
   if (state === "approved" || state === "payment_pending") return "approved";
   if (meta["gh_report_sent_at"]) return "report_sent";
+  // B6: the agreed/requested date is in the past — the visit never
+  // happened, so the page must say so instead of asking for a card.
+  const effectiveDate = meta["gh_confirmed_date"] || requestedDate;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) && effectiveDate < todayInNewYork(nowMs)) return "date_passed";
   if (meta["gh_confirmed_date"]) return "confirmed";
   if (state === "card_ready") return "awaiting_confirmation";
   if (state === "card_failed") return "card_failed";
   return "card_needed";
 }
 
+// Arrival-window start hours (Atlanta time), matching formatArrivalWindow
+// in src/lib/utils.ts and the Quote windows. "flexible" has no fixed start,
+// so it falls back to midday like an unknown window.
+const WINDOW_START_HOUR: Record<string, number> = { morning: 7, midday: 11, afternoon: 14 };
+
+export function visitWindowStartHour(window: string | undefined | null): number {
+  return WINDOW_START_HOUR[window ?? ""] ?? 12;
+}
+
 // The visit moment used for the 48h rule: the confirmed date when there
-// is one, otherwise the requested date, at midday Atlanta time.
-export function visitMomentMs(meta: Record<string, string>, requestedDate: string): number {
+// is one, otherwise the requested date, at the START of the arrival
+// window in Atlanta time. Terms §6 gives free cancellation "up to 48
+// hours before your visit" — the visit starts when the window opens, not
+// at midday. A window the code does not know (flexible / not yet
+// confirmed) keeps the old midday reading so the threshold never moves
+// on a guess.
+export function visitMomentMs(meta: Record<string, string>, requestedDate: string, windowOverride = ""): number {
   const d = meta["gh_confirmed_date"] || requestedDate || "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
-  // P12: midday in America/New_York for THIS date. A fixed -04:00
-  // offset is wrong in winter (EST is -05:00) and shifts the 48h
-  // cancel threshold by an hour, charging $25 too early. Convert the
-  // noon wall-clock reading via Intl: the offset between a UTC guess
-  // and its New York wall-clock reading is the zone offset that day.
+  const hour = visitWindowStartHour(windowOverride || meta["gh_confirmed_window"]);
+  // P12: the window-start wall-clock reading in America/New_York for
+  // THIS date. A fixed -04:00 offset is wrong in winter (EST is -05:00)
+  // and shifts the 48h cancel threshold by an hour, charging $25 too
+  // early. Convert the wall-clock reading via Intl: the offset between
+  // a UTC guess and its New York wall-clock reading is the zone offset
+  // that day.
   const [y, m, day] = d.split("-").map(Number);
-  const noonGuess = Date.UTC(y, m - 1, day, 12, 0, 0);
+  const guess = Date.UTC(y, m - 1, day, hour, 0, 0);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour12: false,
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(new Date(noonGuess));
+  }).formatToParts(new Date(guess));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
   const wallAsUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
   if (!Number.isFinite(wallAsUTC)) return NaN;
-  return noonGuess + (noonGuess - wallAsUTC);
+  return guess + (guess - wallAsUTC);
 }
 
-export function cancelFeeCents(meta: Record<string, string>, requestedDate: string, nowMs: number): number {
-  const state = deriveVisitState(meta);
+export function cancelFeeCents(meta: Record<string, string>, requestedDate: string, nowMs: number, windowOverride = ""): number {
+  const state = deriveVisitState(meta, requestedDate, nowMs);
   if (state === "cancelled" || state === "paid") return 0;
-  const visitMs = visitMomentMs(meta, requestedDate);
+  // B6: cancelling a visit whose date already passed is free — there is
+  // no visit left to miss; the $25 fee is for a live visit inside 48h.
+  if (state === "date_passed") return 0;
+  const visitMs = visitMomentMs(meta, requestedDate, windowOverride);
   if (!Number.isFinite(visitMs)) return 0;
   return visitMs - nowMs >= 48 * 3600 * 1000 ? 0 : LATE_CANCEL_FEE_CENTS;
 }
@@ -529,17 +570,23 @@ const q = (v: string | string[] | undefined): string =>
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
+  confirmedPmId?: string | null,
 ): Promise<string> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
   const res = await stripeGet(
     secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
   );
   if (!res.ok) return "";
   const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
-  const pm = list[0]?.id ?? "";
-  if (!pm) return "";
+  // C13: the booking's card_confirmed event wins; else a lone card.
+  // Several cards with no booking signal is ambiguous — no backfill
+  // of an arbitrary card (chargeVisit still prefers card_confirmed
+  // at charge time, and the choice UI asks the client).
+  const picked = pickCard(list, { confirmedPmId, cachedPmId: null });
+  if (picked.status !== "ok") return "";
+  const pm = picked.pm;
   const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
   const state = customer.metadata["gh_state"] ?? "";
   if (!state || state === "awaiting_card" || state === "card_failed") {
@@ -602,8 +649,23 @@ export default async function handler(req: Req, res: Res) {
     const row = await latestBookingRow(payload.bid);
     const events = row ? await bookingEvents(payload.bid) : [];
     let customer = boundCustomer;
+    // C13: the visit row's own stripe_customer_id, where present, is
+    // the strongest binding — resolve it directly and verify its
+    // email, before falling back to the email search.
+    if (!customer && row?.stripe_customer_id) {
+      const byRow = await resolveCustomerByRowId(
+        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+        row.stripe_customer_id, payload.email,
+      );
+      if (byRow) {
+        customer = {
+          id: byRow.id, metadata: byRow.metadata ?? {},
+          email: byRow.email ?? payload.email, name: byRow.name ?? payload.name ?? "",
+        };
+      }
+    }
     if (!customer && payload.email) {
-      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email, payload.bid);
       // Normalize: the token's own email/name are the verified fallback
       // for a customer record without them.
       if (found) {
@@ -617,7 +679,7 @@ export default async function handler(req: Req, res: Res) {
     const bound = Boolean(boundCustomer);
     if (customer) {
       try {
-        await reconcileCard(STRIPE_SECRET_KEY, customer);
+        await reconcileCard(STRIPE_SECRET_KEY, customer, confirmedPaymentMethodId(events));
       } catch {
         /* cached metadata still applies */
       }
@@ -653,7 +715,9 @@ export default async function handler(req: Req, res: Res) {
     const meta = row
       ? { ...customer.metadata, ...buildEffectiveMeta(row, events, customer.metadata["gh_payment_method"] ?? "", payload.recurring, customer.metadata["gh_state"] ?? "") }
       : customer.metadata;
-    const requestedDate = payload.date ?? "";
+    // B6: the token often carries no date (owner-minted links) — fall
+    // back to the visit row so /visit shows the date instead of blank rows.
+    const requestedDate = payload.date || row?.visit_date || "";
 
     // §3: the saved card's brand/last4 + whether THIS booking confirmed it.
     // A card on file without a card_confirmed event is a choice waiting
@@ -664,8 +728,11 @@ export default async function handler(req: Req, res: Res) {
     const cardConfirmed = Boolean(selectedCardEvent);
     if (customer.id && meta["gh_payment_method"]) {
       try {
-        const pmRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`);
-        const pm = (pmRes.data["data"] as Array<{ card?: { brand?: string; last4?: string } }> | undefined)?.[0];
+        const pmRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`);
+        const pmList = (pmRes.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
+        // C13: brand/last4 must describe THIS booking's card, not
+        // whatever card Stripe lists first.
+        const pm = pmList.find((c) => c.id === meta["gh_payment_method"]) ?? (pmList.length === 1 ? pmList[0] : undefined);
         cardBrand = String(pm?.card?.brand ?? "");
         cardLast4 = String(pm?.card?.last4 ?? "");
       } catch { /* best-effort — the choice UI falls back to no details */ }
@@ -697,7 +764,7 @@ export default async function handler(req: Req, res: Res) {
       return {
         requestId,
         ok: true,
-        state: deriveVisitState(meta),
+        state: deriveVisitState(meta, requestedDate),
         booking: {
           // Service falls back to the visit row: owner-minted and report
           // links carry no service in their payload, so without this the
@@ -709,7 +776,7 @@ export default async function handler(req: Req, res: Res) {
           first_service: (latestEvent(events, "visit_created")?.detail?.["first_service"] as string | undefined) ?? "",
           requested_date: requestedDate,
           confirmed_date: meta["gh_confirmed_date"] ?? "",
-          window: meta["gh_confirmed_window"] ?? "",
+          window: meta["gh_confirmed_window"] || row?.window || "",
           first: money(Number.isFinite(firstCents) ? firstCents : null) ?? payload.first ?? "",
           recurring: money(Number.isFinite(recCents) ? recCents : null),
         },
@@ -727,8 +794,8 @@ export default async function handler(req: Req, res: Res) {
         // issue. The timer predicate here must match the charge gate.
         charge_timer_blocked: timerBlockReason({ ...issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null), bounced: row?.report_bounced ?? false }) !== null,
         charge_timer_block_reason: timerBlockReason({ ...issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null), bounced: row?.report_bounced ?? false }),
-        cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now()),
-        cancel_fee: money(cancelFeeCents(meta, requestedDate, Date.now())) ?? "$0",
+        cancel_fee_cents: cancelFeeCents(meta, requestedDate, Date.now(), meta["gh_confirmed_window"] || row?.window || ""),
+        cancel_fee: money(cancelFeeCents(meta, requestedDate, Date.now(), meta["gh_confirmed_window"] || row?.window || "")) ?? "$0",
         cancelled_scope: meta["gh_cancel_scope"] ?? "",
         // Legacy access_notes are no longer a secret channel: entry
         // arrangements live in gh_visit_access (see entry below).
@@ -765,7 +832,9 @@ export default async function handler(req: Req, res: Res) {
         // GET. Without a request-time record, fall back to today, as
         // before. After expiry the label still names that past moment;
         // the UI renders it as overdue instead of shifting it.
-        confirm_by: meta["gh_confirmed_date"] ? "" : (() => {
+        // B6: a past date never shows the confirm-by promise — the
+        // deadline is already gone, and the date_passed banner replaces it.
+        confirm_by: deriveVisitState(meta, requestedDate) === "date_passed" || meta["gh_confirmed_date"] ? "" : (() => {
           const createdEv = latestEvent(events, "visit_created");
           const createdAt = createdEv ? new Date(createdEv.created_at) : null;
           return createdAt && !Number.isNaN(createdAt.getTime())
@@ -784,7 +853,7 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
 
-    const state = deriveVisitState(meta);
+    const state = deriveVisitState(meta, requestedDate);
     if (state === "cancelled") {
       res.status(409).json({ requestId, ok: false, error: "already_cancelled" });
       return;
@@ -793,7 +862,7 @@ export default async function handler(req: Req, res: Res) {
     const notify = async (subject: string, text: string, toClient: boolean) => {
       const RESEND_API_KEY = process.env["RESEND_API_KEY"];
       if (!RESEND_API_KEY) { notificationFailed = true; return; }
-      const to = toClient && customer.email ? [customer.email] : ["nikolajmihasenok@gmail.com"];
+      const to = toClient && customer.email ? [customer.email] : [ownerNotificationEmail()];
       try {
         const result = await fetch("https://api.resend.com/emails", {
           method: "POST",
@@ -901,7 +970,9 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ requestId, ok: false, error: "bad_date" });
         return;
       }
-      if (state !== "date_declined" && state !== "awaiting_confirmation" && state !== "confirmed") {
+      // B6: a passed date must be reschedulable — that is the whole point
+      // of the date_passed banner ("pick a new date").
+      if (state !== "date_declined" && state !== "awaiting_confirmation" && state !== "confirmed" && state !== "date_passed") {
         res.status(409).json({ requestId, ok: false, error: "cannot_reschedule_now" });
         return;
       }
@@ -930,7 +1001,7 @@ export default async function handler(req: Req, res: Res) {
         res.status(409).json({ requestId, ok: false, error: "visit_already_done" });
         return;
       }
-      const fee = cancelFeeCents(meta, requestedDate, Date.now());
+      const fee = cancelFeeCents(meta, requestedDate, Date.now(), meta["gh_confirmed_window"] || row?.window || "");
       if (row) {
         const previousStatus = row.status;
         const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.${encodeURIComponent(previousStatus ?? "requested")}`, { status: "cancelled" });
@@ -955,13 +1026,22 @@ export default async function handler(req: Req, res: Res) {
       const scopeText = scope === "stop"
         ? "This visit is cancelled. Your request to stop repeat visits is recorded. Gatehouse will confirm changes to any other separately confirmed visits."
         : "This visit is cancelled. Any other confirmed visits are unchanged. Tell us if you also want to cancel them.";
+      // S13/N24: the fee promise must match what charge_fee can
+      // actually collect — with no card on file it returns 409
+      // no_payment_method, so promising "your saved card" is false.
+      // The fee is still recorded and due; the owner follows up.
+      const hasCard = Boolean(meta["gh_payment_method"]);
       await notify(
         scope === "stop" ? "Your recurring cleanings are cancelled" : "Your visit is cancelled",
         `Hi ${(customer.name || "").trim().split(/\s+/)[0] || "there"},\n\n${scopeText}\n` +
           (fee > 0
-            ? `Because this is inside 48 hours before the visit, the $25 late-cancellation fee from our Terms applies and will be charged to your saved card.\n`
+            ? hasCard
+              ? `Because this is inside 48 hours before the visit, the $25 late-cancellation fee from our Terms applies. It is charged by hand, not automatically, and we will apply it to your saved card ourselves, so it may take a little time to appear.\n`
+              : `Because this is inside 48 hours before the visit, the $25 late-cancellation fee from our Terms applies. It is charged by hand, not automatically. There is no card on file for this booking, so we will be in touch about how to pay the fee — it is recorded and due, but we have nothing to charge it to yet.\n`
             : `No fee — you cancelled more than 48 hours before the visit.\n`) +
-          `Your saved card stays on file for future bookings; ask us any time to remove it.\n\nGatehouse Home Cleaning\n`,
+          (hasCard
+            ? `Your saved card stays on file for future bookings; ask us any time to remove it.\n\nGatehouse Home Cleaning\n`
+            : `Gatehouse Home Cleaning\n`),
         true,
       );
       await notify(`Cancelled (${scope}) — booking ${payload.bid}`, `Booking ${payload.bid} cancelled by the client. Scope: ${scope}. Fee recorded: ${fee} cents.`, false);

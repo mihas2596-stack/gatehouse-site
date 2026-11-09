@@ -190,4 +190,45 @@ describe("early reminder (4h after report)", () => {
     expect(res.body["charged"]).toBe(0);
     expect(subjects()).toEqual(["Reminder: your cleaning report is waiting"]);
   });
+
+  it("C18: a repeat client gets the early reminder again when the flag belongs to the previous booking", async () => {
+    // Same shared customer, flag set for the PREVIOUS booking (bid-old):
+    // the new visit (bid-early, 5h) must still be early-reminded.
+    store = [cust({
+      gh_early_reminded_at: new Date().toISOString(),
+      gh_early_reminder_for: "bid-old",
+    })];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(1);
+    expect(subjects()).toEqual(["Your cleaning report is ready — a quick look"]);
+    expect(store[0]!.metadata["gh_early_reminder_for"]).toBe("bid-early");
+    expect(dbEvents.some((e) => e["event"] === "early_reminder_sent")).toBe(true);
+  });
+
+  it("C18: a repeat client gets the 20h reminder again when the flag belongs to the previous booking", async () => {
+    store = [cust({
+      gh_report_sent_at: hoursAgo(25),
+      gh_reminded_at: new Date().toISOString(),
+      gh_reminder_for: "bid-old",
+    })];
+    dbRows = [visitRow(hoursAgo(25))];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(res.body["reminded"]).toBe(1);
+    expect(res.body["charged"]).toBe(0);
+    expect(store[0]!.metadata["gh_reminder_for"]).toBe("bid-early");
+  });
+
+  it("C18: a flag for THIS booking still suppresses a duplicate early reminder", async () => {
+    store = [cust({
+      gh_early_reminded_at: new Date().toISOString(),
+      gh_early_reminder_for: "bid-early",
+    })];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+  });
 });

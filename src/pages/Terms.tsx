@@ -30,30 +30,30 @@ const Terms = () => {
 
 <h2 className="font-heading text-2xl font-bold mb-4">Contents</h2>
         <ol className="list-decimal pl-6 mb-8 space-y-1">
-          <li><a href="#terms-1" className="text-primary underline">1. Agreement to Terms</a></li>
-          <li><a href="#terms-2" className="text-primary underline">2. Company Information</a></li>
-          <li><a href="#terms-3" className="text-primary underline">3. Description of Services</a></li>
-          <li><a href="#terms-4" className="text-primary underline">4. Booking, Confirmation, and Modification</a></li>
-          <li><a href="#terms-5" className="text-primary underline">5. Pricing and Payment</a></li>
-          <li><a href="#terms-6" className="text-primary underline">6. Cancellation, Rescheduling, and Lockouts</a></li>
-          <li><a href="#terms-7" className="text-primary underline">7. Service Concerns</a></li>
-          <li><a href="#terms-8" className="text-primary underline">8. Client Responsibilities</a></li>
-          <li><a href="#terms-9" className="text-primary underline">9. Services We Do Not Provide</a></li>
-          <li><a href="#terms-10" className="text-primary underline">10. Limitation of Liability</a></li>
-          <li><a href="#terms-11" className="text-primary underline">11. Indemnification</a></li>
-          <li><a href="#terms-12" className="text-primary underline">12. Disclaimers</a></li>
-          <li><a href="#terms-13" className="text-primary underline">13. Intellectual Property</a></li>
-          <li><a href="#terms-14" className="text-primary underline">14. Privacy</a></li>
-          <li><a href="#terms-15" className="text-primary underline">15. Electronic Communications</a></li>
-          <li><a href="#terms-16" className="text-primary underline">16. Dispute Resolution and Binding Arbitration</a></li>
-          <li><a href="#terms-17" className="text-primary underline">17. Governing Law and Jurisdiction</a></li>
-          <li><a href="#terms-18" className="text-primary underline">18. Severability</a></li>
-          <li><a href="#terms-19" className="text-primary underline">19. Waiver</a></li>
-          <li><a href="#terms-20" className="text-primary underline">20. Assignment</a></li>
-          <li><a href="#terms-21" className="text-primary underline">21. Force Majeure</a></li>
-          <li><a href="#terms-22" className="text-primary underline">22. Entire Agreement</a></li>
-          <li><a href="#terms-23" className="text-primary underline">23. Changes to These Terms</a></li>
-          <li><a href="#terms-24" className="text-primary underline">24. Contact</a></li>
+          <li><a href="#terms-1" className="text-primary underline">Agreement to Terms</a></li>
+          <li><a href="#terms-2" className="text-primary underline">Company Information</a></li>
+          <li><a href="#terms-3" className="text-primary underline">Description of Services</a></li>
+          <li><a href="#terms-4" className="text-primary underline">Booking, Confirmation, and Modification</a></li>
+          <li><a href="#terms-5" className="text-primary underline">Pricing and Payment</a></li>
+          <li><a href="#terms-6" className="text-primary underline">Cancellation, Rescheduling, and Lockouts</a></li>
+          <li><a href="#terms-7" className="text-primary underline">Service Concerns</a></li>
+          <li><a href="#terms-8" className="text-primary underline">Client Responsibilities</a></li>
+          <li><a href="#terms-9" className="text-primary underline">Services We Do Not Provide</a></li>
+          <li><a href="#terms-10" className="text-primary underline">Limitation of Liability</a></li>
+          <li><a href="#terms-11" className="text-primary underline">Indemnification</a></li>
+          <li><a href="#terms-12" className="text-primary underline">Disclaimers</a></li>
+          <li><a href="#terms-13" className="text-primary underline">Intellectual Property</a></li>
+          <li><a href="#terms-14" className="text-primary underline">Privacy</a></li>
+          <li><a href="#terms-15" className="text-primary underline">Electronic Communications</a></li>
+          <li><a href="#terms-16" className="text-primary underline">Dispute Resolution and Binding Arbitration</a></li>
+          <li><a href="#terms-17" className="text-primary underline">Governing Law and Jurisdiction</a></li>
+          <li><a href="#terms-18" className="text-primary underline">Severability</a></li>
+          <li><a href="#terms-19" className="text-primary underline">Waiver</a></li>
+          <li><a href="#terms-20" className="text-primary underline">Assignment</a></li>
+          <li><a href="#terms-21" className="text-primary underline">Force Majeure</a></li>
+          <li><a href="#terms-22" className="text-primary underline">Entire Agreement</a></li>
+          <li><a href="#terms-23" className="text-primary underline">Changes to These Terms</a></li>
+          <li><a href="#terms-24" className="text-primary underline">Contact</a></li>
         </ol>
 
                 <h2 id="terms-1" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">1. Agreement to Terms</h2>

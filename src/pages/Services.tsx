@@ -4,7 +4,6 @@ import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
 import { type ServiceKey } from "@/config/pricing";
 import { PRICES, ADDONS , fmtPrice, globalTestCutActive, scaleTestPrice} from "@/config/calculator";
-import { useEffect, useState } from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 type ServiceCard = {
@@ -60,10 +59,14 @@ const Services = () => {
   // Owner test sessions (a verified tp1 token on the quote page sets this
   // flag for the tab) scale these cells to match the calculator — so one
   // regime never shows two different prices for the same add-on.
-  const [testPricing, setTestPricing] = useState(false);
-  useEffect(() => {
-    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive()); } catch { /* private mode */ }
-  }, []);
+  // Synchronous at render, NOT useEffect: the prerendered HTML must show
+  // the same prices as the live page. A client-only flag starts false
+  // during prerender, so the served page showed real prices while the
+  // live page showed test prices (audit B1). sessionStorage is absent
+  // during prerender — the try/catch falls back to the global window.
+  const testPricing = (() => {
+    try { return sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive(); } catch { return globalTestCutActive(); }
+  })();
   const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
   return (
     <div className="page-shell">
@@ -85,7 +88,7 @@ const Services = () => {
       {testPricing && (
         <div className="container">
           <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
-            Test booking: prices on this page are reduced for a payment test.
+            Test booking: prices on this page are reduced for a payment test. During this test, every home size is temporarily priced the same.
           </p>
         </div>
       )}

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { dbRpc, dbSelectStrict, logEventStrict } from "./_db.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 
 export type ResendEmailData = {
   email_id?: string;
@@ -11,7 +12,6 @@ export type ResendEmailData = {
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const inboxDomain = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.resend\.app$/;
-const ownerEmail = "nikolajmihasenok@gmail.com";
 
 function replyConfig(): { domain: string; secret: string } | null {
   const domain = (process.env.RESEND_REPORT_REPLY_DOMAIN ?? "").trim().toLowerCase();
@@ -97,7 +97,7 @@ export async function processReportReply(data?: ResendEmailData): Promise<Webhoo
       "Idempotency-Key": `report-reply-owner/${visitId}/${emailId}`,
     },
     body: JSON.stringify({
-      from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>", to: [ownerEmail],
+      from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>", to: [ownerNotificationEmail()],
       reply_to: sender, subject: "Customer reply to a cleaning report — review needed",
       text: [statusText, `Booking: ${bookingId}`, `From: ${sender}`, `Subject: ${subject || "(no subject)"}`,
         `Open the original under Receiving in Resend: https://resend.com/emails\nMessage ID: ${emailId}`,

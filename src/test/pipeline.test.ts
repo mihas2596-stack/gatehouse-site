@@ -35,7 +35,8 @@ describe("checklist sanitizing (server never trusts the cleaner payload)", () =>
     expect(sanitizeChecklist({ rooms: [{ name: "K", items: [{ done: true }] }] })).toBeNull();
   });
   it("forces done to a strict boolean", () => {
-    const out = sanitizeChecklist({ rooms: [{ name: "K", items: [{ label: "a", done: "yes" }] }] });
+    // B7: the fixture room needs a real (≥2-letter) name — "K" is rejected now.
+    const out = sanitizeChecklist({ rooms: [{ name: "Kitchen", items: [{ label: "a", done: "yes" }] }] });
     expect(out!.rooms[0].items[0].done).toBe(false);
   });
 });

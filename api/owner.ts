@@ -11,7 +11,7 @@ import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
-import { loadClientPhone } from "./_client_contact.js";
+import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 
 // O3: a payment failure is current only if no later success supersedes
 // it and the visit is not paid. Any historical payment_failed event used
@@ -343,6 +343,39 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const a of apprs) approved.add(a.visit_id);
     }
+    // C3 (list): card signal from the journal, batched like the other
+    // row signals — one query, no per-row Stripe call. The charge path
+    // itself prefers the latest `card_confirmed` event's payment method,
+    // so this is the same fact the server would charge with.
+    // LIMIT: `delete_card` detaches at Stripe and clears Stripe metadata
+    // without writing a journal event, so a detached card still reads
+    // "Card ready" here. Live card state exists only in Stripe customer
+    // metadata (`gh_payment_method`), which the list cannot read without
+    // one Stripe call per row (N+1). The detail view's live `status`
+    // check stays the authority on the card; this badge is the
+    // journal's view, not Stripe's.
+    const cardConfirmed = new Set<string>();
+    if (ids.length > 0) {
+      const cards = await dbSelect<{ visit_id: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.card_confirmed&limit=500`,
+      );
+      for (const c of cards) cardConfirmed.add(c.visit_id);
+    }
+    // N9 (list): client phone for search — also a batched journal read
+    // (`client_contact` events, latest per visit), same pattern as above.
+    const clientPhone = new Map<string, string>();
+    if (ids.length > 0) {
+      const contacts = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.client_contact&order=created_at.desc&limit=500`,
+      );
+      for (const c of contacts) {
+        if (clientPhone.has(c.visit_id)) continue;
+        const ph = normalizeClientPhone(c.detail?.["phone"]);
+        if (ph) clientPhone.set(c.visit_id, ph);
+      }
+    }
     return json(200, {
       ok: true,
       next_offset: page.length > 100 ? offset + 100 : null,
@@ -353,6 +386,8 @@ export default async function handler(req: Req, res: Res) {
         visit_confirmed: confirmed.has(v.id),
         request_approved: approved.has(v.id),
         entry_agreed: entryAgreed.has(v.id),
+        card_confirmed: cardConfirmed.has(v.id),
+        client_phone: clientPhone.get(v.id) ?? null,
       })),
     });
   } catch (err) {

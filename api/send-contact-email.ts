@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
 import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
-import { mintOwnerLoginToken } from "./_owner_auth.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
@@ -352,7 +352,6 @@ function validServiceDate(value: string): boolean {
 // Env required: RESEND_API_KEY
 
 const RESEND_API = "https://api.resend.com/emails";
-const OWNER_EMAIL = "nikolajmihasenok@gmail.com";
 const FROM_OWNER = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const FROM_AUTO = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const REPLY_TO_AUTO = "hello@gatehousehomecleaning.com";
@@ -862,23 +861,15 @@ export default async function handler(req: Req, res: Res) {
     const row = (label: string, value: string) =>
       `<tr><td style="padding: 8px 0; font-weight: bold; color: #555;">${label}:</td><td style="padding: 8px 0;">${value}</td></tr>`;
 
-    // Owner order 2026-10-24: every request email carries a one-click owner
-    // panel login (ol token, 24h) so the cabinet reaches the owner inbox
-    // the moment a client books — no key copy needed. If the link expired,
-    // the /owner "Send login link" button issues a fresh one.
-    const ownerLoginLink = isQuote && process.env["ADMIN_TOKEN"]
-      ? `https://www.gatehousehomecleaning.com/owner?ol=${mintOwnerLoginToken(process.env["ADMIN_TOKEN"], Math.floor(Date.now() / 1000))}`
-      : "";
+    // C20: no one-click owner login in routine request emails — a
+    // forwarded/leaked inbox message used to carry a 24h panel token.
+    // The owner enters the panel with the "Send login link" button in
+    // /owner itself (POST /api/owner-auth { action: "send" }).
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background:${testScale || cutScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale || cutScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale || cutScale ? "#8B4513" : "#444"};">
           ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at reduced test prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
-        ${isQuote && ownerLoginLink ? `
-        <div style="background:#EEF6EE;border:1px solid #7FB069;border-radius:6px;padding:14px 18px;margin-bottom:18px;">
-          <p style="margin:0 0 10px;font-weight:bold;color:#2E5E2E;">Owner panel — one-click login (valid 24 hours, no key needed)</p>
-          <a href="${ownerLoginLink}" style="display:inline-block;background:#7FB069;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;">Open owner panel</a>
-        </div>` : ""}
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
         </h2>
@@ -912,7 +903,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
     try {
       const sent = await sendEmail(RESEND_API_KEY, {
         from: FROM_OWNER,
-        to: [OWNER_EMAIL],
+        to: [ownerNotificationEmail()],
         reply_to: email || undefined,
         subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
         html: htmlContent,
@@ -974,8 +965,12 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
                 signal: AbortSignal.timeout(10000),
               });
               if (sr.ok) {
-                const sd = (await sr.json()) as { data?: { id: string }[] };
-                const cid = sd.data?.[0]?.id;
+                const sd = (await sr.json()) as { data?: { id: string; email?: string }[] };
+                // C13: the search can return a near-matching email —
+                // only use the record whose email matches exactly.
+                // (Display hint only: which save-card email variant to send.)
+                const cid = sd.data?.find((c) => typeof c.email === "string"
+                  && c.email.trim().toLowerCase() === (email ?? "").trim().toLowerCase())?.id;
                 if (cid) {
                   const pr = await fetch(`https://api.stripe.com/v1/customers/${cid}/payment_methods?type=card&limit=1`, {
                     headers: { Authorization: `Bearer ${sk}` },
@@ -1090,10 +1085,16 @@ hello@gatehousehomecleaning.com`;
       log("customer_confirmation", "skipped_no_email");
     }
 
+    // N23: the response carries the server-verified totals, so the
+    // client never learns a replaced price only from the email or the
+    // save-card step. The browser price is still never trusted for the
+    // signed token — only the values are now visible to the caller.
     return json(200, {
       ok: true,
       success: true,
       customerEmailSent,
+      ...(serverFirst ? { server_first: serverFirst } : {}),
+      ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
       ...(bookingId ? { booking_id: bookingId } : {}),
       ...(bookingToken ? { bt: bookingToken } : {}),
     });

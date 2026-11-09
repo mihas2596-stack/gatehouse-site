@@ -34,8 +34,9 @@ import { hashToken } from "../../api/_db";
 //    transition writes both, so this is a synthetic-state quirk, and
 //    the oracle encodes the code, not the wish.
 //  /cleaner: valid -> 200 with this visit; expired -> 410
-//    link_expired; rotated/invalid -> 404 invalid_link with no visit
-//    data leaked.
+//    link_expired; rotated/invalid -> 200 invalid_link with no visit
+//    data leaked (N19: unified with /report and /visit, which also
+//    answer invalid_link with 200).
 
 const BID = "bid-matrix-cab";
 const EMAIL = "client@example.com";
@@ -293,7 +294,7 @@ describe("cabinet matrix", () => {
               } else if (link === "expired") {
                 if (cl.code !== 410 || cl.body["error"] !== "link_expired") failures.push(`${key} /cleaner expired code ${cl.code} ${JSON.stringify(cl.body["error"])}`);
               } else {
-                if (cl.code !== 404 || cl.body["error"] !== "invalid_link") failures.push(`${key} /cleaner ${link} code ${cl.code} ${JSON.stringify(cl.body["error"])}`);
+                if (cl.code !== 200 || cl.body["error"] !== "invalid_link") failures.push(`${key} /cleaner ${link} code ${cl.code} ${JSON.stringify(cl.body["error"])}`);
                 if (flat.includes("2027-01-15") || flat.includes("Casey")) failures.push(`${key} /cleaner ${link} leaked visit data`);
               }
             }

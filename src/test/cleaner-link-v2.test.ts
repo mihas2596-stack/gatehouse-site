@@ -554,10 +554,14 @@ describe("cleaner cabinet v2 verification", () => {
     const token = issueV2ForVisit("aabbccddeeff00112233445566778899");
     const parts = token.split(".");
     const forged = `${parts[0]}.${parts[1]}.${parts[2]}.${parts[3].slice(0, -1)}${parts[3].endsWith("A") ? "B" : "A"}`;
-    expect((await get({ ct: forged })).code).toBe(404);
+    const forgedRes = await get({ ct: forged });
+    expect(forgedRes.code).toBe(200);
+    expect(forgedRes.body["error"]).toBe("invalid_link");
     // Replace: row now carries a new issuance; the old token is dead.
     issueV2ForVisit("00112233445566778899aabbccddeeff");
-    expect((await get({ ct: token })).code).toBe(404);
+    const replacedRes = await get({ ct: token });
+    expect(replacedRes.code).toBe(200);
+    expect(replacedRes.body["error"]).toBe("invalid_link");
     expect(openedEvents).toBe(0);
   });
 
@@ -584,7 +588,8 @@ describe("cleaner cabinet v2 verification", () => {
     vi.stubEnv("CLEANER_LINK_SECRET", "");
     vi.stubEnv("ADMIN_TOKEN", "");
     const r = await get({ ct: token });
-    expect(r.code).toBe(404);
+    expect(r.code).toBe(200);
+    expect(r.body["error"]).toBe("invalid_link");
     expect(openedEvents).toBe(0);
   });
 

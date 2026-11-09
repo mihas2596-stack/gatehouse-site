@@ -76,7 +76,11 @@ describe("client phone repair and assigned cleaner access", () => {
     expect((await save("7705550100", "")).code).toBe(401);
     expect((await save("123")).code).toBe(400);
     expect(contacts).toHaveLength(0);
-    expect((await view("wrong-token-that-is-long-enough")).code).toBe(404);
+    // N19: invalid cleaner links are unified to 200 invalid_link
+    // (api/cleaner.ts) — a wrong token is not a 404.
+    const badLink = await view("wrong-token-that-is-long-enough");
+    expect(badLink.code).toBe(200);
+    expect(badLink.body["error"]).toBe("invalid_link");
   });
   it("does not claim a failed write succeeded", async () => {
     failWrite = true;

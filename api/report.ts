@@ -23,8 +23,10 @@ import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypt
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom } from "./_payment_basis.js";
+import { ownerNotificationEmail } from "./_owner_email.js";
 
 import { chargeVisit } from "./_payment_obligation.js";
+import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -38,10 +40,12 @@ type BookingRow = {
   amount_cents: number | null; report_sent_at: string | null;
   report_status: string | null; receipt_email_id?: string | null;
   report_bounced: boolean | null; cleaner_name: string | null;
+  visit_date?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
   checklist?: Checklist | null;
+  stripe_customer_id?: string | null;
 };
-type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
+type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string; actor?: string };
 // RA04: strict loaders that tell "no row" apart from "the DB could
 // not be read". A state-changing POST must fail closed on a read
 // error, never silently fall back to shared customer metadata.
@@ -73,17 +77,42 @@ function issueOpenFrom(events: BookingEvent[]): boolean {
   const resolved = latestEvent(events, "issue_resolved");
   return !resolved || resolved.created_at < opened.created_at;
 }
+
+// C26 / Terms §7 + §10.2: the two complaint windows. §7: a missed-item
+// issue must be reported within 24h after the photo report is sent.
+// §10.2: a damage claim must be submitted within 48h of service
+// completion, else it is waived. No completion timestamp is stored, so
+// completion is the END of the visit day (visit_date, UTC); when the
+// visit date is unknown the report publication stands in for it. A
+// window is enforced only when its anchor parses — an unparseable
+// anchor fails open (the complaint is accepted), never closed.
+const REPORT_ISSUE_WINDOW_MS = 24 * 3600 * 1000;
+const DAMAGE_CLAIM_WINDOW_MS = 48 * 3600 * 1000;
+function reportIssueWindowEnds(sentAt: string | null): number | null {
+  const sentMs = Date.parse(sentAt ?? "");
+  return Number.isFinite(sentMs) ? sentMs + REPORT_ISSUE_WINDOW_MS : null;
+}
+function damageClaimWindowEnds(row: BookingRow | null, sentAt: string | null): number | null {
+  const dayMs = Date.parse(row?.visit_date ?? "");
+  if (Number.isFinite(dayMs)) return dayMs + 24 * 3600 * 1000 + DAMAGE_CLAIM_WINDOW_MS;
+  const sentMs = Date.parse(sentAt ?? "");
+  return Number.isFinite(sentMs) ? sentMs + DAMAGE_CLAIM_WINDOW_MS : null;
+}
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
+  bookingId?: string | null,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
   const list = res.ok
     ? ((res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [])
     : [];
-  return list.length > 0
-    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+  // C13: never take list[0] unchecked — the pick requires an exact
+  // email match and prefers the customer bound to this booking.
+  const picked = pickCustomerByEmail(list, email, bookingId);
+  return picked
+    ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
 function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<string, string> {
@@ -132,6 +161,19 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_issue_open: issueOpen ? "1" : "",
     gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
+    // C10: whose words is the reason? Only a client-filed issue
+    // (journal actor "client", filed from the report page) may ever
+    // render as "You told us". An owner-opened dispute (actor
+    // "owner") and the report-email auto-issue (actor "client" but
+    // via "report_email" — canned text, not the client's words) are
+    // operator notes. Unknown (no journal, e.g. the legacy
+    // Stripe-metadata fallback) is "" — the UI treats anything but
+    // "client" as an operator note.
+    gh_issue_source: !issueOpen
+      ? ""
+      : opened?.actor === "client" && opened.detail?.["via"] !== "report_email"
+        ? "client"
+        : "operator",
     gh_issue_room: issueOpen ? evStr(opened, "room") : "",
     gh_issue_resolved_at: resolved && !issueOpen ? resolved.created_at : "",
     gh_reclean_date: resolved && !issueOpen ? evStr(resolved, "reclean_date") : "",
@@ -358,21 +400,27 @@ async function reconcilePaymentMethod(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
   meta: Record<string, string>,
-): Promise<string> {
+  confirmedPmId?: string | null,
+): Promise<{ pm: string | null; ambiguous: boolean }> {
   const existing = meta["gh_payment_method"] ?? "";
-  if (existing) return existing;
+  if (existing) return { pm: existing, ambiguous: false };
   const res = await stripeGet(
     secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
   );
-  if (!res.ok) return "";
+  if (!res.ok) return { pm: null, ambiguous: false };
   const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
-  const pm = list[0]?.id ?? "";
-  if (!pm) return "";
+  // C13: the booking's card_confirmed event wins; else a lone card.
+  // Several cards with no booking signal is ambiguous — the client
+  // must confirm a card, not be charged on a guessed one.
+  const picked = pickCard(list, { confirmedPmId, cachedPmId: null });
+  if (picked.status === "ambiguous") return { pm: null, ambiguous: true };
+  if (picked.status !== "ok") return { pm: null, ambiguous: false };
+  const pm = picked.pm;
   await stripePost(secretKey, `/customers/${customer.id}`, { "metadata[gh_payment_method]": pm });
   customer.metadata["gh_payment_method"] = pm;
   meta["gh_payment_method"] = pm;
-  return pm;
+  return { pm, ambiguous: false };
 }
 
 type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown";
@@ -515,8 +563,23 @@ export default async function handler(req: Req, res: Res) {
       events = evRes.events;
     }
     let customer = boundCustomer;
+    // C13: the visit row's own stripe_customer_id, where present, is
+    // the strongest binding — resolve it directly and verify its
+    // email, before falling back to the email search.
+    if (!customer && row?.stripe_customer_id) {
+      const byRow = await resolveCustomerByRowId(
+        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+        row.stripe_customer_id, payload.email,
+      );
+      if (byRow) {
+        customer = {
+          id: byRow.id, metadata: byRow.metadata ?? {},
+          email: byRow.email ?? payload.email, name: byRow.name ?? payload.name ?? "",
+        };
+      }
+    }
     if (!customer && payload.email) {
-      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email);
+      const found = await findCustomerByEmail(STRIPE_SECRET_KEY, payload.email, payload.bid);
       // Normalize: the token's own email/name are the verified fallback
       // for a customer record without them.
       if (found) {
@@ -614,7 +677,10 @@ export default async function handler(req: Req, res: Res) {
     const timerBounced = (row?.report_bounced ?? false) || meta["gh_report_bounced"] === "1";
     const view = () => {
       const sentAt = meta["gh_report_sent_at"] ?? null;
-      const deadline = sentAt
+      // N20: a bounced report never starts the 24h clock (the timer
+      // is blocked), so there is no deadline to show — a deadline
+      // computed from the stale report_sent_at would be a dead one.
+      const deadline = sentAt && !timerBounced
         ? new Date(Date.parse(sentAt) + 24 * 3600 * 1000).toISOString()
         : null;
       const items = dbPhotoItems ?? readPhotoItems(meta);
@@ -671,6 +737,10 @@ export default async function handler(req: Req, res: Res) {
         // moved AND the complaint is still open (RA07 honest state).
         paid: row?.status === "paid" || meta["gh_state"] === "paid",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
+        // C10: "client" = the client's own words ("You told us");
+        // "operator" or "" = an operator note — never render it as
+        // the client's words.
+        issue_source: meta["gh_issue_open"] === "1" ? meta["gh_issue_source"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
         // §10/§11: the cleaner's completed checklist travels with the
         // report — the client sees what was actually done, room by room.
@@ -712,6 +782,25 @@ export default async function handler(req: Req, res: Res) {
         res.status(200).json({ ...view(), already: true });
         return;
       }
+      // C26: a post-payment complaint is timely under EITHER Terms
+      // window — §7 (24h after the report) or §10.2 (48h after service
+      // completion). The endpoint cannot tell a missed-item report from
+      // a damage claim, so it rejects only a complaint outside BOTH.
+      const postpaySentAt = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
+      const postpayReportEnds = reportIssueWindowEnds(postpaySentAt);
+      const postpayDamageEnds = damageClaimWindowEnds(row, postpaySentAt);
+      const postpayTimely =
+        (postpayReportEnds !== null && Date.now() <= postpayReportEnds) ||
+        (postpayDamageEnds !== null && Date.now() <= postpayDamageEnds);
+      const postpayEnforceable = postpayReportEnds !== null || postpayDamageEnds !== null;
+      if (postpayEnforceable && !postpayTimely) {
+        res.status(409).json({
+          requestId, ok: false, error: "claim_window_expired",
+          report_window_ends: postpayReportEnds !== null ? new Date(postpayReportEnds).toISOString() : null,
+          damage_window_ends: postpayDamageEnds !== null ? new Date(postpayDamageEnds).toISOString() : null,
+        });
+        return;
+      }
       const updPost = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_postpay_issue]": "1",
         "metadata[gh_postpay_issue_reason]": reason.slice(0, 200),
@@ -732,6 +821,32 @@ export default async function handler(req: Req, res: Res) {
           await logEvent(vrows[0].id, payload.bid, "client", "postpay_issue", {
             room: room.slice(0, 60), reason: reason.slice(0, 200),
           });
+          if (photoB64) {
+            // H18: a post-payment photo is stored with the visit like a
+            // pre-payment one, so it stays visible in the owner review
+            // instead of living only in an email attachment.
+            try {
+              const bytes = Buffer.from(photoB64, "base64");
+              if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
+                const path = `visits/${vrows[0].id}/client-issue/${Date.now()}.jpg`;
+                if (await storagePut(path, bytes, "image/jpeg")) {
+                  const inserted = await dbInsert("gh_photos", {
+                    visit_id: vrows[0].id,
+                    room: room || "Client photo",
+                    storage_path: path,
+                    kind: "client",
+                    note: reason.slice(0, 300) || null,
+                  });
+                  await logEvent(vrows[0].id, payload.bid, "system",
+                    inserted ? "client_photo_stored" : "client_photo_store_failed", {});
+                } else {
+                  await logEvent(vrows[0].id, payload.bid, "system", "client_photo_store_failed", {});
+                }
+              }
+            } catch {
+              /* the emailed copy still reaches the owner */
+            }
+          }
         }
       }
       const RESEND_PP = process.env["RESEND_API_KEY"];
@@ -742,13 +857,17 @@ export default async function handler(req: Req, res: Res) {
             headers: { Authorization: `Bearer ${RESEND_PP}`, "Content-Type": "application/json" },
             body: JSON.stringify({
               from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-              to: ["nikolajmihasenok@gmail.com"],
+              to: [ownerNotificationEmail()],
               subject: `POST-PAYMENT issue reported — ${customer.name ?? payload.bid}`,
               text:
                 `A client reported an issue AFTER the visit was paid.\n\n` +
-                `Booking: ${payload.bid}\nRoom: ${room}\nWhat they said: ${reason}\n\n` +
-                `The payment is complete — nothing was reversed automatically. ` +
+                `Booking: ${payload.bid}\nRoom: ${room}\nWhat they said: ${reason}\n` +
+                (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) +
+                `\nThe payment is complete — nothing was reversed automatically. ` +
                 `Review and decide: offer a re-clean or a refund, and reply to the client.`,
+              ...(photoB64
+                ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
+                : {}),
             }),
             signal: AbortSignal.timeout(15000),
           });
@@ -856,7 +975,17 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
-      const paymentMethod = await reconcilePaymentMethod(STRIPE_SECRET_KEY, customer, meta);
+      const cardChoice = await reconcilePaymentMethod(
+        STRIPE_SECRET_KEY, customer, meta, confirmedPaymentMethodId(events),
+      );
+      if (cardChoice.ambiguous) {
+        // Several cards on file, none confirmed for this booking: ask
+        // the client to pick one — never charge a guessed card. No
+        // failure is recorded: a card exists, the choice is missing.
+        res.status(409).json({ ...view(), error: "card_confirmation_required" });
+        return;
+      }
+      const paymentMethod = cardChoice.pm;
       if (!paymentMethod) {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
           "metadata[gh_state]": "payment_failed",
@@ -967,6 +1096,22 @@ export default async function handler(req: Req, res: Res) {
       res.status(200).json({ ...view(), already: true });
       return;
     }
+    // C26 / Terms §7: the "Report an issue" button on the report page
+    // is the §7 mechanism — "within 24 hours after your photo report
+    // is sent". After that window the in-app issue is refused; a late
+    // complaint still has the email path (Terms §10.2: in writing to
+    // hello@), which the owner registers as a dispute. The current
+    // publication (row, else metadata) is the anchor, so a re-sent
+    // report restarts the window.
+    const issueSentAt = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
+    const issueWindowEnds = reportIssueWindowEnds(issueSentAt);
+    if (issueWindowEnds !== null && Date.now() > issueWindowEnds) {
+      res.status(409).json({
+        requestId, ok: false, error: "issue_window_expired",
+        report_window_ends: new Date(issueWindowEnds).toISOString(),
+      });
+      return;
+    }
     // RA07: if a charge is already in flight, the issue is still
     // recorded (it blocks every FUTURE charge and stays open), but the
     // client must not be promised a pause of a payment that may
@@ -996,6 +1141,7 @@ export default async function handler(req: Req, res: Res) {
       "metadata[gh_issue_open]": "1",
       "metadata[gh_issue_ever]": "1",
       "metadata[gh_issue_reason]": reason.slice(0, 200),
+      "metadata[gh_issue_source]": "client",
       "metadata[gh_issue_room]": room.slice(0, 60),
       "metadata[gh_report_client_action]": "issue",
       "metadata[gh_report_responded_at]": nowIso,
@@ -1009,7 +1155,7 @@ export default async function handler(req: Req, res: Res) {
     }
     Object.assign(meta, {
       gh_state: "issue_open", gh_issue_open: "1",
-      gh_issue_reason: reason.slice(0, 200), gh_issue_room: room.slice(0, 60),
+      gh_issue_reason: reason.slice(0, 200), gh_issue_source: "client", gh_issue_room: room.slice(0, 60),
     });
     if (row) {
       // Persist the customer's own photo on the visit (it is also emailed
@@ -1066,7 +1212,7 @@ export default async function handler(req: Req, res: Res) {
       // Owner: full detail + the client's photo when one was attached.
       await sendMail({
         from: "Gatehouse site <info@gatehousehomecleaning.com>",
-        to: ["nikolajmihasenok@gmail.com"],
+        to: [ownerNotificationEmail()],
         reply_to: "hello@gatehousehomecleaning.com",
         subject: `Issue reported — booking ${payload.bid}`,
         text:

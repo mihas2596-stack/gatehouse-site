@@ -12,8 +12,32 @@
   ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/save-card",
       "destination": "/"
+    },
+    {
+      "source": "/cleaner",
+      "destination": "/"
+    },
+    {
+      "source": "/owner",
+      "destination": "/"
+    },
+    {
+      "source": "/report",
+      "destination": "/"
+    },
+    {
+      "source": "/visit",
+      "destination": "/"
+    },
+    {
+      "source": "/areas/:city",
+      "destination": "/"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api/not-found"
     }
   ],
   "functions": {
@@ -28,6 +52,41 @@
     {
       "source": "/founding",
       "destination": "/quote",
+      "permanent": true
+    },
+    {
+      "source": "/reviews",
+      "destination": "/quote",
+      "permanent": true
+    },
+    {
+      "source": "/gallery",
+      "destination": "/quote",
+      "permanent": true
+    },
+    {
+      "source": "/availability",
+      "destination": "/quote",
+      "permanent": true
+    },
+    {
+      "source": "/services/standard-cleaning",
+      "destination": "/services",
+      "permanent": true
+    },
+    {
+      "source": "/services/deep-cleaning",
+      "destination": "/services",
+      "permanent": true
+    },
+    {
+      "source": "/services/move-in-out-cleaning",
+      "destination": "/services",
+      "permanent": true
+    },
+    {
+      "source": "/services/recurring-plans",
+      "destination": "/services",
       "permanent": true
     }
   ]

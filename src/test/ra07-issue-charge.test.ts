@@ -5,11 +5,15 @@ import visitHandler from "../../api/visit";
 import bookingAction from "../../api/booking-action";
 import { signBooking } from "../../api/create-checkout-session";
 
-// RA07: an issue racing a charge. The claim is the boundary: a charge
-// that already claimed (row payment_pending) may still complete, but
-// the issue stays open and the client must NOT be promised a pause —
-// the email subject says so. An issue that lands first blocks the
-// charge outright (claim CAS sees issue_open).
+// C11 (09.11.2026): the old behavior — "a charge that already
+// claimed may still complete, the dispute stays open" — is CHANGED.
+// An issue landing after the claim but BEFORE the intent is created
+// now blocks the charge: chargeVisit re-checks the issue on fresh
+// data just before the create, releases the claim, and creates no
+// intent. Only an issue landing after the Stripe create call has
+// started can still complete (the call is already in flight); that
+// residual window is covered by the next test, and the dispute
+// stays open there too.
 
 const BID = "bid-ra07-1";
 const EMAIL = "client@example.com";
@@ -29,6 +33,9 @@ let evSeq: number;
 let blockPiCreate: Promise<void> | null;
 let piCreateReached: boolean;
 let piCreateParkedOnce: boolean;
+let blockReconcile: Promise<void> | null;
+let reconcileReached: boolean;
+let reconcileParkedOnce: boolean;
 
 function res(code: number, body: unknown) {
   return { ok: code >= 200 && code < 300, status: code, json: async () => body, text: async () => JSON.stringify(body) };
@@ -87,6 +94,11 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       return res(200, { ...cust, metadata: cust.metadata });
     }
     if (u.pathname === "/v1/payment_intents/search" && method === "GET") {
+      if (blockReconcile && !reconcileParkedOnce) {
+        reconcileParkedOnce = true;
+        reconcileReached = true;
+        await blockReconcile;
+      }
       const q = u.searchParams.get("query") ?? "";
       const bidM = q.match(/gh_booking_id'\]:'([^']+)'/);
       const data = piCalls
@@ -232,13 +244,51 @@ beforeEach(() => {
   rows = []; evts = []; customers = [];
   piCalls = []; resendSubjects = []; evSeq = 0;
   blockPiCreate = null; piCreateReached = false; piCreateParkedOnce = false;
+  blockReconcile = null; reconcileReached = false; reconcileParkedOnce = false;
   vi.stubGlobal("fetch", vi.fn(fetchMock));
 });
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("RA07 issue vs charge barrier", () => {
-  it("charge claimed, then issue: charge completes, dispute stays open, no paused promise", async () => {
+  it("charge claimed, then issue before intent creation: charge is blocked, no intent, dispute stays open", async () => {
+    const sentAt = sentWorld();
+    const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
+    let release!: () => void;
+    blockReconcile = new Promise<void>((r) => { release = r; });
+    const approveP = call(reportHandler, {
+      method: "POST", headers: {},
+      body: { bt, action: "approve", seen_publication_id: sentAt },
+    });
+    await waitFor(() => reconcileReached, "charge parked at reconcile (claim held, no intent yet)");
+    expect(rows[0]["status"]).toBe("payment_pending");
+    const issue = await call(reportHandler, {
+      method: "POST", headers: {},
+      body: { bt, action: "issue", room: "Kitchen", reason: "Missed spot" },
+    });
+    expect(issue.code).toBe(200);
+    expect(issue.body["payment_in_flight"]).toBe(true);
+    expect(rows[0]["issue_open"]).toBe(true);
+    expect(rows[0]["issue_ever"]).toBe(true);
+    // Honest subject: no "paused" promise for an in-flight payment.
+    expect(resendSubjects).toContain("We received your report — a payment was already in progress");
+    expect(resendSubjects).not.toContain("We received your report — the charge is paused");
+    release();
+    const approve = await approveP;
+    // C11: the fresh re-check before the create sees the issue —
+    // the charge is refused, the claim is released, no intent exists.
+    expect(approve.code).toBe(409);
+    expect(approve.body["error"]).toBe("issue_open");
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["status"]).toBe("report_sent");
+    // The dispute is NOT cleared by the blocked payment.
+    expect(rows[0]["issue_open"]).toBe(true);
+    expect(evts.some((e) => e.event === "issue_opened")).toBe(true);
+    expect(evts.some((e) => e.event === "payment_blocked_by_issue")).toBe(true);
+    expect(evts.some((e) => e.event === "payment_succeeded")).toBe(false);
+  });
+
+  it("issue landing after the intent create started still completes (residual window), dispute stays open", async () => {
     const sentAt = sentWorld();
     const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
     let release!: () => void;
@@ -401,6 +451,9 @@ describe("RA07 issue vs charge barrier", () => {
     }];
     evts = [
       { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: sentAt },
+      // C16: a 30h-old report carries its 20h reminder, so the manual
+      // timer-basis charges pass the reminder guard.
+      { visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: new Date(Date.now() - 10 * 3600 * 1000).toISOString() },
     ];
     let release!: () => void;
     blockPiCreate = new Promise<void>((r) => { release = r; });

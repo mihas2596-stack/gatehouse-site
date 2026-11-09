@@ -7,7 +7,7 @@
 // with 409. Queue, row, and card must agree, so these tests pin the
 // shared rule in src/lib/ownerActions.ts.
 import { describe, it, expect, vi } from "vitest";
-import { attentionItems, nextActionFor, stripeLabel } from "@/lib/ownerActions";
+import { attentionItems, nextActionFor, stripeLabel, visitBadgeLabel } from "@/lib/ownerActions";
 
 const base = {
   status: "requested",
@@ -122,6 +122,24 @@ describe("no raw machine values leak into owner UI", () => {
     expect(stripeLabel("payment_pending")).toBe("Payment pending");
     expect(stripeLabel("report_sent")).toBe("Report sent");
     expect(stripeLabel("")).toBe("—");
+  });
+});
+
+// C7: a "confirmed" row with a sent report must badge as "Report
+// sent" — the visit is past confirmation and waiting on the client.
+// Terminal rows keep their own label.
+describe("visitBadgeLabel follows the report, not just the row status", () => {
+  it("shows Report sent for a confirmed row with a sent report", () => {
+    expect(visitBadgeLabel("confirmed", "sent")).toBe("Report sent");
+  });
+  it("keeps the row label when no report is sent", () => {
+    expect(visitBadgeLabel("confirmed", "none")).toBe("Confirmed");
+    expect(visitBadgeLabel("requested", "none")).toBe("Requested");
+    expect(visitBadgeLabel("report_sent", "sent")).toBe("Report sent");
+  });
+  it("keeps Paid and Cancelled even with a sent report", () => {
+    expect(visitBadgeLabel("paid", "sent")).toBe("Paid");
+    expect(visitBadgeLabel("cancelled", "sent")).toBe("Cancelled");
   });
 });
 

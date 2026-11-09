@@ -516,7 +516,7 @@ const Quote = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string>; bt?: string } | null = null;
+      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string>; bt?: string; server_first?: string; server_recurring?: string } | null = null;
       try {
         data = await res.json();
       } catch {
@@ -546,15 +546,25 @@ const Quote = () => {
       // Recap shown on /thank-you: price, date, arrival window, current
       // status and response time. Never a "confirmed" promise — the date is
       // a request until Gatehouse confirms availability by email.
+      // N23: the server returns its verified totals — when they differ
+      // from what this tab showed, the recap, the plan and the card step
+      // use the server values, and /thank-you says the price changed.
+      const serverFirst = typeof data.server_first === "string" ? parseFloat(data.server_first) : NaN;
+      const serverRecurring = typeof data.server_recurring === "string" ? parseFloat(data.server_recurring) : NaN;
+      const effFirst = Number.isFinite(serverFirst) ? serverFirst : mainPrice;
+      const effRecurring = Number.isFinite(serverRecurring)
+        ? serverRecurring
+        : isRecurring && breakdown ? breakdown.recurring_total : null;
+      const serverPriceChanged = Number.isFinite(serverFirst) && mainPrice !== null && serverFirst !== mainPrice;
       const recapPrice =
         service === "standard" && breakdown
           ? isRecurring
-            ? breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard"
-              ? `${fmt$(breakdown.recurring_total)} per visit, every other week`
-              : `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
-            : `One-time: ${fmt$(breakdown.first_total)}`
-          : mainPrice !== null
-            ? `${fmt$(mainPrice)} one-time`
+            ? effFirst === effRecurring && breakdown.first_service === "standard"
+              ? `${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
+              : `First visit ${fmt$(effFirst ?? breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
+            : `One-time: ${fmt$(effFirst ?? breakdown.first_total)}`
+          : effFirst !== null
+            ? `${fmt$(effFirst)} one-time`
             : "";
       navigate("/thank-you", {
         state: {
@@ -574,12 +584,16 @@ const Quote = () => {
           // Structured plan for the merged finish step on /thank-you:
           // amounts come from the same breakdown the server re-derives, so
           // the summary, the consent and the future charge cannot diverge.
+          // N23: effFirst/effRecurring are the server totals when the
+          // server returned them — the card step never prices from a
+          // stale browser tab.
           plan: {
             service: SERVICE_LABEL_CALC[service],
-            first: mainPrice,
-            recurring: isRecurring && breakdown ? breakdown.recurring_total : null,
+            first: effFirst,
+            recurring: effRecurring,
             firstIsDeep: breakdown?.first_service === "deep",
           },
+          serverPriceChanged,
         },
       });
     } catch (err) {

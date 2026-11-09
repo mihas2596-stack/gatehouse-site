@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
 import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
+import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
 // one email, so its metadata can describe a DIFFERENT booking than the one
@@ -10,6 +11,7 @@ import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 type BookingRow = {
   id: string; booking_id: string; status: string | null;
   amount_cents: number | null; service: string | null; visit_date: string | null;
+  stripe_customer_id?: string | null;
   client_name?: string | null; client_email?: string | null; created_at?: string | null; report_sent_at?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
 };
@@ -34,13 +36,17 @@ const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null 
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
+  bookingId?: string | null,
 ): Promise<{ id: string; metadata: Record<string, string>; email?: string; name?: string } | null> {
   const query = `email:'${email.replace(/'/g, "")}'`;
   const res = await stripeGet(secretKey, `/customers/search?${new URLSearchParams({ query, limit: "10" })}`);
   if (!res.ok) throw new Error("stripe_unavailable");
   const list = (res.data["data"] as Array<{ id: string; metadata?: Record<string, string>; email?: string; name?: string }> | undefined) ?? [];
-  return list.length > 0
-    ? { id: list[0].id, metadata: list[0].metadata ?? {}, email: list[0].email, name: list[0].name }
+  // C13: never take list[0] unchecked — the pick requires an exact
+  // email match and prefers the customer bound to this booking.
+  const picked = pickCustomerByEmail(list, email, bookingId);
+  return picked
+    ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
 
@@ -267,18 +273,30 @@ async function stripePost(
 // found there, the metadata cache is backfilled so every other reader
 // (visit page, operator actions, auto-charge) sees the same truth.
 type CardDetails = { id: string; brand: string; last4: string };
+type AmbiguousCard = { ambiguous: true };
+function isAmbiguousCard(card: CardDetails | AmbiguousCard | null): card is AmbiguousCard {
+  return !!card && "ambiguous" in card;
+}
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
-): Promise<CardDetails | null> {
+  confirmedPmId?: string | null,
+): Promise<CardDetails | AmbiguousCard | null> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
   const res = await stripeGet(
     secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "1" })}`,
+    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
   );
   if (!res.ok) throw new Error("stripe_unavailable");
   const list = (res.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
-  const pm = list[0];
+  // C13: the booking's card_confirmed event wins; else the cached
+  // card when still attached; else a lone card. Several cards with
+  // no booking signal is ambiguous — the caller asks the client to
+  // confirm instead of showing/charging a guessed card.
+  const picked = pickCard(list, { confirmedPmId, cachedPmId: existing || null });
+  if (picked.status === "ambiguous") return { ambiguous: true };
+  if (picked.status !== "ok") return null;
+  const pm = list.find((c) => c.id === picked.pm);
   const pmId = pm?.id;
   if (!pmId) return null;
   if (existing !== pmId) {
@@ -514,8 +532,8 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const bid = verified.payload.bid;
-    const cust = (await findCustomerByBooking(STRIPE_SECRET_KEY, bid))
-      ?? (verified.payload.email ? await findCustomerByEmail(STRIPE_SECRET_KEY, verified.payload.email) : null);
+    let cust = (await findCustomerByBooking(STRIPE_SECRET_KEY, bid))
+      ?? (verified.payload.email ? await findCustomerByEmail(STRIPE_SECRET_KEY, verified.payload.email, bid) : null);
     if (!cust) {
       res.status(409).json({ ok: false, error: "no_card" });
       return;
@@ -523,16 +541,32 @@ export default async function handler(req: Req, res: Res) {
     if (cust.email && cust.email.toLowerCase() !== verified.payload.email.toLowerCase()) {
       res.status(403).json({ ok: false, error: "identity_mismatch" }); return;
     }
-    const card = await reconcileCard(STRIPE_SECRET_KEY, cust);
-    if (!card) {
-      res.status(409).json({ ok: false, error: "no_card" });
-      return;
-    }
     const rowResult = dbConfigured() ? await dbSelectStrict<BookingRow>("gh_visits", `booking_id=eq.${encodeURIComponent(bid)}&order=visit_no.desc&limit=1`) : { ok: true, rows: [] };
     if (!rowResult.ok) { res.status(503).json({ ok: false, error: "status_unavailable" }); return; }
     const row = rowResult.rows[0] ?? null;
     if (row?.status === "cancelled") { res.status(409).json({ ok: false, error: "visit_cancelled" }); return; }
     const events = row ? await bookingEvents(bid) : [];
+    // C13: the visit row's own stripe_customer_id, where present, is
+    // the strongest binding — resolve it directly and verify its
+    // email, instead of trusting the email search.
+    if (row?.stripe_customer_id && row.stripe_customer_id !== cust.id) {
+      const byRow = await resolveCustomerByRowId(
+        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+        row.stripe_customer_id, verified.payload.email,
+      );
+      if (byRow) {
+        cust = { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name };
+      }
+    }
+    const card = await reconcileCard(STRIPE_SECRET_KEY, cust, confirmedPaymentMethodId(events));
+    if (isAmbiguousCard(card)) {
+      res.status(409).json({ ok: false, error: "card_confirmation_required" });
+      return;
+    }
+    if (!card) {
+      res.status(409).json({ ok: false, error: "no_card" });
+      return;
+    }
     const already = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"] === card.id;
     if (!already) {
       const persisted = await logEventStrict(row?.id ?? null, bid, "client", "card_confirmed", {
@@ -621,7 +655,7 @@ export default async function handler(req: Req, res: Res) {
           const boundCust = await findCustomerByBooking(revisitKey, bookingId);
           // The saved card belongs to the client (email), not to whichever
           // booking the shared customer is bound to right now.
-          const emailCust = !boundCust && p.email ? await findCustomerByEmail(revisitKey, p.email) : null;
+          const emailCust = !boundCust && p.email ? await findCustomerByEmail(revisitKey, p.email, bookingId) : null;
           const cust = boundCust ?? emailCust;
           if (cust) {
             if (cust.email && cust.email.toLowerCase() !== p.email.toLowerCase()) throw new Error("identity_mismatch");
@@ -629,7 +663,12 @@ export default async function handler(req: Req, res: Res) {
             const card = typeof selectedId === "string" && selectedId.startsWith("pm_")
               ? await ownedCard(revisitKey, cust.id, selectedId)
               : await reconcileCard(revisitKey, cust);
-            if (card) {
+            if (isAmbiguousCard(card)) {
+              // Several cards, none confirmed for this booking: the
+              // owner sees that a choice is waiting, not a guessed card.
+              booking.has_card = "1";
+              booking.card_state = "card_confirmation_required";
+            } else if (card) {
               booking.has_card = "1";
               booking.card_state = "card_ready";
               if (card.brand) booking.card_brand = card.brand;

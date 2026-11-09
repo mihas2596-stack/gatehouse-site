@@ -12,7 +12,10 @@
 //
 // State lives in Stripe Customer metadata (no database in this project).
 // Event handling is idempotent: repeated deliveries of the same event id
-// are ignored (best-effort in-memory set; Stripe may redeliver).
+// are ignored — persistently, via gh_webhook_events (C14), with the
+// in-memory set below as a same-instance fast path only. The persistent
+// row is written only AFTER successful processing, so a failed delivery
+// (5xx) is still retried by Stripe instead of being swallowed.
 //
 // The endpoint must be registered in Stripe Dashboard:
 //   Developers → Webhooks → Add endpoint →
@@ -22,6 +25,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { sendReceiptEmailOnce, sendFeeReceiptEmailOnce } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
+import { webhookEventSeen, recordWebhookEvent } from "./_webhook_dedup.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -158,7 +162,10 @@ export default async function handler(req: Req, res: Res) {
 
   const eventId = event.id ?? "";
   const eventType = event.type ?? "";
-  if (seenEvents.has(eventId)) {
+  // C14: persistent dedup (cross-instance) + the in-memory fast path.
+  // A row is recorded only after successful processing (bottom of the
+  // handler), so a 5xx delivery is retried, not swallowed.
+  if (seenEvents.has(eventId) || (eventId && (await webhookEventSeen("stripe", eventId)))) {
     log("dedupe", "already_processed");
     res.status(200).json({ ok: true, deduped: true });
     return;
@@ -392,10 +399,27 @@ export default async function handler(req: Req, res: Res) {
                   : false;
                 if (marked !== 1 || !journaled) cleanMirrorFailed = true;
               } else if (newState === "payment_failed" && vrow.status !== "paid") {
-                const journaled = await logEventStrict(vrow.id, bookingId, "system", "payment_failed", {
-                  via: "stripe_webhook", payment_intent_id: piId,
+                // C14: a redelivery of the same event must not write a
+                // second payment_failed row. The persistent dedup above
+                // is the first guard; this one also covers a duplicate
+                // that arrived concurrently with the first delivery
+                // (both passed the seen-check before either journaled).
+                const prior = await dbSelect<{ detail: Record<string, unknown> | null }>(
+                  "gh_events",
+                  `visit_id=eq.${vrow.id}&event=eq.payment_failed&order=created_at.desc&limit=10`,
+                );
+                const alreadyJournaled = prior.some((e) => {
+                  const d = e.detail ?? {};
+                  return d["payment_intent"] === piId || d["payment_intent_id"] === piId;
                 });
-                if (!journaled) cleanMirrorFailed = true;
+                if (alreadyJournaled) {
+                  log("payment", { state: "already_journaled", booking: bookingId, pi: piId });
+                } else {
+                  const journaled = await logEventStrict(vrow.id, bookingId, "system", "payment_failed", {
+                    via: "stripe_webhook", payment_intent_id: piId,
+                  });
+                  if (!journaled) cleanMirrorFailed = true;
+                }
               }
             }
           } catch (err) {
@@ -434,11 +458,14 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
-  // Mark as processed only after success. In-memory Set is a best-effort
-  // guard for duplicate deliveries within one serverless instance; Stripe's
-  // own retry + idempotent state writes are the real safety net.
+  // Mark as processed only after success. The persistent row in
+  // gh_webhook_events is the cross-instance dedup (C14); the
+  // in-memory Set is only a same-instance fast path and is never
+  // cleared — the old "clear past 2000" silently re-admitted
+  // redeliveries. Stripe's own retry + idempotent state writes are
+  // the remaining safety net.
+  await recordWebhookEvent("stripe", eventId, eventType);
   seenEvents.add(eventId);
-  if (seenEvents.size > 2000) seenEvents.clear();
 
   res.status(200).json({ ok: true });
 }

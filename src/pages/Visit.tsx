@@ -23,6 +23,8 @@ type VisitStateName =
   | "approved"
   | "paid"
   | "payment_issue"
+  | "payment_unknown"
+  | "date_passed"
   | "cancelled";
 
 type VisitData = {
@@ -76,6 +78,9 @@ const STATE_HEADLINE: Record<string, string> = {
   // H1: an unknown charge outcome is never "Visit approved" — the
   // payment may or may not have gone through.
   payment_unknown: "We couldn't confirm your payment",
+  // B6: the requested/confirmed date is already past — nothing is booked
+  // for that day, and the client must pick a new date or cancel.
+  date_passed: "That date has passed — pick a new one",
   cancelled: "Cancelled",
 };
 
@@ -94,6 +99,9 @@ type ReportData = {
   charge_timer_block_reason?: string | null;
   receipt_sent?: boolean;
   issue_reason?: string;
+  // C10: "client" = the client's own words; "operator" (or missing) =
+  // an operator note — never render it as "You told us".
+  issue_source?: string;
   issue_room?: string;
   no_photo_zones?: string[];
   error?: string;
@@ -119,6 +127,10 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   const [rep, setRep] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // S13: Approve refused with card_confirmation_required — several
+  // cards on file, none confirmed for this booking. The link below
+  // leads to the existing confirm_card flow (/save-card).
+  const [needsCardChoice, setNeedsCardChoice] = useState(false);
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
   const [showIssue, setShowIssue] = useState(false);
@@ -133,6 +145,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
     setErr("");
+    setNeedsCardChoice(false);
     try {
       const r = await fetch("/api/report", {
         method: "POST",
@@ -149,6 +162,13 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       if (j && j.state && j.state !== "invalid_link") {
         setRep(j);
         onChanged();
+        // S13: several cards on file, none confirmed for this booking —
+        // the server refuses to guess. Lead to the existing confirm_card
+        // flow instead of leaving a dead Approve button; no charge made.
+        if (j.error === "card_confirmation_required") {
+          setNeedsCardChoice(true);
+          setErr("We found more than one card on file and can't tell which one is for this visit — no charge was made. Please choose which card to use for this booking.");
+        }
         if (j.error === "report_changed") {
           setErr("This report was updated since you opened it — please review the latest version before approving. No charge was made.");
         }
@@ -201,6 +221,10 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   // able to retry (the retry re-checks the payment status first).
   const canAct = rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown";
   const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown";
+  // H17: "before" photos may be absent (e.g. QA-era reports) — say so
+  // instead of letting the client compare a "before" that isn't there.
+  const hasAfterPhotos = (rep.photo_items ?? []).some((p) => p.kind === "after");
+  const hasBeforePhotos = (rep.photo_items ?? []).some((p) => p.kind === "before");
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
@@ -243,7 +267,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           )}
         </dl>
       </div>
-      {canAct && (
+      {canAct && rep.state !== "awaiting" && (
         <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4">
           {rep.state === "payment_issue" ? (
             <>
@@ -264,7 +288,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                 </Button>
               </div>
             </>
-          ) : rep.state === "payment_unknown" ? (
+          ) : (
             <>
               <p className="font-semibold mb-1">We couldn&apos;t confirm your payment.</p>
               <p className="text-sm mb-3">
@@ -280,32 +304,26 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                 </Button>
               </div>
             </>
-          ) : (
-            <>
-              <p className="font-semibold mb-1">Your report is ready — approve to pay{rep.amount ? ` ${rep.amount}` : ""}, or report an issue to block the automatic charge.</p>
-              {rep.deadline && !rep.charge_timer_blocked && (
-                <p className="text-sm mb-3">Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card is charged automatically unless you report an issue.</p>
-              )}
-              {rep.charge_timer_block_reason === "issue_ever" && (
-                <p className="text-sm mb-3">Automatic payment is disabled for this visit because an issue was reported.</p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-                  {busy ? "Processing payment…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
-                </Button>
-                <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
-                  Report an issue
-                </Button>
-              </div>
-              <p className="mt-2 text-sm text-muted-foreground">Approving charges your saved card.</p>
-            </>
           )}
         </div>
       )}
       {rep.state === "issue_open" && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
           Issue reported — automatic payment is blocked for this visit.
-          {rep.issue_reason ? <> You told us: “{rep.issue_reason}”.</> : null}
+          {rep.issue_reason ? (
+            // C10: only the client's own words render as "You told us";
+            // an operator note renders under a neutral label.
+            rep.issue_source === "client" ? (
+              <> You told us: “{rep.issue_reason}”.</>
+            ) : (
+              <> Our note: “{rep.issue_reason}”.</>
+            )
+          ) : null}
+        </p>
+      )}
+      {rep.state === "approved" && (
+        <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
+          Approved — your payment is being completed{rep.amount ? ` — ${rep.amount} for this visit` : ""}. The receipt comes by email.
         </p>
       )}
       {rep.state === "paid" && (
@@ -328,6 +346,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           </ZoomablePhoto>
         )}
       />
+      {hasAfterPhotos && !hasBeforePhotos && (
+        <p className="mb-3 text-sm text-muted-foreground">After photos only — no before photos were taken for this visit.</p>
+      )}
+      {rep.state === "awaiting" && rep.charge_timer_block_reason === "issue_ever" && (
+        <p className="mb-3 text-sm">Automatic payment is disabled for this visit because an issue was reported.</p>
+      )}
       {rep.deadline && rep.state === "awaiting" && !rep.charge_timer_blocked && (
         <p className="mb-3 text-sm">
           Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card
@@ -335,6 +359,11 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
         </p>
       )}
       {err && <p className="mb-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{err}</p>}
+      {needsCardChoice && (
+        <p className="mb-3 text-sm">
+          <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+        </p>
+      )}
       {canAct && rep.state === "awaiting" && (
         <div className="flex flex-wrap gap-2">
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
@@ -531,21 +560,40 @@ const Visit = () => {
   const fee = data?.cancel_fee_cents ?? 0;
   const manageable =
     data && ["awaiting_confirmation", "confirmed", "date_declined"].includes(data.state);
+  // B6: a passed date is reschedulable/cancellable like a pending one —
+  // but entry and no-photo zones only apply to a live visit.
+  const canReschedule =
+    data && ["awaiting_confirmation", "confirmed", "date_declined", "date_passed"].includes(data.state);
   const cardChoiceNeeded = Boolean(data?.has_card && !data.card_confirmed
     && (data.state === "awaiting_confirmation" || data.state === "confirmed"));
+  // H15: step 2 ("Cleaning") is the visit day itself — a confirmed
+  // visit whose date is today (Atlanta time) is being cleaned today.
+  // Any other confirmed visit stays on step 1.
+  const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const isCleaningDay = data?.state === "confirmed" && b.confirmed_date === todayET;
+  // H16: after a detach, has_card is false but the card_confirmed
+  // journal event (and its last4) survives. The paid receipt line
+  // ("Card charged") is a historical fact and still shows; a future
+  // charge ("Card we'll charge") needs a card actually on file.
+  const cardBrandLabel = data?.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card";
+  const cardLabel = data?.card_last4 && (data?.state === "paid" ? data.card_confirmed : data.has_card)
+    ? `${cardBrandLabel} ••••${data.card_last4}`
+    : null;
 
   const rows: Array<[string, string]> = [];
   if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
   if (b.confirmed_date) rows.push(["Visit date (confirmed)", fmtDateUS(b.confirmed_date)]);
-  else if (b.requested_date) rows.push(["Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
+  else if (b.requested_date) rows.push([data?.state === "date_passed" ? "Requested date (already passed)" : "Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
   if (b.window) rows.push(["Arrival window (Atlanta time)", formatArrivalWindow(b.window)]);
   if (b.first) rows.push(["First visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
   // Payment-method status without full details: brand + last 4 only,
   // shown once the card is confirmed for this booking. report_sent has
   // its own "Card we'll charge" line below, so it is excluded here to
-  // avoid showing the card twice.
-  if (data?.card_confirmed && data.card_last4 && data.state !== "cancelled" && data.state !== "report_sent") {
+  // avoid showing the card twice. A detached card is not "on file"
+  // even though the card_confirmed journal event survives the detach
+  // — has_card is the live gate for this prospective claim.
+  if (data?.has_card && data.card_confirmed && data.card_last4 && data.state !== "cancelled" && data.state !== "report_sent") {
     rows.push(["Payment method", `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} on file ••••${data.card_last4}`]);
   }
 
@@ -620,7 +668,8 @@ const Visit = () => {
             {data.state !== "cancelled" && (
               <JourneySteps
                 current={
-                  ["card_needed", "card_failed", "awaiting_confirmation"].includes(data.state) ? 0
+                  ["card_needed", "card_failed", "awaiting_confirmation", "date_passed"].includes(data.state) ? 0
+                  : data.state === "confirmed" && isCleaningDay ? 2
                   : ["confirmed", "date_declined"].includes(data.state) ? 1
                   : data.report_preparing ? 3
                   : 4
@@ -632,6 +681,13 @@ const Visit = () => {
               <p className="text-lg text-foreground mb-6 text-center">
                 We have your request. Nothing is booked or charged yet — the next step is saving
                 your card ($0 today). We confirm your date after that, within one business day.
+              </p>
+            )}
+            {data.state === "date_passed" && (
+              <p className="text-lg text-foreground mb-6 text-center">
+                The date for this visit has already passed, so nothing is booked for that day and
+                no card is needed. Pick a new date below, or cancel this visit — it&apos;s free.
+                If you have any questions, email us and we&apos;ll reply within one business day.
               </p>
             )}
             {data.state === "awaiting_confirmation" && !cardChoiceNeeded && (
@@ -703,7 +759,7 @@ const Visit = () => {
 
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown") && (
               <section id="report" className="scroll-mt-28">
-                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={data.has_card && data.card_last4 ? `${data.card_brand ? data.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card"} ••••${data.card_last4}` : null} onChanged={() => void load()} />
+                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
               </section>
             )}
 
@@ -930,7 +986,7 @@ const Visit = () => {
               </div>
             )}
 
-            {manageable && (
+            {canReschedule && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Need a different date?</h2>
                 <div className="flex flex-col sm:flex-row gap-3">
@@ -946,8 +1002,9 @@ const Visit = () => {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  We confirm or offer the closest alternative within one business day. Your old date
-                  stays until the new one is confirmed.
+                  {data.state === "date_passed"
+                    ? "Your old date has already passed — pick any future date and we'll confirm it within one business day."
+                    : "We confirm or offer the closest alternative within one business day. Your old date stays until the new one is confirmed."}
                 </p>
                 {data.proposed_pending && data.proposed_date && (
                   <p className="text-sm mt-3" role="status">
@@ -958,7 +1015,7 @@ const Visit = () => {
               </div>
             )}
 
-            {manageable && (
+            {canReschedule && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Cancel</h2>
                 {!confirmingCancel ? (
@@ -978,7 +1035,9 @@ const Visit = () => {
                       </label>
                     </div>
                     <p className="text-sm mb-3">
-                      {fee > 0 ? (
+                      {data.state === "date_passed" ? (
+                        <>Cancelling is <strong>free</strong> — this date has already passed, so there is no visit to miss.</>
+                      ) : fee > 0 ? (
                         <>Cancelling now is inside 48 hours before the visit, so the <strong>$25 late-cancellation fee</strong> from our Terms applies.</>
                       ) : (
                         <>Cancelling now is <strong>free</strong> — more than 48 hours before the visit.</>

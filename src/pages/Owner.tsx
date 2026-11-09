@@ -13,6 +13,7 @@ import {
   isPastUnfinishedVisit,
   reportLabel,
   stripeLabel,
+  visitBadgeLabel,
   visitLabel,
   type FocusBlock,
 } from "@/lib/ownerActions";
@@ -47,7 +48,12 @@ type Visit = {
   issue_open: boolean;
   issue_ever: boolean;
   report_bounced: boolean;
+  report_sent_at?: string | null;
   payment_failed?: boolean;
+  // C3: journal view of the card (latest `card_confirmed` event), batched
+  // by the list endpoint — see api/owner.ts. Not live Stripe state: a
+  // detached card still reads true here; the detail view is authoritative.
+  card_confirmed?: boolean;
   can_charge?: boolean;
   visit_confirmed?: boolean;
   entry_agreed?: boolean;
@@ -92,6 +98,23 @@ function entryStatusText(v: Visit): string {
   return method;
 }
 
+// C8: entry data was never saved for test-era bookings — entry_method /
+// entry_detail are NULL even for paid ones — so "not agreed" is the
+// default, not a signal. The "do not send the cleaner" warning is
+// only meaningful for a confirmed, upcoming, real visit: never for a
+// test booking, a visit that already happened (report sent), or a
+// date in the past.
+export function entryNeedsAttention(v: Visit): boolean {
+  if (v.entry_agreed) return false;
+  if (!v.visit_confirmed) return false;
+  if (v.status === "cancelled" || v.status === "paid") return false;
+  if (v.is_test) return false;
+  if (v.report_status === "sent" || v.report_status === "submitted") return false;
+  if (!v.visit_date) return false;
+  const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  return v.visit_date >= todayET;
+}
+
 const fmtVisitDate = (d: string | null | undefined): string => {
   if (!d) return "no date";
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
@@ -112,6 +135,26 @@ const fmtDateTimeET = (iso: string | null | undefined): string => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return `${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(d)} ET`;
+};
+
+// Noon in America/New_York for a YYYY-MM-DD date — the same rule the
+// server's 48h cancel clock uses. A fixed -04:00/-05:00 offset is
+// wrong across EST/EDT, so the noon wall-clock reading is converted
+// via Intl. Used only for the owner's cancel-fee hint; the server
+// decides the real fee.
+const visitNoonETMs = (d: string): number => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
+  const [y, m, day] = d.split("-").map(Number);
+  const noonGuess = Date.UTC(y, m - 1, day, 12, 0, 0);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(noonGuess));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
+  const wallAsUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  if (!Number.isFinite(wallAsUTC)) return NaN;
+  return noonGuess + (noonGuess - wallAsUTC);
 };
 
 const initials = (name: string): string => {
@@ -182,6 +225,14 @@ const Owner = () => {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [events, setEvents] = useState<GhEvent[]>([]);
   const [stripeState, setStripeState] = useState("");
+  // C9: the status action returns the saved card's brand + last4 —
+  // shown in the Payment block as "Visa •••• 4242" when both are known.
+  const [cardBrand, setCardBrand] = useState("");
+  const [cardLast4, setCardLast4] = useState("");
+  // B4: the status action answers booking_not_found for a booking
+  // with no Stripe customer at all (Kate) — the panel must say so
+  // plainly instead of the neutral "Not paid yet".
+  const [noStripeCustomer, setNoStripeCustomer] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [returnNote, setReturnNote] = useState("");
   const [issueReason, setIssueReason] = useState("");
@@ -382,6 +433,9 @@ const Owner = () => {
       setPhotos([]);
       setEvents([]);
       setStripeState("");
+      setCardBrand("");
+      setCardLast4("");
+      setNoStripeCustomer(false);
       setActionMsg("");
       setViewLinkOpen(false);
       setViewLinkUrl("");
@@ -424,9 +478,26 @@ const Owner = () => {
       // O2: the status action returns state at the ROOT, not under ops
       // (ops carries the detail fields). Reading ops.state always yielded
       // undefined, so the Stripe line never updated.
-      const sj = (await sr.json()) as { ok: boolean; state?: string };
+      const sj = (await sr.json()) as { ok: boolean; state?: string; error?: string; no_stripe_customer?: boolean; card_brand?: string; card_last4?: string };
       if (!isCurrentVisit(v.id, visitEpoch)) return;
-      if (sj.ok && sj.state) setStripeState(sj.state);
+      if (sj.ok && sj.state) {
+        setStripeState(sj.state);
+        // C9: brand + last4 ride on the same status response; either
+        // may be "" (no card / journal fallback) — the Payment block
+        // shows the card line only when both are non-empty.
+        setCardBrand(typeof sj.card_brand === "string" ? sj.card_brand : "");
+        setCardLast4(typeof sj.card_last4 === "string" ? sj.card_last4 : "");
+        setNoStripeCustomer(sj.no_stripe_customer === true);
+      } else if (sj.error === "booking_not_found") {
+        // B4: the booking exists in /owner but has no Stripe customer
+        // (Kate) — the server now answers status from the visit row,
+        // so reaching this branch means the row itself is gone; keep
+        // the honest "no customer" line rather than stale state.
+        setStripeState("");
+        setCardBrand("");
+        setCardLast4("");
+        setNoStripeCustomer(true);
+      }
     } catch {
       if (isCurrentVisit(v.id, visitEpoch)) setActionMsg("Couldn't load the visit details.");
     }
@@ -445,7 +516,11 @@ const Owner = () => {
   // yields a readable message instead of a stuck spinner, and on an
   // unknown outcome the panel re-reads state before any retry, so a
   // repeat cannot create a second action.
-  const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void) => {
+  // onError, when given, gets the failed response first: returning true
+  // means the handler took over (e.g. it asked the operator a follow-up
+  // and re-issued the action) — runAction then skips its default message
+  // and reload, which the follow-up run performs itself.
+  const runAction = async (label: string, payload: Record<string, unknown>, after?: (j: Record<string, unknown>) => void, onError?: (j: Record<string, unknown>) => Promise<boolean> | boolean) => {
     const actionVisitId = selectedIdRef.current;
     const actionEpoch = visitEpochRef.current;
     const operation = ++operationSeqRef.current;
@@ -463,6 +538,7 @@ const Owner = () => {
           if (fresh) void openVisit(fresh);
         }
       } else {
+        if (onError && (await onError(j))) return;
         setActionMsg(j["issue_blocked"] === true
           ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
           : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
@@ -908,7 +984,9 @@ const Owner = () => {
   const filteredVisits = listedVisits.filter((v) => {
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
-      const hay = `${v.client_name ?? ""} ${v.address ?? ""} ${v.booking_id ?? ""}`.toLowerCase();
+      // N9: search covers client name, email, phone, address, booking id,
+      // cleaner name and amount (formatted "$1.49" and raw cents "149").
+      const hay = `${v.client_name ?? ""} ${v.client_email ?? ""} ${v.client_phone ?? ""} ${v.address ?? ""} ${v.booking_id ?? ""} ${v.cleaner_name ?? ""} ${money(v.amount_cents)} ${v.amount_cents ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (filter === "all") return true;
@@ -1001,7 +1079,7 @@ const Owner = () => {
                   <input
                     type="search"
                     className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm mb-3"
-                    placeholder="Search by client, address, or booking…"
+                    placeholder="Search by client, email, phone, cleaner, amount, address, or booking…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     aria-label="Search visits"
@@ -1030,14 +1108,22 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
                   {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)}</span>
+                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)} {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">test price</span>}</span>
                 </div>
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
-                  <span className="bg-muted px-2 py-0.5 rounded">Visit: {visitLabel(v.status)}</span>
+                  <span className="bg-muted px-2 py-0.5 rounded">Visit: {visitBadgeLabel(v.status, v.report_status)}</span>
                   {v.cleaner_name
                     ? <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded">cleaner: {v.cleaner_name}</span>
                     : <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded">Needs a cleaner</span>}
+                  {/* C3: card badge is the journal's view (see api/owner.ts) —
+                      a detached card can still read "Card ready"; the live
+                      Stripe state is in the detail view. Issue badge is exact:
+                      it reads the row's issue_open flag. */}
+                  {v.card_confirmed
+                    ? <span className="bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded">Card ready</span>
+                    : <span className="bg-muted text-muted-foreground px-2 py-0.5 rounded">No card</span>}
+                  {v.issue_open && <span className="bg-red-100 text-red-900 px-2 py-0.5 rounded">Issue open</span>}
                 </div>
               </button>
             ))}
@@ -1080,6 +1166,22 @@ const Owner = () => {
           const linkActive = Boolean(v.cleaner_link_active);
           const linkReusable = Boolean(v.cleaner_link_reusable);
           const rooms = v.checklist?.rooms ?? [];
+          // C4: the 24h auto-charge deadline is report_sent_at + 24h —
+          // shown only while a charge could still happen (report sent,
+          // no open issue, not bounced, not terminal).
+          const autoChargeAt = v.report_status === "sent" && v.report_sent_at && !v.issue_open && !v.report_bounced && v.status !== "paid" && v.status !== "cancelled"
+            ? new Date(Date.parse(v.report_sent_at) + 24 * 3600 * 1000).toISOString()
+            : null;
+          // C5: UI hint for the cancel confirm — true only when the
+          // visit is live and inside 48h. A past date is free (the
+          // server decides the real fee either way).
+          const cancelLate = (() => {
+            if (!v.visit_date) return false;
+            const noon = visitNoonETMs(v.visit_date);
+            if (!Number.isFinite(noon)) return false;
+            const delta = noon - Date.now();
+            return delta > 0 && delta < 48 * 3600 * 1000;
+          })();
 
           // Load the current link, then run fn with it; failures surface
           // in the cleaner status line (never a false "Copied").
@@ -1119,12 +1221,30 @@ const Owner = () => {
                 <p className="text-sm">{v.address ?? ""}</p>
                 {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
                 <p className="text-sm">
-                  Visit: <strong>{visitLabel(v.status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
+                  Visit: <strong>{visitBadgeLabel(v.status, v.report_status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
                   {stripeState && <> · Payment: <strong>{stripeLabel(stripeState)}</strong></>}
+                  {noStripeCustomer && <> · <span className="text-destructive font-semibold">No Stripe customer</span></>}
                   {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
-                {!v.issue_open && (v.report_status === "sent" || v.report_status === "submitted") && v.status !== "paid" && v.status !== "cancelled" && (
+                {/* B4: an explicit readiness checklist — the card must
+                    not look ready when the cleaner, the confirmation,
+                    the card, the entry, or the phone is missing. */}
+                <div className="mt-3 rounded-lg border border-border p-3">
+                  <p className="text-sm font-semibold mb-1">Ready for the visit</p>
+                  <ul className="text-sm space-y-0.5">
+                    <li>Cleaner: {v.cleaner_name ?? "not assigned"}</li>
+                    <li>Visit confirmed: {v.visit_confirmed ? "yes" : "not yet"}</li>
+                    <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : stripeState === "card_ready" ? "saved" : stripeState ? stripeLabel(stripeState) : "not saved yet"}</li>
+                    <li>Entry: {v.entry_agreed ? "settled" : "not arranged yet"}</li>
+                    <li>Client phone: {v.client_phone ?? "missing"}</li>
+                  </ul>
+                </div>
+                {/* N7: also before any report is sent — a client who
+                    emails "don't come" while the visit is still
+                    requested/confirmed needs a recorded issue too, or
+                    the future automatic charge has nothing blocking it. */}
+                {!v.issue_open && v.status !== "paid" && v.status !== "cancelled" && (v.report_status === "sent" || v.report_status === "submitted" || v.status === "requested" || v.status === "confirmed") && (
                   <div className="mt-3">
                     <div className="flex flex-wrap gap-2">
                       <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What did the client report by email? (optional)" value={issueReason} onChange={(e) => setIssueReason(e.target.value)} aria-label="Issue reported by email" />
@@ -1133,7 +1253,9 @@ const Owner = () => {
                         size="sm"
                         disabled={acting !== ""}
                         onClick={() => {
-                          if (!window.confirm("Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email.")) return;
+                          if (!window.confirm((v.report_status === "sent" || v.report_status === "submitted")
+                            ? "Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email."
+                            : "Open an issue for this visit? It blocks any future automatic charge for this visit — including after the report is sent — and never resumes on its own, and the client gets a confirmation email.")) return;
                           void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
                             setIssueReason("");
                             setActionMsg(j["already_open"] === true
@@ -1147,7 +1269,9 @@ const Owner = () => {
                         Open issue from email
                       </Button>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">Use this when the client reported a problem by email instead of the report page. It blocks automatic charging at once — an email sitting in the inbox alone does not.</p>
+                    <p className="text-xs text-muted-foreground mt-1">{(v.report_status === "sent" || v.report_status === "submitted")
+                      ? "Use this when the client reported a problem by email instead of the report page. It blocks automatic charging at once — an email sitting in the inbox alone does not."
+                      : "Use this when the client reported a problem by email before the report is sent. It blocks any future automatic charge for this visit — an email sitting in the inbox alone does not."}</p>
                   </div>
                 )}
                 {v.issue_open && (
@@ -1207,6 +1331,31 @@ const Owner = () => {
                 )}
                 {v.request_approved && v.status === "requested" && (
                   <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
+                )}
+                {/* C5: owner cancel — the server refuses it once the
+                    report is sent, and computes the $25 late fee. */}
+                {v.status !== "cancelled" && v.status !== "paid" && (
+                  <div className="mt-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={acting !== ""}
+                      onClick={() => {
+                        if (!window.confirm(cancelLate
+                          ? "Cancel this visit? The visit is within 48 hours, so the $25 late-cancellation fee from the Terms applies and will be charged to the saved card. This cannot be undone."
+                          : "Cancel this visit? No fee — the visit is more than 48 hours away. This cannot be undone.")) return;
+                        void runAction("Cancel visit", { action: "owner_cancel", booking_id: v.booking_id }, (j) => {
+                          const fee = typeof j["fee_cents"] === "number" ? (j["fee_cents"] as number) : null;
+                          setActionMsg(fee !== null && fee > 0
+                            ? `Visit cancelled. Late-cancellation fee: $${(fee / 100).toFixed(2)} — recorded on the booking.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`
+                            : `Visit cancelled. No fee.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`);
+                        });
+                      }}
+                    >
+                      Cancel visit
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-1">Cancelling is not possible after the report is sent — the server refuses it.</p>
+                  </div>
                 )}
               </section>
 
@@ -1316,7 +1465,10 @@ const Owner = () => {
                     {/* One status line + one hero button for every link state:
                         WhatsApp/SMS appear only when a link can be copied. */}
                     {!linkIssued && <p className="text-sm text-muted-foreground mb-2">No access link yet.</p>}
-                    {linkIssued && !linkActive && <p className="text-sm mb-2">Access expired.</p>}
+                    {/* N11: an expired link after a submitted report
+                        needs no action — say so instead of a bare
+                        "Access expired". */}
+                    {linkIssued && !linkActive && <p className="text-sm mb-2">{(v.report_status === "sent" || v.report_status === "submitted") ? "Access expired — the report is already submitted, no action needed." : "Access expired."}</p>}
                     {linkIssued && linkActive && !linkReusable && (
                       <p className="text-sm mb-2">
                         This link was created before reusable links existed, so it can’t be re-fetched here. It still works until it expires.
@@ -1544,7 +1696,7 @@ const Owner = () => {
                 {v.entry?.reminder_sent && (
                   <p className="text-sm text-muted-foreground mb-2">Entry reminder sent.</p>
                 )}
-                {v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid" && !v.entry_agreed && (
+                {entryNeedsAttention(v) && (
                   <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
                 )}
                 {v.entry_agreed && (
@@ -1607,9 +1759,13 @@ const Owner = () => {
                               type="button"
                               aria-label="Delete photo"
                               className="absolute right-1 top-1 bg-black/60 text-white rounded px-1.5 py-0.5 text-[10px]"
-                              onClick={() =>
-                                void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id })
-                              }
+                              onClick={() => {
+                                // B5: deleting a report photo is
+                                // irreversible — it is evidence for the
+                                // report — so it needs a confirm.
+                                if (!window.confirm("Delete this report photo? This cannot be undone.")) return;
+                                void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id });
+                              }}
                             >
                               ✕
                             </button>
@@ -1727,8 +1883,31 @@ const Owner = () => {
                 <h3 className="font-semibold mb-3">Payment</h3>
                 <p className="text-sm">
                   {money(v.amount_cents)}
-                  {v.paid_at ? ` · Paid ${fmtDateET(v.paid_at)}` : stripeState ? ` · ${stripeLabel(stripeState)}` : " · Not paid yet"}
+                  {v.paid_at
+                    ? ` · Paid ${fmtDateET(v.paid_at)}`
+                    : noStripeCustomer
+                      ? " · No Stripe customer — no card can be charged"
+                      : stripeState
+                        ? ` · ${stripeLabel(stripeState)}`
+                        : " · Not paid yet"}
                 </p>
+                {/* C9: the saved card, from the status action — shown
+                    only when both brand and last4 are known; otherwise
+                    the line above (state / no-customer) stands alone. */}
+                {cardBrand && cardLast4 && (
+                  <p className="text-sm mt-1">
+                    Card: {cardBrand.charAt(0).toUpperCase() + cardBrand.slice(1)} •••• {cardLast4}
+                  </p>
+                )}
+                {/* C4: the 24h auto-charge deadline, from the report
+                    send time — and "window passed" once it is gone. */}
+                {autoChargeAt && (
+                  <p className="text-sm mt-1">
+                    {Date.parse(autoChargeAt) > Date.now()
+                      ? <>Auto-charge at {fmtDateTimeET(autoChargeAt)} if the client stays silent — an open issue blocks it.</>
+                      : "Auto-charge window passed."}
+                  </p>
+                )}
                 {paymentFailed && (
                   <p className="text-sm text-destructive mt-1">
                     Payment failed — check the saved card, then retry from the customer’s report page or charge again below.
@@ -1737,13 +1916,47 @@ const Owner = () => {
                 <details className="mt-2">
                   <summary className="text-sm underline text-muted-foreground cursor-pointer">More actions</summary>
                   <Button variant="outline" size="sm" className="mt-3 mr-2" disabled={!!acting} onClick={() => void runAction("Send status email", { action: "resend_status_email", booking_id: v.booking_id })}>Resend status email</Button>
-                  <Button variant="outline" size="sm" className="mt-3" disabled={!!acting} onClick={() => void runAction("Update test flag", { action: "set_test_booking", booking_id: v.booking_id, is_test: !v.is_test })}>{v.is_test ? "Mark as real booking" : "Mark as test booking"}</Button>
+                  <Button variant="outline" size="sm" className="mt-3" disabled={!!acting} onClick={() => {
+                    // B5: flipping the test flag hides/shows the
+                    // booking in every filter — a fat-finger tap must
+                    // not do it silently.
+                    if (!window.confirm(v.is_test ? "Mark as a real booking? It will show in the normal visit list." : "Mark as a test booking? It will be hidden by the “Hide test bookings” filter.")) return;
+                    void runAction("Update test flag", { action: "set_test_booking", booking_id: v.booking_id, is_test: !v.is_test });
+                  }}>{v.is_test ? "Mark as real booking" : "Mark as test booking"}</Button>
+                  {/* C6: detach the saved card — the existing
+                      delete_card action, now reachable from the panel.
+                      The result (including a Stripe error) is shown
+                      by runAction, never swallowed. */}
+                  {!noStripeCustomer && stripeState === "card_ready" && (
+                    <Button variant="outline" size="sm" className="mt-3 ml-2" disabled={!!acting} onClick={() => {
+                      if (!window.confirm("Detach the saved card for this booking? The client will need to save a new card before any charge.")) return;
+                      void runAction("Detach card", { action: "delete_card", booking_id: v.booking_id }, (j) => {
+                        if (j["card_deleted"] === true) { setStripeState(""); setCardBrand(""); setCardLast4(""); }
+                      });
+                    }}>Detach card</Button>
+                  )}
 
                   <div className="mt-2">
                     <Button
                       variant="outline"
                       disabled={v.can_charge === false}
-                      onClick={() => void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined })}
+                      onClick={() => {
+                        // B5: Charge is a real charge — one click must
+                        // never fire it. Amount + client name in the
+                        // confirm, like the other dangerous actions.
+                        if (!window.confirm(`Charge ${money(v.amount_cents)} to ${v.client_name ?? "this client"} now? This charges the saved card right away.`)) return;
+                        void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined }, undefined, async (j) => {
+                          // C16: the server refuses a timer-basis charge
+                          // with no delivered reminder (409
+                          // needs_reminder_confirm) until the operator
+                          // confirms — with the server's own hint text.
+                          if (j.error !== "needs_reminder_confirm") return false;
+                          const hint = typeof j.hint === "string" && j.hint ? j.hint : "No reminder was sent for this report yet. Confirm to charge without a reminder.";
+                          if (!window.confirm(`${hint} Charge anyway?`)) return false;
+                          void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined, confirm_no_reminder: true });
+                          return true;
+                        });
+                      }}
                     >
                       Charge {money(v.amount_cents)}
                     </Button>

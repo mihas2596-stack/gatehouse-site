@@ -320,6 +320,49 @@ describe("report portal", () => {
     expect(piCalls).toHaveLength(1);
   });
 
+  it("C10: a client-filed issue is sourced 'client', an owner-opened dispute is sourced 'operator'", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-c10", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-c10", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    // Client files the issue from the report page.
+    const issue = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "issue", reason: "Missed the oven" }) as any, issue as any);
+    expect(issue.code).toBe(200);
+    expect(issue.body["state"]).toBe("issue_open");
+    expect(issue.body["issue_reason"]).toBe("Missed the oven");
+    expect(issue.body["issue_source"]).toBe("client");
+    expect(currentMeta["gh_issue_source"]).toBe("client");
+
+    // The same booking, but the dispute was opened by the owner
+    // (booking-action dispute): the journal actor is "owner", so the
+    // reason must never render as the client's words. The Stripe
+    // metadata carries no source here — the journal decides.
+    dbRows[0]["issue_open"] = true;
+    dbEvents = [
+      { visit_id: "row-report-c10", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+      { visit_id: "row-report-c10", booking_id: BID, event: "issue_opened", actor: "owner", detail: { reason: "Owner cancelled 24.10 - no auto-charge" }, created_at: new Date().toISOString() },
+    ];
+    currentMeta["gh_issue_open"] = "1";
+    currentMeta["gh_issue_reason"] = "Owner cancelled 24.10 - no auto-charge";
+    delete currentMeta["gh_issue_source"];
+    const view = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, view as any);
+    expect(view.body["state"]).toBe("issue_open");
+    expect(view.body["issue_reason"]).toBe("Owner cancelled 24.10 - no auto-charge");
+    expect(view.body["issue_source"]).toBe("operator");
+  });
+
   it("approve from issue_open fails closed when the durable resolve journal write fails: issue stays open, no intent", async () => {
     await sendReport();
     enableDb();
@@ -431,5 +474,81 @@ describe("report portal", () => {
     const resend = await sendReport();
     expect(resend.code).toBe(409);
     expect(resend.body["error"]).toBe("already_paid");
+  });
+
+  it("N20: a bounced report returns no deadline (the timer is blocked)", async () => {
+    await sendReport();
+    currentMeta["gh_report_bounced"] = "1";
+    const view = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, view as any);
+    expect(view.code).toBe(200);
+    expect(view.body["deadline"]).toBeNull();
+    expect(view.body["delivery_failed"]).toBe(true);
+    expect(view.body["charge_timer_blocked"]).toBe(true);
+  });
+
+  it("C26: a pre-payment issue after the 24h Terms §7 window is refused", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+    currentMeta["gh_report_sent_at"] = sentAt;
+    dbRows = [{
+      id: "row-report-late", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [];
+    const issue = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "issue", reason: "Missed the oven" }) as any, issue as any);
+    expect(issue.code).toBe(409);
+    expect(issue.body["error"]).toBe("issue_window_expired");
+    expect(dbRows[0]["issue_open"]).toBe(false);
+  });
+
+  it("C26: a post-payment complaint past both windows (24h report, 48h damage) is refused", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+    const visitDate = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    currentMeta["gh_report_sent_at"] = sentAt;
+    currentMeta["gh_state"] = "paid";
+    dbRows = [{
+      id: "row-report-pp-late", booking_id: BID, visit_no: 1, status: "paid",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+      visit_date: visitDate,
+    }];
+    dbEvents = [];
+    const issue = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "issue", reason: "found a crack", room: "Kitchen" }) as any, issue as any);
+    expect(issue.code).toBe(409);
+    expect(issue.body["error"]).toBe("claim_window_expired");
+  });
+
+  it("C26: a post-payment complaint inside the 48h damage window is accepted even after the 24h report window", async () => {
+    await sendReport();
+    enableDb();
+    const sentAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+    const visitDate = new Date(Date.now() - 1 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    currentMeta["gh_report_sent_at"] = sentAt;
+    currentMeta["gh_state"] = "paid";
+    dbRows = [{
+      id: "row-report-pp-ok", booking_id: BID, visit_no: 1, status: "paid",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+      visit_date: visitDate,
+    }];
+    dbEvents = [];
+    const issue = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "issue", reason: "found a crack", room: "Kitchen" }) as any, issue as any);
+    expect(issue.code).toBe(200);
+    expect(issue.body["postpay"]).toBe(true);
   });
 });

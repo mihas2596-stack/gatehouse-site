@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import { dbUpdateCount } from "./_db.js";
 
 type BookingPayload = {
   bid: string;
@@ -400,9 +401,14 @@ export default async function handler(req: Req, res: Res) {
         logErr("customer_lookup", `stripe ${found.status}: ${stripeErrMsg(found.data)}`);
         return json(500, { ok: false, error: "server_error" });
       }
-      const list = (found.data["data"] as Array<{ id?: string }> | undefined) ?? [];
-      if (list.length > 0 && typeof list[0]?.id === "string") {
-        customerId = list[0].id as string;
+      const list = (found.data["data"] as Array<{ id?: string; email?: string }> | undefined) ?? [];
+      // C13: /customers?email is a prefix-ish match, not an exact one —
+      // reuse only a record whose email matches exactly; otherwise a
+      // fresh customer is created below.
+      const match = list.find((c) => typeof c.id === "string"
+        && typeof c.email === "string" && c.email.trim().toLowerCase() === email.trim().toLowerCase());
+      if (match?.id) {
+        customerId = match.id;
         log("customer_lookup", "reused");
       }
     } catch (err) {
@@ -459,7 +465,8 @@ export default async function handler(req: Req, res: Res) {
         "gh_issue_resolved_at", "gh_reclean_date",
         "gh_cancel_scope", "gh_cancel_fee_cents", "gh_cancelled_at",
         "gh_receipt_email_id", "gh_charge_id", "gh_last_payment",
-        "gh_reminded_at", "gh_card_email_sent",
+        "gh_reminded_at", "gh_reminder_for", "gh_early_reminded_at", "gh_early_reminder_for",
+        "gh_card_email_sent",
         "gh_postpay_issue", "gh_postpay_issue_reason", "gh_postpay_issue_room", "gh_postpay_issue_at",
         "gh_report_client_action", "gh_report_responded_at", "gh_access_notes", "gh_no_photo_zones",
       ]) clearStale[`metadata[${k}]`] = "";
@@ -510,6 +517,23 @@ export default async function handler(req: Req, res: Res) {
         return json(500, { ok: false, error: "server_error" });
       }
       log("checkout_session", "ok");
+      // S13 follow-up: pin the Stripe customer on the booking row so
+      // the C13 row binding fires for every booking, not only
+      // cleaner-link ones. Populate-only (stripe_customer_id=is.null)
+      // — an existing pin is never overwritten — and best-effort: a
+      // failed write must not block the card save; the email search
+      // remains the fallback.
+      if (arrivedWithToken) {
+        try {
+          await dbUpdateCount(
+            "gh_visits",
+            `booking_id=eq.${encodeURIComponent(bookingId)}&stripe_customer_id=is.null`,
+            { stripe_customer_id: customerId },
+          );
+        } catch {
+          /* best-effort: the row binding is an optimization */
+        }
+      }
       return json(200, { ok: true, url: session.data["url"] as string, bt, booking_id: bookingId });
     } catch (err) {
       logErr("checkout_session", err);

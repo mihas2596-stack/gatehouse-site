@@ -34,6 +34,9 @@ type ReportData = {
   charge_timer_blocked?: boolean;
   charge_timer_block_reason?: string | null;
   issue_reason?: string;
+  // C10: "client" = the client's own words; "operator" (or missing) =
+  // an operator note — never render it as "You told us".
+  issue_source?: string;
   issue_room?: string;
   no_photo_zones?: string[];
   receipt_sent?: boolean;
@@ -68,6 +71,10 @@ const Report = () => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  // S13: Approve refused with card_confirmation_required — several
+  // cards on file, none confirmed for this booking. The link below
+  // leads to the existing confirm_card flow (/save-card).
+  const [needsCardChoice, setNeedsCardChoice] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
   const [paidIssueOpen, setPaidIssueOpen] = useState(false);
   const [issueText, setIssueText] = useState("");
@@ -141,6 +148,7 @@ const Report = () => {
   const act = async (action: "approve" | "issue") => {
     setBusy(true);
     setActionError("");
+    setNeedsCardChoice(false);
     try {
       const r = await fetch("/api/report", {
         method: "POST",
@@ -157,7 +165,22 @@ const Report = () => {
         }),
       });
       const j = (await r.json()) as ReportData;
-      if (j && j.state && j.state !== "invalid_link") {
+      // S13: several cards on file, none confirmed for this booking —
+      // the server refuses to guess. Lead to the existing confirm_card
+      // flow instead of leaving a dead Approve button; no charge made.
+      if (j && j.error === "card_confirmation_required") {
+        if (j.state && j.state !== "invalid_link") setData(j);
+        setNeedsCardChoice(true);
+        setActionError("We found more than one card on file and can't tell which one is for this visit — no charge was made. Please choose which card to use for this booking.");
+      // N26: the expired-window 409s carry no `state` (no view spread),
+      // so they must be handled before the state gate below — otherwise
+      // the client only gets the generic error. The form stays open so
+      // the client can copy their text into the email.
+      } else if (j && j.error === "issue_window_expired") {
+        setActionError("The 24-hour window for reporting an issue on this report has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
+      } else if (j && j.error === "claim_window_expired") {
+        setActionError("The window for reporting an issue after this visit has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
+      } else if (j && j.state && j.state !== "invalid_link") {
         setData(j);
         setIssueOpen(false);
         if (j.error === "report_changed") {
@@ -193,6 +216,10 @@ const Report = () => {
     (data?.photo_items?.length ?? 0) === 0 &&
     (data?.photos?.length ?? 0) === 0 &&
     (data?.checklist?.rooms?.length ?? 0) === 0;
+  // H17: "before" photos may be absent (e.g. QA-era reports) — say so
+  // instead of letting the client compare a "before" that isn't there.
+  const hasAfterPhotos = (data?.photo_items ?? []).some((p) => p.kind === "after");
+  const hasBeforePhotos = (data?.photo_items ?? []).some((p) => p.kind === "before");
 
   const summary = summaryRows.length > 0 && (
     <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
@@ -338,6 +365,9 @@ const Report = () => {
                 The photos for this visit are attached to the email we sent you.
               </p>
             )}
+            {hasAfterPhotos && !hasBeforePhotos && (
+              <p className="text-sm text-muted-foreground mb-6 text-left">After photos only — no before photos were taken for this visit.</p>
+            )}
             <p className="text-xs text-muted-foreground mb-6 text-left">
               About these photos: they exist only for your private report. We photograph rooms, not
               people — faces, documents and screens are avoided. Only you and the Gatehouse team can
@@ -348,6 +378,11 @@ const Report = () => {
 {!reportEmpty && (<>
             {actionError && (
               <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
+            )}
+            {needsCardChoice && (
+              <p className="text-sm mb-4 text-center">
+                <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+              </p>
             )}
             {!issueOpen ? (
               <>
@@ -423,7 +458,7 @@ const Report = () => {
             )}
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
               <p className="text-sm text-foreground">
-                If everything looks good, approve below
+                If everything looks good, approve above
                 {data.amount ? <> — your card is then charged {data.amount}</> : null}.
                 If something isn&apos;t right, report an issue and the automatic charge is blocked for this visit — it never runs on its own afterwards.
                 {data.deadline && !data.charge_timer_blocked ? (
@@ -472,10 +507,23 @@ const Report = () => {
               We&apos;ve blocked the automatic charge for this visit. We&apos;ll reply within one business day —
               a confirmation is also in your email.
               {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
-              {data.issue_reason ? <> “{data.issue_reason}”</> : null}
+              {data.issue_reason ? (
+                // C10: only the client's own words render as "You told us";
+                // an operator note renders under a neutral label.
+                data.issue_source === "client" ? (
+                  <> You told us: “{data.issue_reason}”</>
+                ) : (
+                  <> Our note: “{data.issue_reason}”</>
+                )
+              ) : null}
             </p>
             {actionError && (
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
+            )}
+            {needsCardChoice && (
+              <p className="text-sm mb-4 text-center">
+                <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+              </p>
             )}
             <p className="text-base text-foreground mb-6">
               If the fix looks good, tap below to approve the report — that charges your saved
@@ -524,6 +572,11 @@ const Report = () => {
             {actionError && (
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
             )}
+            {needsCardChoice && (
+              <p className="text-sm mb-4 text-center">
+                <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
+              </p>
+            )}
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Checking payment…" : data.amount ? `Try charging ${data.amount} again` : "Try again"}
@@ -571,6 +624,9 @@ const Report = () => {
                 />
               </div>
             ) : null}
+            {hasAfterPhotos && !hasBeforePhotos && (
+              <p className="text-sm text-muted-foreground mb-6 text-left">After photos only — no before photos were taken for this visit.</p>
+            )}
             {data.postpay_issue ? (
               <p className="text-base text-foreground mb-6">
                 Your issue has been received. We&apos;ll review it and reply by email
@@ -613,6 +669,19 @@ const Report = () => {
                   onChange={(e) => setIssueText(e.target.value)}
                   placeholder="Tell us what wasn't right"
                 />
+                <label htmlFor="paid-issue-photo" className="block font-semibold mb-2">
+                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <input
+                  id="paid-issue-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm mb-1"
+                />
+                {issuePhotoNote && (
+                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
+                )}
                 {actionError && (
                   <p className="text-sm text-destructive mb-3" role="alert">{actionError}</p>
                 )}

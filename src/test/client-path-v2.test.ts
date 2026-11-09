@@ -182,6 +182,20 @@ describe("visit state + fee math", () => {
     expect(cancelFeeCents({ gh_state: "card_ready", gh_confirmed_date: future(1) }, "", now)).toBe(2500);
     expect(cancelFeeCents({ gh_state: "cancelled", gh_confirmed_date: future(1) }, "", now)).toBe(0);
   });
+
+  it("B6: a past visit date is its own state — never a card prompt", () => {
+    expect(deriveVisitState({ gh_state: "card_ready" }, "2020-01-15")).toBe("date_passed");
+    expect(deriveVisitState({ gh_state: "card_ready", gh_confirmed_date: "2020-01-15" })).toBe("date_passed");
+    expect(deriveVisitState({ gh_state: "card_ready" }, future(3))).toBe("awaiting_confirmation");
+    expect(deriveVisitState({ gh_state: "card_ready", gh_confirmed_date: future(3) })).toBe("confirmed");
+    // A past date never overrides a terminal or reported state.
+    expect(deriveVisitState({ gh_state: "cancelled" }, "2020-01-15")).toBe("cancelled");
+    expect(deriveVisitState({ gh_state: "paid" }, "2020-01-15")).toBe("paid");
+    expect(deriveVisitState({ gh_state: "card_ready", gh_report_sent_at: "2020-01-20T16:31:00Z" }, "2020-01-15")).toBe("report_sent");
+    expect(deriveVisitState({ gh_state: "date_declined" }, "2020-01-15")).toBe("date_declined");
+    // Cancelling a visit whose date already passed is free.
+    expect(cancelFeeCents({ gh_state: "card_ready" }, "2020-01-15", Date.now())).toBe(0);
+  });
 });
 
 describe("/api/visit", () => {
@@ -191,6 +205,26 @@ describe("/api/visit", () => {
     await visitHandler(get(btFor("bid-v", future(10))) as any, res as any);
     expect(res.body["state"]).toBe("confirmed");
     expect(res.body["cancel_fee_cents"]).toBe(0);
+  });
+
+  it("B6: a past requested date returns date_passed with no confirm-by promise and no fee", async () => {
+    delete store[0].metadata["gh_confirmed_date"];
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await visitHandler(get(btFor("bid-v", "2020-01-15")) as any, res as any);
+    expect(res.body["state"]).toBe("date_passed");
+    expect(res.body["booking"]["requested_date"]).toBe("2020-01-15");
+    expect(res.body["confirm_by"]).toBe("");
+    expect(res.body["cancel_fee_cents"]).toBe(0);
+  });
+
+  it("B6: a passed date can still be rescheduled and cancelled for free", async () => {
+    delete store[0].metadata["gh_confirmed_date"];
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await visitHandler(post(btFor("bid-v", "2020-01-15"), { action: "propose_date", date: future(5) }) as any, res as any);
+    expect(res.code).toBe(200);
+    expect(res.body["proposed_date"]).toBe(future(5));
   });
 
   it("cancel inside 48h records the $25 fee and the scope", async () => {
@@ -204,6 +238,37 @@ describe("/api/visit", () => {
     expect(store[0].metadata["gh_cancel_scope"]).toBe("stop");
     // client gets the cancellation email
     expect(resendCalls.some((c) => String(c["subject"]).includes("cancelled"))).toBe(true);
+  });
+
+  it("S13/N24: cancel inside 48h with no card on file does not promise a saved-card charge", async () => {
+    store[0].metadata["gh_confirmed_date"] = future(1);
+    delete store[0].metadata["gh_payment_method"];
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await visitHandler(post(btFor("bid-v", future(1)), { action: "cancel", scope: "once" }) as any, res as any);
+    expect(res.body["state"]).toBe("cancelled");
+    expect(res.body["fee_cents"]).toBe(2500);
+    // charge_fee would 409 no_payment_method here — the email must
+    // say so honestly instead of promising "your saved card".
+    const mail = resendCalls.find((c) => String(c["subject"]).includes("cancelled"));
+    expect(mail).toBeDefined();
+    const text = String(mail?.["text"] ?? "");
+    expect(text).toContain("no card on file for this booking");
+    expect(text).toContain("it is recorded and due");
+    expect(text).not.toContain("your saved card");
+  });
+
+  it("S13/N24: cancel inside 48h with a card keeps the saved-card wording", async () => {
+    store[0].metadata["gh_confirmed_date"] = future(1);
+    const res = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await visitHandler(post(btFor("bid-v", future(1)), { action: "cancel", scope: "once" }) as any, res as any);
+    expect(res.body["fee_cents"]).toBe(2500);
+    const mail = resendCalls.find((c) => String(c["subject"]).includes("cancelled"));
+    expect(mail).toBeDefined();
+    const text = String(mail?.["text"] ?? "");
+    expect(text).toContain("we will apply it to your saved card ourselves");
+    expect(text).toContain("Your saved card stays on file");
   });
 
   it("accepts only an offered alternative date", async () => {

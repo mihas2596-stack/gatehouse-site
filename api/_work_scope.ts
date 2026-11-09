@@ -23,7 +23,10 @@ export function buildWorkRooms(options: {
   repeat(options.bedrooms, "Bedroom", "Bedrooms", beds);
   repeat(options.halfBaths, "Half bathroom", "Half bathrooms", baths.filter((t) => !/Tub|Shower/.test(t)), true);
   rooms.push(room("Living room", living));
-  for (const zone of (options.extraZones ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 8)) rooms.push(room(zone.slice(0, 60), living));
+  // B7: a one-letter zone is never a real room — drop it instead of
+  // creating a room the cleaner can never finish (cf. booking 7898b53d,
+  // where "Home off…" became single-letter rooms).
+  for (const zone of (options.extraZones ?? "").split(",").map((s) => s.trim()).filter((s) => s.length >= 2).slice(0, 8)) rooms.push(room(zone.slice(0, 60), living));
   const extra: string[] = [];
   if ((options.addons?.interiorWindows ?? 0) > 0) extra.push(`Interior windows cleaned — ${Math.min(40, Math.floor(options.addons!.interiorWindows!))} windows`);
   if (options.addons?.pets) extra.push("Extra pet-hair work completed (pet waste is not included)");

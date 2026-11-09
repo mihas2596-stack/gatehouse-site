@@ -4,7 +4,7 @@ import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import { CHECKLIST, NOT_INCLUDED } from "@/config/checklist";
 import { ADDONS, globalTestCutActive, scaleTestPrice } from "@/config/calculator";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const addons = [
   ADDONS.insideOven,
@@ -16,10 +16,11 @@ const addons = [
 
 const WhatsIncluded = () => {
   // Same test regime as /services: one regime, one price, clearly labeled.
-  const [testPricing, setTestPricing] = useState(false);
-  useEffect(() => {
-    try { setTestPricing(sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive()); } catch { /* private mode */ }
-  }, []);
+  // Synchronous at render, NOT useEffect — see Services.tsx (audit B1):
+  // the prerendered HTML must show the same prices as the live page.
+  const testPricing = (() => {
+    try { return sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive(); } catch { return globalTestCutActive(); }
+  })();
   const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
   // Mobile shows the first 3 tasks per room; the rest open on tap.
   // Desktop shows the full list (no toggle needed at that width).
@@ -48,7 +49,7 @@ const WhatsIncluded = () => {
     {testPricing && (
       <div className="container">
         <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
-          Test booking: prices on this page are reduced for a payment test.
+          Test booking: prices on this page are reduced for a payment test. During this test, every home size is temporarily priced the same.
         </p>
       </div>
     )}
