@@ -21,7 +21,7 @@ const Terms = () => {
         <p className="mb-6 font-semibold">
           Effective Date: May 15, 2026
           <br />
-          Last Updated: November 3, 2026
+          Last Updated: November 9, 2026
         </p>
 
         <p className="mb-8">
@@ -35,7 +35,7 @@ const Terms = () => {
           <li><a href="#terms-3" className="text-primary underline">Description of Services</a></li>
           <li><a href="#terms-4" className="text-primary underline">Booking, Confirmation, and Modification</a></li>
           <li><a href="#terms-5" className="text-primary underline">Pricing and Payment</a></li>
-          <li><a href="#terms-6" className="text-primary underline">Cancellation, Rescheduling, and Lockouts</a></li>
+          <li><a href="#terms-6" className="text-primary underline">Cancellation and Rescheduling</a></li>
           <li><a href="#terms-7" className="text-primary underline">Service Concerns</a></li>
           <li><a href="#terms-8" className="text-primary underline">Client Responsibilities</a></li>
           <li><a href="#terms-9" className="text-primary underline">Services We Do Not Provide</a></li>
@@ -106,12 +106,12 @@ const Terms = () => {
           <strong>4.2 Right to Refuse.</strong> We reserve the right, at our sole discretion, to decline, reschedule, or terminate any booking, including but not limited to circumstances involving safety concerns, abusive behavior, unsanitary conditions, or misrepresentation of property condition.
         </p>
         <p className="mb-8">
-          <strong>4.3 Property Access.</strong> You are responsible for providing safe and lawful access to the property at the scheduled time. Failure to provide access constitutes a lockout (see Section 6).
+          <strong>4.3 Property Access.</strong> You are responsible for providing safe and lawful access to the property at the scheduled time. If we cannot get in, we will contact you to agree a new date.
         </p>
 
         <h2 id="terms-5" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">5. Pricing and Payment</h2>
         <p className="mb-4">
-          <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide. If the home differs materially from those details, extra time is billed at $45 per hour and starts only with your approval — we explain why and agree the maximum charge with you first.
+          <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide.
         </p>
         <p className="mb-4">
           <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. Your card is charged the visit price when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue. If you report an issue within that window — a missed item on the checklist, a question about the amount, or damage you believe we caused — automatic charging is blocked for that visit and never resumes on its own, even after the issue is closed. Once we have reviewed the issue with you and told you the outcome and amount, you must approve the report again to pay. The free re-clean in Section 7 applies only to missed checklist items. The 24-hour period runs from when we send the report; if our email provider confirms the report email was undelivered, automatic charging is paused and the period does not run until we send the report to you another way. Payments are processed by Stripe.
@@ -123,16 +123,13 @@ const Terms = () => {
           <strong>5.4 Chargebacks.</strong> Initiating a chargeback without first attempting to resolve a dispute with us in good faith constitutes a material breach of these Terms.
         </p>
 
-        <h2 id="terms-6" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">6. Cancellation, Rescheduling, and Lockouts</h2>
+        <h2 id="terms-6" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">6. Cancellation and Rescheduling</h2>
         <ul className="list-disc pl-6 mb-8 space-y-2">
           <li>
             <strong>Free cancellation or rescheduling:</strong> up to 48 hours before your visit.
           </li>
           <li>
             <strong>Later cancellations:</strong> $25.
-          </li>
-          <li>
-            <strong>Lockout:</strong> if we cannot access the property at the scheduled time, the full visit price is charged.
           </li>
         </ul>
         <p className="mb-8">

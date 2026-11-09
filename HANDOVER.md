@@ -145,9 +145,13 @@ Medium — 19 of 20 fixed; C8 needs investigation.
 Low — 26 of 30 fixed; N3, N8, N25 stay open, N21 is accepted.
 - **N1 — fixed (copy):** the test banner says all home sizes are
   temporarily priced the same while test pricing is active.
-- **N2 — fixed:** unknown URLs go through server rewrites to the new
-  `/api/not-found` endpoint instead of a soft 200; verify the live
-  status code after deploy.
+- **N2 — fixed:** unknown URLs go through server rewrites to
+  `/api/owner-auth?notfound=1` (the `notFoundHandler` in `api/_not_found.ts`,
+  answered by the owner-auth handler before any origin/auth check)
+  instead of a soft 200; verify the live status code after deploy.
+  Folded from the standalone `api/not-found.ts` on 09.11.2026 — the
+  Hobby plan allows only 12 serverless functions and the extra file
+  pushed the count to 13, failing the 857ae50 deploy.
 - **N3 — OPEN (live check):** `/areas/cumming` and other unserved cities
   need a real-browser check; subagents cannot do it.
 - **N4 — fixed:** `/reviews`, `/gallery`, `/availability` (and siblings)

@@ -6,7 +6,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How much does it cost?",
     group: "Booking",
-    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Extra time is billed at $45 per hour only with your approval. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
+    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
     link: { href: "/#pricing", label: "See the pricing table" },
   },
   {
@@ -27,7 +27,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What about pets?",
     group: "Booking",
-    a: "Pets are welcome. Add the pet option when you book so we plan extra time for hair and paw prints. Let us know if a pet should stay in a closed room while we work.",
+    a: "Pets are welcome. Add the pet option when you book so we can plan for hair and paw prints. Let us know if a pet should stay in a closed room while we work.",
   },
   {
     q: "How do I pause or cancel?",
@@ -62,7 +62,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if you can't get into my home?",
     group: "Access",
-    a: "We re-check your access instructions, try to reach you, and wait before marking the visit missed. If we still can't get in, the full visit price is charged under our Terms. Clear entry instructions on your visit page prevent this — you can add or change them any time before the visit.",
+    a: "We re-check your access instructions, try to reach you, and wait before marking the visit missed. Clear entry instructions on your visit page prevent this — you can add or change them any time before the visit.",
   },
   {
     q: "What if something gets damaged?",

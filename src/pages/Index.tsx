@@ -64,7 +64,7 @@ const homeFaqs = [
   },
   {
     q: "How do I cancel?",
-    a: "Free up to 48 hours before your visit; $25 inside 48 hours. If the cleaner cannot enter at the scheduled time, the full visit price applies. See our access policy in the Terms. There's no long-term commitment: pause or stop the schedule any time.",
+    a: "Free up to 48 hours before your visit; $25 inside 48 hours. See our access policy in the Terms. There's no long-term commitment: pause or stop the schedule any time.",
   },
 ];
 

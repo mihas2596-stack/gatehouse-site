@@ -493,8 +493,7 @@ const ThankYou = () => {
       </p>
 
       <p className="mt-8 text-sm leading-relaxed text-muted-foreground">
-        Free cancellation until 48 hours before your visit; after that a $25 fee applies. If we
-        arrive and can&apos;t get in — and can&apos;t reach you — the visit is charged in full.
+        Free cancellation until 48 hours before your visit; after that a $25 fee applies.
         See our{" "}
         <Link to="/terms" className="font-semibold text-primary underline">Terms</Link>.
         Need to change something before then? Email{" "}

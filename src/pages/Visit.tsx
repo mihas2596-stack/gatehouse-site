@@ -825,7 +825,6 @@ const Visit = () => {
                 </ul>
                 <p className="text-sm text-muted-foreground mt-3">
                   If entry fails, we re-check your instructions, contact you and wait before marking the visit missed.
-                  Our Terms apply the full visit price when entry remains unavailable.
                   You can meet your cleaner in person — no code needed.
                 </p>
               </div>

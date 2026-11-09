@@ -10,9 +10,6 @@ export type CalcServiceKey = "standard" | "deep" | "moveinout";
 export type FrequencyKey = "every2weeks" | "onetime";
 export type SizeBandKey = "notsure" | "under2500" | "2500" | "3000" | "3500" | "4000plus";
 
-export const EXTRA_TIME_RATE = 45;
-export const EXTRA_TIME_NOTE =
-  "Extra time is $45/hour, only with your approval — we explain why and agree the maximum with you before any extra work starts.";
 
 export const TIERS: { key: TierKey; label: string; rooms: string }[] = [
   { key: "S", label: "Small home", rooms: "1–2 bedrooms, up to 2 full bathrooms" },

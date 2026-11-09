@@ -15,7 +15,6 @@ import {
   ADDONS,
   ADDONS_INCLUDED_IN,
   MAX_INTERIOR_WINDOWS,
-  EXTRA_TIME_NOTE,
   SIZE_BANDS,
   SIZE_BAND_LABEL,
   EXTRA_ZONES,
@@ -931,7 +930,7 @@ const Quote = () => {
               )}
 
               <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>
-              <p className="text-sm text-muted-foreground mt-2">Fixed when you send your request. Nothing is charged today. {EXTRA_TIME_NOTE} Extra time is separate, optional work — it is never added automatically.</p>
+              <p className="text-sm text-muted-foreground mt-2">Fixed when you send your request. Nothing is charged today.</p>
 
               <Button
                 type="button"
@@ -1256,7 +1255,7 @@ const Quote = () => {
               <section className="mt-5 text-base leading-relaxed" aria-label="Changes and home access">
                 <h3 className="font-semibold">Changes &amp; home access</h3>
                 <p className="mt-2">Cancel free at least 48 hours before your visit; later cancellations cost $25.</p>
-                <p className="mt-2">Please arrange entry before the visit. If the cleaner cannot enter at the scheduled time, the full visit price applies. <a href="/terms#terms-6" target="_blank" rel="noopener noreferrer" className="underline text-primary">Read the access policy</a>.</p>
+                <p className="mt-2">Please arrange entry before the visit. <a href="/terms#terms-6" target="_blank" rel="noopener noreferrer" className="underline text-primary">Read the access policy</a>.</p>
               </section>
               <div className="mt-5 flex items-start gap-3">
                 <input

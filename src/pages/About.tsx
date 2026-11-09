@@ -87,7 +87,7 @@ const About = () => {
               Know What to Expect Before Your Visit
             </h2>
             <p className="text-foreground/80 leading-relaxed">
-              We'd rather show you exactly who we are. Cancellation and lockout rules are listed in our FAQ and Terms.
+              We'd rather show you exactly who we are. Cancellation rules are listed in our FAQ and Terms.
             </p>
             <p className="text-foreground/80 leading-relaxed mt-3">
               The bedroom photo shown on our homepage is from a Gatehouse clean. Other illustrative images are labelled. Your private report photos are never published without separate permission.

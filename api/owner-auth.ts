@@ -14,6 +14,9 @@
 //     /owner page then sends as its Bearer token.
 //   GET ?token= -> verifies an owner test-price token's signature and
 //     expiry WITHOUT creating anything (folded from test-price-check.ts).
+//   GET ?notfound=1 -> the branded 404 page (N2, folded from
+//     api/not-found.ts on 09.11.2026 — the Hobby plan allows only 12
+//     serverless functions and the extra file pushed the count to 13).
 // Throttle: at most one link email per 5 minutes (gh_events journal). If
 // the database is unavailable the throttle fails open — the panel itself
 // needs the database anyway, so this only matters for the send step.
@@ -21,6 +24,7 @@ import { dbSelect, logEvent } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 import { mintOwnerLoginToken, mintOwnerSessionToken, verifyOwnerLoginToken } from "./_owner_auth.js";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { notFoundHandler } from "./_not_found.js";
 
 type Req = {
   method?: string;
@@ -45,6 +49,10 @@ const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const THROTTLE_MS = 5 * 60 * 1000;
 
 export default async function handler(req: Req, res: Res) {
+  // N2 (09.11.2026): the catch-all rewrite in vercel.json points unknown
+  // paths here (?notfound=1). Answer with the branded 404 before any
+  // origin/auth check — a 404 must not depend on them.
+  if (req.query?.["notfound"] === "1") return notFoundHandler(req, res);
   const requestId = Math.random().toString(36).slice(2);
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });

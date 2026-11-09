@@ -37,7 +37,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "/api/not-found"
+      "destination": "/api/owner-auth?notfound=1"
     }
   ],
   "functions": {
