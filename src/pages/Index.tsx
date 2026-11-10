@@ -130,7 +130,6 @@ const Index = () => {
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
-            <p className="mt-3 text-base text-muted-foreground">No contact details or card needed to see your price.</p>
           </div>
           <figure>
             <img

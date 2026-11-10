@@ -630,13 +630,13 @@ const Quote = () => {
           <h1 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-3xl md:text-[44px] font-bold mb-3 scroll-mt-24 outline-none">
             A clear <span className="text-gradient-gold">price</span> for your home
           </h1>
-          <p className="text-muted-foreground text-lg">
-            {step === 1
-              ? "No contact details needed."
-              : step === 2
+          {step !== 1 && (
+            <p className="text-muted-foreground text-lg">
+              {step === 2
                 ? "Tell us when you'd like us to come — we'll confirm your date separately, and nothing is charged today."
                 : "Check everything, then save your card — $0 today."}
-          </p>
+            </p>
+          )}
           <div className="mt-5 max-w-md mx-auto">
             <p className="text-center text-sm font-semibold" aria-current="step">
               Step {step} of 3 · {step === 1 ? "Your home & price" : step === 2 ? "Your visit" : "Review & save card"}
@@ -672,7 +672,7 @@ const Quote = () => {
             )}
 
             {step === 1 && (<>
-            <p className="text-sm text-muted-foreground mb-6">Bedrooms, full bathrooms, ZIP, service type and frequency set your price. Half bathrooms help us plan — they don&apos;t change it.</p>
+            <p className="text-sm text-muted-foreground mb-6">Bedrooms, full bathrooms, ZIP, service type and frequency set your price.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="md:col-span-2">
                 <label htmlFor="q-zip" className="block text-sm font-medium mb-1.5">ZIP code (service area check)</label>
@@ -825,27 +825,27 @@ const Quote = () => {
             {service === "standard" && (
               <fieldset className="mt-6">
                 <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? *</legend>
-                <p className="text-sm text-muted-foreground mb-2">If you answer No, your first visit is a deep clean — the price below shows the deep-clean first visit and the regular price after it, before you book.</p>
-                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                <p className="text-sm text-muted-foreground mb-2">If you answer No, your first visit is a deep clean.</p>
+                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" className="grid grid-cols-2 gap-3">
                   {(["yes", "no"] as const).map((v) => (
-                    <label key={v} className="flex items-center gap-2 text-sm min-h-[44px]">
-                      <input id={`q-recent-${v}`} type="radio" name="recentlyCleaned" value={v} checked={recentlyCleaned === v} onChange={() => setRecentlyCleaned(v)} className="h-5 w-5" required />
+                    <button
+                      key={v}
+                      type="button"
+                      role="radio"
+                      aria-checked={recentlyCleaned === v}
+                      onClick={() => setRecentlyCleaned(v)}
+                      className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
+                        recentlyCleaned === v
+                          ? "border-primary bg-peach/40 text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
                       {v === "yes" ? "Yes" : "No"}
-                    </label>
+                    </button>
                   ))}
                 </div>
               </fieldset>
             )}
-
-            <div className="mt-6">
-              <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
-              <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
-                {HALF_BATH_CHOICES.map((n) => (
-                  <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-sm text-muted-foreground">Planning only — half bathrooms don&apos;t change your price.</p>
-            </div>
 
             <p className="mt-6 text-sm text-foreground">
               Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
@@ -973,6 +973,15 @@ const Quote = () => {
                     ))}
                   </select>
                   <p className="mt-1.5 text-sm text-muted-foreground">An estimate is fine. This helps us plan enough cleaning time.</p>
+                </div>
+                <div className="mt-4">
+                  <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
+                  <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
+                    {HALF_BATH_CHOICES.map((n) => (
+                      <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-sm text-muted-foreground">Planning only — half bathrooms don&apos;t change your price.</p>
                 </div>
                 <fieldset className="mt-4">
                   <legend className="text-sm font-medium">Any extra areas to clean?</legend>
