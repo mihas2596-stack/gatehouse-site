@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Mail, MapPin, Phone } from "lucide-react";
 
 const cities = ["Sugar Hill", "Suwanee", "Buford", "Duluth", "Johns Creek", "Alpharetta", "Roswell"];
 
-const Footer = () => {
+const Footer = ({ children }: { children?: ReactNode }) => {
   return (
     <footer className="bg-secondary text-[#3D2B1F]">
       <div className="container pt-8 pb-10 md:py-14">
@@ -63,6 +64,7 @@ const Footer = () => {
           </nav>
         </div>
       </div>
+      {children}
     </footer>
   );
 };

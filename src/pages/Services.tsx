@@ -118,7 +118,7 @@ const Services = () => {
       {/* Comparison — factual differences only, prices from the same config
           the quote form and the server charge by. One data source renders
           the desktop table and the mobile cards, so they can never drift. */}
-      <section className="py-8 bg-background"><details className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
+      <section className="pt-8 pb-4 md:py-8 bg-background"><details className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
         <div className="container max-w-4xl">
           <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
           <p className="text-center text-muted-foreground mb-8">

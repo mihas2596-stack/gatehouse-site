@@ -96,7 +96,7 @@ const ReportShowcase = () => {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <p className="text-base font-bold text-sage-foreground">Visit report</p>
               <span className="rounded-full bg-peach px-2.5 py-1 text-sm font-bold uppercase tracking-wide text-foreground">
-                Sample — demo, not a real report
+                SAMPLE — DEMO ONLY
               </span>
             </div>
 

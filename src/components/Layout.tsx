@@ -31,12 +31,16 @@ const Layout = () => {
           </div>
         </footer>
       ) : (
-        <Footer />
-      )}
-      {/* Reserve room for the floating action on marketing pages so it
-          never covers footer content; funnel pages render no bar. */}
-      {isMarketingRoute(pathname) && (
-        <div aria-hidden="true" className="md:hidden h-20" style={{ paddingBottom: "env(safe-area-inset-bottom)" }} />
+        <Footer>
+          {/* Reserve room for the floating action on marketing pages so it
+              never covers footer content; funnel pages render no bar. The
+              spacer lives inside the footer so the page ends on the
+              footer's background instead of a bare band of page
+              background below it. */}
+          {isMarketingRoute(pathname) && (
+            <div aria-hidden="true" className="md:hidden h-20" style={{ paddingBottom: "env(safe-area-inset-bottom)" }} />
+          )}
+        </Footer>
       )}
       <MobileStickyCTA />
     </div>

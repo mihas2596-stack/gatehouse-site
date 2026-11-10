@@ -1,6 +1,13 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <!-- Warm up the Termly connection before its loader script runs: the
+         ResourceBlocker is a render-blocking script, so one DNS+TLS
+         handshake saved on first visit is the whole safe win here. This
+         is not a script and does not touch consent (the blocker MUST
+         still be the first script on the page). -->
+    <link rel="preconnect" href="https://app.termly.io" />
+    <link rel="dns-prefetch" href="https://app.termly.io" />
     <!-- Termly Consent Banner: the ResourceBlocker MUST be the first script on the page -->
     <!-- onTermlyLoaded is defined BEFORE the loader script: the loader's
          onload handler runs as soon as it arrives (e.g. from cache), so a

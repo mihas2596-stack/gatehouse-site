@@ -43,7 +43,11 @@ const MobileStickyCTA = () => {
   useEffect(() => {
     const onFocusIn = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
-      setFieldFocused(!!t?.closest("input, textarea, select, button, a, summary") && !t?.closest('[aria-label="Quick action"]'));
+      // Only real keyboard fields hide the pill. Buttons, links and
+      // <summary> are taps, not typing: hiding the pill on them (e.g.
+      // opening an FAQ accordion) left it gone until the next tap
+      // elsewhere, which looked like it had vanished for good.
+      setFieldFocused(!!t?.closest("input, textarea, select, [contenteditable=\"true\"]"));
     };
     const onFocusOut = () => setFieldFocused(false);
     document.addEventListener("focusin", onFocusIn);
