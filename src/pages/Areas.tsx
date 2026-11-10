@@ -22,7 +22,7 @@ const neighborhoods = [
 const faqs = [
   {
     q: "Which neighborhoods do you serve?",
-    a: "We serve seven North Atlanta cities — see the list above. Enter your ZIP in the calculator to check.",
+    a: "We serve seven North Atlanta cities — see the list above. Enter your ZIP in the quote to check.",
   },
   {
     q: "Is there a travel fee for homes farther out?",
@@ -42,11 +42,11 @@ const faqs = [
   },
   {
     q: "Do you cover Atlanta proper or only the northern suburbs?",
-    a: "We serve the seven North Atlanta cities listed above. We don't currently serve intown Atlanta (Midtown, Buckhead, Decatur, etc.). Enter your ZIP in the calculator to check.",
+    a: "We serve the seven North Atlanta cities listed above. We don't currently serve intown Atlanta (Midtown, Buckhead, Decatur, etc.). Enter your ZIP in the quote to check.",
   },
   {
     q: "What if I'm just outside your service area?",
-    a: "Enter your ZIP in the calculator. If it's outside the seven cities, we can't take the booking right now.",
+    a: "Enter your ZIP in the quote. If it's outside the seven cities, we can't take the booking right now.",
   },
 ];
 
@@ -71,7 +71,7 @@ const Areas = () => {
             House Cleaning in <span className="text-gradient-gold">7 North Atlanta Suburbs</span>
           </h1>
           <p className="text-foreground text-lg">
-            Seven North Atlanta suburbs, one fixed schedule.
+            Seven North Atlanta suburbs, one simple routine.
           </p>
         </div>
       </section>
@@ -103,7 +103,7 @@ const Areas = () => {
                       rel="noreferrer"
                       aria-label={`Open ${n.name} on Google Maps`}
                     >
-                      Map
+                      See on map
                     </a>
                   </span>
                 </li>
@@ -120,7 +120,7 @@ const Areas = () => {
         <div className="container text-center max-w-2xl">
           <h2 className="font-heading text-3xl font-bold mb-4">Don't See Your Neighborhood?</h2>
           <p className="text-muted-foreground text-lg mb-8">
-            We serve seven cities across North Atlanta (see the list above). Enter your ZIP in the calculator to check whether your home is covered.
+            We serve seven cities across North Atlanta (see the list above). Enter your ZIP in the quote to check whether your home is covered.
           </p>
           <Button variant="hero" size="xl" asChild>
             <Link to="/quote" data-main-cta>See price &amp; request a date</Link>

@@ -43,7 +43,7 @@ const howItWorks = [
 
 const included = [
   { room: "Kitchen", tasks: ["Counters and backsplash wiped", "Sink and fixtures cleaned", "Appliance exteriors wiped", "Floors vacuumed and mopped"] },
-  { room: "Bathrooms", tasks: ["Toilets, tubs and showers cleaned", "Counters and sinks sanitized", "Mirrors polished", "Floors vacuumed and mopped"] },
+  { room: "Bathrooms", tasks: ["Toilets, tubs and showers cleaned", "Counters and sinks cleaned", "Mirrors polished", "Floors vacuumed and mopped"] },
   { room: "Bedrooms", tasks: ["Furniture and surfaces dusted", "Beds neatly made", "Floors vacuumed or mopped", "Trash removed"] },
   { room: "Living areas", tasks: ["Furniture and surfaces dusted", "Floors vacuumed and mopped", "Mirrors cleaned", "Trash removed"] },
 ];
@@ -261,7 +261,7 @@ const Index = () => {
         <div className="mx-auto max-w-3xl">
           <h2 className="text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-primary">How our pricing works</h2>
           <p className="mt-4 text-left text-base leading-relaxed text-foreground md:text-lg">
-            Your price is based on bedrooms, full bathrooms, the type of clean, how often we visit, your cleaning history and add-ons. Square footage and half bathrooms help us plan the visit; they do not change the calculator price.
+            Your price is based on bedrooms, full bathrooms, the type of clean, how often we visit, your cleaning history and add-ons. Square footage and half bathrooms help us plan the visit; they do not change your price.
           </p>
           <div className="mt-7 rounded-lg border border-border bg-card p-5 shadow-warm">
             <table className="w-full border-collapse text-left">
@@ -283,8 +283,8 @@ const Index = () => {
                 ))}
               </tbody>
             </table>
-            <p className="mt-3 text-sm text-foreground">Your size tier is set by the higher of your bedroom and full-bathroom counts: up to 2 of both is Small, 3 of either is Medium, 4 or more of either is Large.</p>
-            <p className="mt-3 text-sm text-foreground">If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. Most homes can see an estimate online. Homes with 6+ bedrooms or 6+ full bathrooms — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
+            <p className="mt-3 text-sm text-foreground">Your price is set by the larger of your two counts: up to 2 is Small, 3 is Medium, 4–5 is Large. Homes with 6 or more bedrooms or full bathrooms — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
+            <p className="mt-3 text-sm text-foreground">If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. Most homes get their price online before booking.</p>
           </div>
         </div>
       </div>
@@ -334,7 +334,7 @@ const Index = () => {
     </section>
 
     {/* 8. FINAL ACTION — the footer below carries contacts and links. */}
-    <section className="py-10 md:py-12">
+    <section className="pt-8 pb-4 md:py-12">
       <div className="container text-center">
         <Button asChild variant="hero" size="lg" className="rounded-full px-8">
           <Link to="/quote" data-main-cta>Plan My Cleaning</Link>

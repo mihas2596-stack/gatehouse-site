@@ -139,7 +139,7 @@ describe("quote steps", () => {
     openQuote();
     expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
-    expect(screen.getByText(/Fixed when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
+    expect(screen.getByText(/Your price is locked in when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));

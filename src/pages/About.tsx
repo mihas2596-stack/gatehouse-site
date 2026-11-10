@@ -63,7 +63,7 @@ const About = () => {
           {/* VALUE CARDS */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-16">
             {[
-              { icon: Heart, title: "Your First Visit", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book." },
+              { icon: Heart, title: "Your First Visit", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. You'll see both prices before you book." },
               { icon: Shield, title: "A Schedule You Agree To", desc: "Request every-other-week visits. We arrange and confirm each date and arrival window with you." },
             ].map((v) => (
               <div key={v.title} className="text-center p-8 bg-card rounded-2xl shadow-warm">
@@ -87,7 +87,7 @@ const About = () => {
               Know What to Expect Before Your Visit
             </h2>
             <p className="text-foreground/80 leading-relaxed">
-              We'd rather show you exactly who we are. Cancellation rules are listed in our FAQ and Terms.
+              Clear price online before you book, a photo report after every clean, and every date confirmed with you. Cancellation rules are listed in our FAQ and Terms.
             </p>
             <p className="text-foreground/80 leading-relaxed mt-3">
               The bedroom photo shown on our homepage is from a Gatehouse clean. Other illustrative images are labelled. Your private report photos are never published without separate permission.
@@ -122,7 +122,7 @@ const About = () => {
       {/* CTA */}
       <section className="py-16 bg-peach-gradient">
         <div className="container text-center max-w-2xl">
-          <h2 className="font-heading text-3xl font-bold mb-4">Want to Be Part of Our Story?</h2>
+          <h2 className="font-heading text-3xl font-bold mb-4">Ready to start?</h2>
           <p className="text-foreground/80 text-lg mb-8">
             See your price online and book your first clean in a few minutes.
           </p>

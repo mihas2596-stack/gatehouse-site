@@ -6,7 +6,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How much does it cost?",
     group: "Booking",
-    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Homes with 6+ bedrooms or 6+ full bathrooms — email hello@gatehousehomecleaning.com for a custom quote.",
+    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change your price. Homes with 6+ bedrooms or 6+ full bathrooms — email hello@gatehousehomecleaning.com for a custom quote.",
     link: { href: "/#pricing", label: "See the pricing table" },
   },
   {
@@ -78,6 +78,6 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if something gets damaged?",
     group: "Quality",
-    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly. Two things worth knowing before you book: under our Terms, damage claims made after 48 hours are waived, and disputes we can't resolve together go to binding arbitration (AAA) instead of court — see our Terms of Service for the details.",
+    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly. Two things worth knowing before you book: under our Terms, claims made after 48 hours can't be accepted, and disputes we can't resolve together go to binding arbitration (AAA) instead of court — see our Terms of Service for the details.",
   },
 ];

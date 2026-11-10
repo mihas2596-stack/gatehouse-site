@@ -14,7 +14,7 @@ const Footer = () => {
             </span>
             <span
               className="block font-semibold uppercase mt-1 mb-2"
-              style={{ color: '#6B3A1F', fontSize: '10px', letterSpacing: '0.18em' }}
+              style={{ color: '#6B3A1F', fontSize: '12px', letterSpacing: '0.18em' }}
             >
               North Atlanta, GA
             </span>

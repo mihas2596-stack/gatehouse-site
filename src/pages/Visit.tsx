@@ -729,7 +729,7 @@ const Visit = () => {
                 </p>
                 {data.scope_review_needed && (
                   <p className="text-sm text-muted-foreground mt-2">
-                    We may check a couple of scope details with you before confirming. Your agreed
+                    We may check a couple of details with you before confirming. Your agreed
                     price won&apos;t change unless you agree to a change.
                   </p>
                 )}

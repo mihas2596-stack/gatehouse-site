@@ -12,15 +12,15 @@ export type SizeBandKey = "notsure" | "under2500" | "2500" | "3000" | "3500" | "
 
 
 export const TIERS: { key: TierKey; label: string; rooms: string }[] = [
-  { key: "S", label: "Small home", rooms: "1–2 bedrooms and 1–2 full bathrooms" },
-  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms (under 4 of either)" },
-  { key: "L", label: "Large home", rooms: "4–5 bedrooms or 4+ full bathrooms" },
+  { key: "S", label: "Small home", rooms: "Up to 2 bedrooms and up to 2 full bathrooms" },
+  { key: "M", label: "Medium home", rooms: "3 bedrooms or 3 full bathrooms" },
+  { key: "L", label: "Large home", rooms: "4–5 bedrooms or 4–5 full bathrooms" },
 ];
 
 export const TIER_ROOM_LABEL: Record<TierKey, string> = {
   S: "1–2 bed / 1–2 bath",
   M: "3 bed or 3 bath",
-  L: "4+ bed or 4+ bath",
+  L: "4–5 bed or 4–5 bath",
 };
 
 /** Returns the tier for a home, or null when the home is larger than tier L. */
@@ -41,7 +41,7 @@ export const PRICES: Record<"standardOnetime" | "deep" | "moveinout" | "recurrin
 export const SERVICE_OPTIONS: { key: CalcServiceKey; label: string; tagline: string }[] = [
   { key: "standard", label: "Standard", tagline: "Every room, top to bottom" },
   { key: "deep", label: "Deep", tagline: "A detailed first-time clean for homes that haven't been professionally cleaned recently." },
-  { key: "moveinout", label: "Move-in / Move-out", tagline: "Empty home, full transition clean" },
+  { key: "moveinout", label: "Move-in / Move-out", tagline: "A full clean for an empty home when you're moving in or out." },
 ];
 
 export const SERVICE_LABEL_CALC: Record<CalcServiceKey, string> = {

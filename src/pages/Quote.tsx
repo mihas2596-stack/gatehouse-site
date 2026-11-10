@@ -221,6 +221,11 @@ const Quote = () => {
   const [entryDetail, setEntryDetail] = useState<EntryDetailChoice | "">("");
   const [entryNotes, setEntryNotes] = useState("");
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
+  // Step-1 validation errors: shown inline (never silent) when Continue is
+  // pressed with the cleaning-history question unanswered or the ZIP
+  // missing/invalid.
+  const [step1HistoryError, setStep1HistoryError] = useState(false);
+  const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
@@ -321,10 +326,15 @@ const Quote = () => {
 
   const goToStep2 = () => {
     if (needsCleaningHistory) {
+      setStep1HistoryError(true);
+      document.getElementById("cleaning-history")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       document.getElementById("q-recent-yes")?.focus();
       return;
     }
     if (!canProceed) {
+      if (!zipEntered) setStep1ZipError(zip.length === 0 ? "Enter your ZIP code to see your price." : "Enter a 5-digit ZIP code.");
+      document.getElementById("q-zip")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      document.getElementById("q-zip")?.focus();
       toast({
         title: "Enter a ZIP in our service area",
         description: "We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.",
@@ -682,16 +692,17 @@ const Quote = () => {
                   inputMode="numeric"
                   maxLength={5}
                   value={zip}
-                  onChange={(e) => setZip(e.target.value.replace(/\D/g, ""))}
+                  onChange={(e) => { setZip(e.target.value.replace(/\D/g, "")); setStep1ZipError(""); }}
                   placeholder="e.g. 30024"
-                  aria-invalid={zipOutOfArea}
+                  aria-invalid={zipOutOfArea || !!step1ZipError}
                   aria-describedby="zip-msg"
                   className={`w-full px-4 py-3 rounded-lg border bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring ${
                     zipOutOfArea ? "border-destructive" : "border-border"
                   }`}
                 />
-                <p id="zip-msg" className="mt-2 text-sm" role={zipOutOfArea ? "alert" : undefined}>
-                  {zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code.</span>}
+                <p id="zip-msg" className="mt-2 text-sm" role={zipOutOfArea || step1ZipError ? "alert" : undefined}>
+                  {step1ZipError && <span className="text-destructive">{step1ZipError}</span>}
+                  {!step1ZipError && zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code.</span>}
                   {zipInArea && <span className="text-foreground">We clean homes in {zip}.</span>}
                   {zipOutOfArea && (
                     <span className="text-destructive">
@@ -775,19 +786,20 @@ const Quote = () => {
             </div>
 
             {service === "standard" && (
-              <fieldset className="mt-6">
+              <fieldset className="mt-6" id="cleaning-history">
                 <legend className="block text-sm font-medium mb-2">Professionally cleaned in the last 3 months? *</legend>
                 {recentlyCleaned === "no" && (
                   <p className="text-sm text-muted-foreground mb-2">First visit will be a deep clean.</p>
                 )}
-                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" className="grid grid-cols-2 gap-3">
+                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" aria-describedby={step1HistoryError ? "history-error" : undefined} className="grid grid-cols-2 gap-3">
                   {(["yes", "no"] as const).map((v) => (
                     <button
                       key={v}
+                      id={v === "yes" ? "q-recent-yes" : "q-recent-no"}
                       type="button"
                       role="radio"
                       aria-checked={recentlyCleaned === v}
-                      onClick={() => setRecentlyCleaned(v)}
+                      onClick={() => { setRecentlyCleaned(v); setStep1HistoryError(false); }}
                       className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
                         recentlyCleaned === v
                           ? "border-primary bg-peach/40 text-foreground"
@@ -798,6 +810,9 @@ const Quote = () => {
                     </button>
                   ))}
                 </div>
+                {step1HistoryError && (
+                  <p id="history-error" role="alert" className="mt-2 text-sm text-destructive">Please answer this — it sets your first-visit price.</p>
+                )}
               </fieldset>
             )}
 
@@ -892,7 +907,7 @@ const Quote = () => {
                           : <>Estimated one-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first. Not sure? Pick your best guess — we review the scope with you before confirming your visit.
+                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first. Not sure? Pick your best guess — we'll confirm the details with you before your visit.
                       </p>
                     </div>
                   ) : breakdown ? (
@@ -927,7 +942,7 @@ const Quote = () => {
               )}
 
               <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>
-              <p className="text-sm text-muted-foreground mt-2">Fixed when you send your request. Nothing is charged today.</p>
+              <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request. Nothing is charged today.</p>
               <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 
               <Button
@@ -957,7 +972,7 @@ const Quote = () => {
               </p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip || "—"}</p>
+                <p className="text-muted-foreground mt-1">{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip || "—"}</p>
               </div>
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
@@ -998,7 +1013,7 @@ const Quote = () => {
                 </fieldset>
                 {scopeReview && (
                   <p className="mt-3 text-sm font-medium text-foreground">
-                    We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
+                    We&apos;ll confirm the details with you before confirming your visit. Your price is locked in when you send your request. If the details show different work is needed, we agree any change with you before confirming, never after.
                   </p>
                 )}
                 <p className="mt-3 text-sm text-foreground">
@@ -1034,14 +1049,14 @@ const Quote = () => {
                 <details className="mt-4">
                   <summary className="cursor-pointer text-sm font-semibold text-primary">View all details</summary>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
-                    <dt className="font-semibold">Home</dt><dd>{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath, {halfBaths} half bath · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
+                    <dt className="font-semibold">Home</dt><dd>{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
                     <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
                     <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
                     <dt className="font-semibold">Date</dt><dd>{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{fullAddress}</dd>
                   </dl>
                   {scopeReview && (
-                    <p className="mt-3 text-sm text-foreground">We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.</p>
+                    <p className="mt-3 text-sm text-foreground">We&apos;ll confirm the details with you before confirming your visit. Your price is locked in when you send your request. If the details show different work is needed, we agree any change with you before confirming, never after.</p>
                   )}
                 </details>
               </div>

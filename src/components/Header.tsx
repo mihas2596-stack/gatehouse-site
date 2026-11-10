@@ -87,7 +87,7 @@ const Header = () => {
             </span>
             <span
               className="hidden md:block font-semibold uppercase"
-              style={{ color: 'hsl(var(--brand-ink))', fontSize: '9.5px', letterSpacing: '0.18em', marginTop: '2px' }}
+              style={{ color: 'hsl(var(--brand-ink))', fontSize: '12px', letterSpacing: '0.18em', marginTop: '2px' }}
             >
               North Atlanta, GA
             </span>
@@ -149,7 +149,7 @@ const Header = () => {
           </span>
           <span
             className="hidden md:block font-semibold uppercase"
-            style={{ color: 'hsl(var(--brand-ink))', fontSize: '9.5px', letterSpacing: '0.18em', marginTop: '2px' }}
+            style={{ color: 'hsl(var(--brand-ink))', fontSize: '12px', letterSpacing: '0.18em', marginTop: '2px' }}
           >
             North Atlanta, GA
           </span>

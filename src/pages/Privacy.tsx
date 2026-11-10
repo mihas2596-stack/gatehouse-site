@@ -79,7 +79,7 @@ const Privacy = () => {
         </div>
 
         <h2 className="font-heading text-2xl font-bold mb-4">TABLE OF CONTENTS</h2>
-        <ol className="list-decimal pl-6 mb-8 space-y-1">
+        <ol className="list-decimal pl-6 mb-8 space-y-1 [&_a]:inline-flex [&_a]:min-h-[40px] [&_a]:items-center">
           <li><a href="#privacy-1" className="text-primary underline">WHAT INFORMATION DO WE COLLECT?</a></li>
           <li><a href="#privacy-2" className="text-primary underline">HOW DO WE PROCESS YOUR INFORMATION?</a></li>
           <li><a href="#privacy-3" className="text-primary underline">WHEN AND WITH WHOM DO WE SHARE YOUR PERSONAL INFORMATION?</a></li>

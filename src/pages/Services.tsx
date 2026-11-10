@@ -24,7 +24,7 @@ const mainService: ServiceCard = {
   includes: [
     "Each visit arranged and confirmed with you",
     "All rooms dusted & vacuumed",
-    "Bathrooms sanitized & polished",
+    "Bathrooms cleaned & polished",
     "Kitchen counters & appliances wiped",
     "Floors mopped throughout",
     "Trash removed & bins lined",
@@ -42,12 +42,12 @@ const alsoAvailable: ServiceCard[] = [
     title: "One-time clean",
     link: "/quote?service=standard&frequency=onetime",
     serviceKey: "standard",
-    desc: "A single thorough refresh that dusts, vacuums, mops, and sanitizes bathrooms and kitchens throughout your home.",
-    includes: ["All rooms dusted & vacuumed", "Bathrooms sanitized & polished", "Kitchen counters & appliances wiped", "Floors mopped throughout", "Trash removed & bins lined"],
+    desc: "A single thorough refresh that dusts, vacuums, mops, and cleans bathrooms and kitchens throughout your home.",
+    includes: ["All rooms dusted & vacuumed", "Bathrooms cleaned & polished", "Kitchen counters & appliances wiped", "Floors mopped throughout", "Trash removed & bins lined"],
   },
   {
     icon: Home,
-    title: "Move-in / Move-out",
+    title: "Move‑in / Move‑out",
     link: "/quote?service=moveinout",
     serviceKey: "moveinout",
     desc: "A thorough clean for an empty home — every cabinet, drawer and appliance cleaned inside and out, so the home is ready to move into or hand over.",
@@ -57,7 +57,7 @@ const alsoAvailable: ServiceCard[] = [
 
 const Services = () => {
   // Owner test sessions (a verified tp1 token on the quote page sets this
-  // flag for the tab) scale these cells to match the calculator — so one
+  // flag for the tab) scale these cells to match the quote — so one
   // regime never shows two different prices for the same add-on.
   // Synchronous at render, NOT useEffect: the prerendered HTML must show
   // the same prices as the live page. A client-only flag starts false
@@ -109,13 +109,14 @@ const Services = () => {
 
       <div className="container max-w-3xl">
         <p className="text-center text-muted-foreground">
-          Prices above are for a Small home — up to 2 bedrooms and 1–2 full bathrooms. Your size tier is set by the
-          higher of your bedroom and full-bathroom counts: 3 of either is Medium, 4 or more of either is Large.
+          Prices above are for a Small home — up to 2 bedrooms and up to 2 full bathrooms. Your price is set by the
+          larger of your two counts: up to 2 is Small, 3 is Medium, 4–5 is Large. Homes with 6 or more bedrooms or
+          full bathrooms — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.
         </p>
       </div>
 
       {/* Comparison — factual differences only, prices from the same config
-          the calculator and the server charge by. One data source renders
+          the quote form and the server charge by. One data source renders
           the desktop table and the mobile cards, so they can never drift. */}
       <section className="py-8 bg-background"><details className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
         <div className="container max-w-4xl">
@@ -130,7 +131,7 @@ const Services = () => {
                   <th className="p-4 font-semibold"></th>
                   <th className="p-4 font-heading font-bold">Standard</th>
                   <th className="p-4 font-heading font-bold">Deep clean</th>
-                  <th className="p-4 font-heading font-bold">Move-in / Move-out</th>
+                  <th className="p-4 font-heading font-bold">Move‑in / Move‑out</th>
                 </tr>
               </thead>
               <tbody className="[&_td]:p-4 [&_th]:p-4 [&_tr]:border-t [&_tr]:border-border align-top">
@@ -162,7 +163,7 @@ const Services = () => {
           </div>
           <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
             Haven&apos;t had a professional clean in the last 3 months? Your first visit is a deep clean — that rule is
-            explained in the calculator before you send anything, and after that first visit standard rates apply.
+            explained on the quote page before you send anything, and after that first visit standard rates apply.
             Deep and move-in/out prices already include the oven, fridge and cabinet interiors — they are never charged twice.
           </p>
         </div>
@@ -193,7 +194,7 @@ const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
 
 const comparisonCards = (disp: (n: number) => number) => {
   const rows = comparisonRows(disp);
-  const titles = ["Standard", "Deep clean", "Move-in / Move-out"] as const;
+  const titles = ["Standard", "Deep clean", "Move‑in / Move‑out"] as const;
   const keys = ["standard", "deep", "move"] as const;
   return titles.map((title, i) => ({
     title,

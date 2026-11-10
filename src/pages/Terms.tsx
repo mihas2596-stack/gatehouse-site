@@ -29,7 +29,7 @@ const Terms = () => {
         </p>
 
 <h2 className="font-heading text-2xl font-bold mb-4">Contents</h2>
-        <ol className="list-decimal pl-6 mb-8 space-y-1">
+        <ol className="list-decimal pl-6 mb-8 space-y-1 [&_a]:inline-flex [&_a]:min-h-[40px] [&_a]:items-center">
           <li><a href="#terms-1" className="text-primary underline">Agreement to Terms</a></li>
           <li><a href="#terms-2" className="text-primary underline">Company Information</a></li>
           <li><a href="#terms-3" className="text-primary underline">Description of Services</a></li>
