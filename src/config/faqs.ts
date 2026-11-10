@@ -6,7 +6,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How much does it cost?",
     group: "Booking",
-    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Larger homes — email hello@gatehousehomecleaning.com for a custom quote.",
+    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change the calculator price. Homes with 6+ bedrooms or 6+ full bathrooms — email hello@gatehousehomecleaning.com for a custom quote.",
     link: { href: "/#pricing", label: "See the pricing table" },
   },
   {
@@ -32,7 +32,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How do I pause or cancel?",
     group: "Booking",
-    a: "Cancel or reschedule on your visit page or by email. Reschedule or cancel free up to 48 hours before your visit. Later cancellations: $25. There's no long-term commitment, so you can pause or stop the recurring schedule any time — the $25 fee applies only to cancelling a single booked visit inside 48 hours, never to pausing the schedule.",
+    a: "Cancel or reschedule on your visit page or by email. Rescheduling is always free. Cancelling is free up to 48 hours before your visit; later cancellations cost $25. There's no long-term commitment, so you can pause or stop the recurring schedule any time — the $25 fee applies only to cancelling a single booked visit inside 48 hours, never to pausing the schedule or rescheduling.",
   },
   {
     q: "What if the cleaner can't make it?",
@@ -52,7 +52,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How long does a visit take?",
     group: "Booking",
-    a: "We book your visit in an arrival window — morning (7–11 AM), midday (11 AM–2 PM) or afternoon (2–5 PM), Atlanta time. Your cleaner arrives within that window and works through the full room-by-room checklist for your home. How long the clean itself takes depends on your home's size and the type of clean — a deep or move-in/out clean takes longer than a standard visit.",
+    a: "We book your visit in an arrival window — morning (7–11 AM), midday (11 AM–2 PM) or afternoon (2–5 PM), Atlanta time. Your cleaner arrives within that window and works through the full room-by-room checklist for your home. Most standard visits take 2–4 hours, depending on your home's size. A deep or move-in/out clean takes longer.",
   },
   {
     q: "What isn't included in a visit?",

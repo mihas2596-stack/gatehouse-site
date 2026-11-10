@@ -1,4 +1,4 @@
-export type CitySection = { heading: string; text: string };
+export type CitySection = { heading: string; text: string; link?: { href: string; label: string } };
 export type City = {
   slug: string;
   name: string;
@@ -27,7 +27,7 @@ export const CITIES: City[] = [
     sections: [
       { heading: "Homes in Suwanee", text: "Suwanee is a suburb built around Town Center, with neighborhoods spreading east toward Lawrenceville-Suwanee Road. The calculator asks for an approximate home size to plan the visit; the price is based on bedrooms and full bathrooms." },
       { heading: "What a visit covers", text: "Every visit covers the same rooms in the same order: kitchen, bathrooms, bedrooms, then living areas and hallways. Stair railings get wiped, stairs get vacuumed, beds are made and trash is emptied. Your cleaner brings their own vacuum, mop, cloths and products, so nothing needs to be waiting in the laundry room." },
-      { heading: "Scheduling and payment", text: "Most homes get a price online; larger homes can email us for a custom quote. You see your every-other-week price on screen, request a day and arrival window, and we confirm within one business day. Nothing is charged at booking. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue. Cancel or reschedule free up to 48 hours before a visit." },
+      { heading: "Scheduling and payment", text: "Most homes get a price online; homes with 6+ bedrooms or 6+ full bathrooms can email us for a custom quote. You see your every-other-week price on screen, request a day and arrival window, and we confirm within one business day. Nothing is charged at booking. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue. Cancel free up to 48 hours before a visit; rescheduling is always free." },
     ],
   },
   {
@@ -49,7 +49,7 @@ export const CITIES: City[] = [
     sections: [
       { heading: "Homes in Duluth", text: "Duluth is one of the denser parts of our service area, with townhomes and condominiums near Sugarloaf Parkway alongside traditional single-family streets closer to the downtown green. Townhome layouts stack bathrooms and bedrooms over two or three floors, so our checklist includes stair railings, stairs and hallway floors on every visit." },
       { heading: "Price", text: "Pricing works the same way here as everywhere else we serve: bedrooms, full bathrooms, cleaning type, frequency and add-ons. We collect an approximate home size and half bathrooms for scheduling; they do not change the calculator price." },
-      { heading: "Access and payment", text: "If your building has controlled access or a gate, you add gate details privately on your confirmed visit page — never in open booking notes. You do not need to be home during the visit. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue — and your weekday and arrival window repeat every other week unless we agree a change with you." },
+      { heading: "Access and payment", text: "If your building has controlled access or a gate, you add gate details privately on your confirmed visit page — never in open booking notes. You do not need to be home during the visit. Nothing is charged at booking. Your weekday and arrival window repeat every other week unless we agree a change with you.", link: { href: "/#when-you-pay", label: "See how payment works" } },
     ],
   },
   {
@@ -71,7 +71,7 @@ export const CITIES: City[] = [
     sections: [
       { heading: "Homes in Alpharetta", text: "Alpharetta is part of our North Atlanta service area, with a mix of new mixed-use developments near Avalon and established residential streets spreading out toward Windward. Houses here range from compact townhomes to large family homes, and both fit the same simple pricing model: bedrooms, full bathrooms, cleaning type, frequency and add-ons." },
       { heading: "What a visit covers", text: "The service itself is a standard clean repeated on a fixed rhythm. Kitchens and bathrooms get the detailed work, bedrooms and living areas get dusting and floors, and trash is emptied throughout. Your cleaner arrives with the supplies and equipment for the visit, so nothing needs to be supplied by you." },
-      { heading: "Price and booking", text: "Because we publish prices, there is no quote call and no in-home estimate visit in Alpharetta. Enter the details of the home, read the number on screen, then request the day and arrival window you want. We confirm within one business day. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue." },
+      { heading: "Price and booking", text: "Because we publish prices, there is no quote call and no in-home estimate visit in Alpharetta. Enter the details of the home, read the number on screen, then request the day and arrival window you want. We confirm within one business day. Nothing is charged at booking.", link: { href: "/#when-you-pay", label: "See how payment works" } },
     ],
   },
   {
@@ -80,7 +80,7 @@ export const CITIES: City[] = [
     title: "House Cleaning in Roswell, GA | Gatehouse Home Cleaning",
     description: "Every-other-week house cleaning in Roswell, GA. See your price online and request a date and arrival window. We confirm each visit with you.",
     sections: [
-      { heading: "Homes in Roswell", text: "Roswell homes come in many shapes, from townhomes near the historic district to single-family homes across the neighborhoods around Holcomb Bridge Road. Gatehouse Home Cleaning offers a room-by-room standard clean every other week, with each day and arrival window confirmed with you. Enter your bedrooms and bathrooms in the calculator to see the visit price before you share your contact details. For larger homes, email us for a custom quote." },
+      { heading: "Homes in Roswell", text: "Roswell homes come in many shapes, from townhomes near the historic district to single-family homes across the neighborhoods around Holcomb Bridge Road. Gatehouse Home Cleaning offers a room-by-room standard clean every other week, with each day and arrival window confirmed with you. Enter your bedrooms and bathrooms in the calculator to see the visit price before you share your contact details. For homes with 6+ bedrooms or 6+ full bathrooms, email us for a custom quote." },
       { heading: "What a visit covers", text: "A standard visit covers kitchen counters, sinks and appliance exteriors; bathroom fixtures, mirrors and floors; and dusting, vacuuming and mopping in bedrooms and living areas. You can check the full room-by-room list before requesting a booking. Inside the oven, inside the fridge, inside cabinets and interior windows are available as add-ons, with their prices shown in the calculator. Your cleaner brings the supplies and equipment needed for the clean." },
       { heading: "Booking and payment", text: "When requesting a Roswell visit, share your ZIP, street address, preferred date and arrival window. We confirm requests within one business day. If a professional cleaner has cleaned your home in the past three months, the first visit is a standard clean. Otherwise, the first visit starts with a deep clean; the calculator shows the first-visit and every-other-week prices. After the clean, you receive a photo report and your card is charged when you approve it — or automatically 24 hours after we send the report if you haven't reported an issue." },
     ],

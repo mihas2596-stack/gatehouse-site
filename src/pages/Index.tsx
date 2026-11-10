@@ -32,12 +32,12 @@ const howItWorks = [
   {
     n: "02",
     title: "Request your visit",
-    text: "We’ll email you to confirm your date, arrival window, and cleaner.",
+    text: "We’ll email you to confirm your date and arrival window (morning, midday or afternoon) — and your cleaner, before the visit.",
   },
   {
     n: "03",
     title: "Review your clean",
-    text: "Get your photos and checklist. Approve to pay, or report an issue — otherwise your card is charged automatically 24 hours after we send the report.",
+    text: "Get your photos and checklist. Approve to pay when you're happy — or report an issue.",
   },
 ];
 
@@ -188,7 +188,7 @@ const Index = () => {
             </div>
           )}
           {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
-          <div className="mt-8 border-t border-border pt-6">
+          <div id="when-you-pay" className="mt-8 border-t border-border pt-6">
             <h3 className="font-heading text-lg font-bold text-sage-foreground">When you pay</h3>
             <dl className="mt-3 space-y-4">
               <div>
@@ -209,7 +209,7 @@ const Index = () => {
               <p className="mt-2 text-base leading-relaxed text-foreground">
                 Email a photo to{" "}
                 <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline break-all">hello@gatehousehomecleaning.com</a>{" "}
-                within 24 hours after your photo report is sent, or tap Report an issue on your report page for an immediate block — email is registered manually. Reporting an issue within that window blocks the automatic charge for this visit. We fix it free within 72 hours after you report it. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
+                within 24 hours after your photo report is sent, or tap Report an issue on your report page for an immediate block — we'll block the charge as soon as we see your message. Reporting an issue within that window blocks the automatic charge for this visit. We fix it free within 72 hours after you report it. After the fix, you approve the report again to pay — the automatic charge never resumes on its own.
               </p>
             </details>
           </div>
@@ -284,7 +284,7 @@ const Index = () => {
               </tbody>
             </table>
             <p className="mt-3 text-sm text-foreground">Your size tier is set by the higher of your bedroom and full-bathroom counts: up to 2 of both is Small, 3 of either is Medium, 4 or more of either is Large.</p>
-            <p className="mt-3 text-sm text-foreground">If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. Most homes can see an estimate online. Larger homes — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
+            <p className="mt-3 text-sm text-foreground">If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. Most homes can see an estimate online. Homes with 6+ bedrooms or 6+ full bathrooms — <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">email us</a> for a custom quote.</p>
           </div>
         </div>
       </div>
@@ -305,6 +305,11 @@ const Index = () => {
             </Link>
           ))}
         </div>
+        <p className="mt-4 text-base text-foreground">
+          Don&apos;t see your city?{" "}
+          <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">Email us</a>
+          {" "}— we may still be able to help.
+        </p>
       </div>
     </section>
 
@@ -332,7 +337,7 @@ const Index = () => {
     <section className="py-10 md:py-12">
       <div className="container text-center">
         <Button asChild variant="hero" size="lg" className="rounded-full px-8">
-          <Link to="/quote" data-main-cta>See My Price</Link>
+          <Link to="/quote" data-main-cta>Plan My Cleaning</Link>
         </Button>
       </div>
     </section>

@@ -144,7 +144,10 @@ const Terms = () => {
         <h2 id="terms-6" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">6. Cancellation and Rescheduling</h2>
         <ul className="list-disc pl-6 mb-8 space-y-2">
           <li>
-            <strong>Free cancellation or rescheduling:</strong> up to 48 hours before your visit.
+            <strong>Free cancellation:</strong> up to 48 hours before your visit.
+          </li>
+          <li>
+            <strong>Rescheduling:</strong> free at any time.
           </li>
           <li>
             <strong>Later cancellations:</strong> $25.

@@ -115,7 +115,12 @@ export default function SaveCard() {
           {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
         </> : <>
           {done ? <CheckCircle className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" /> : <CreditCard className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" />}
-          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? !bt ? "Card saved — $0 charged today" : confirmed ? "Booking confirmed" : "Card saved. Your request is complete." : "Last step: save your card — $0 today"}</h1>
+          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? "Card saved — $0 charged today" : "Last step: save your card — $0 today"}</h1>
+          {done && (
+            <p className="mt-2 mb-4 text-base font-semibold text-foreground">
+              Card: saved ✓ · Visit: {!bt ? "not requested yet" : confirmed ? `confirmed for ${formatDateLong(booking?.confirmed_date)}` : "awaiting confirmation"}
+            </p>
+          )}
           <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? !bt ? "Your payment method is saved. To request a cleaning, choose your service and date below." : confirmed ? `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : `Your date is awaiting confirmation. We'll email your cleaner and arrival window ${booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
           {booking && <dl className="rounded-xl border border-border bg-card p-5 text-left space-y-3 mb-6">
             {booking.service && <div><dt className="font-semibold">Service</dt><dd>{booking.service}</dd></div>}

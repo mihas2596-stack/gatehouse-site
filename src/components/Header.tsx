@@ -65,7 +65,7 @@ const Header = () => {
   }, [isOpen]);
 
   // Checkout-stage pages — and /quote itself — get a minimal header:
-  // logo + help only. No nav, no "See My Price" — nothing that pulls a
+  // logo + help only. No nav, no "Plan My Cleaning" — nothing that pulls a
   // client who is one step from finishing back into browsing.
   const minimalHeader = location.pathname === "/cleaner" || location.pathname === "/thank-you" || location.pathname === "/save-card" || location.pathname === "/quote";
   if (minimalHeader) {
@@ -174,7 +174,7 @@ const Header = () => {
 
         <div className="hidden nav:flex items-center gap-3">
           <Button variant="hero" size="sm" asChild>
-            <Link to="/quote">See My Price</Link>
+            <Link to="/quote">Plan My Cleaning</Link>
           </Button>
         </div>
 
@@ -211,7 +211,7 @@ const Header = () => {
             ))}
             <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-border">
               <Button variant="hero" size="lg" asChild>
-                <Link to="/quote">See My Price</Link>
+                <Link to="/quote">Plan My Cleaning</Link>
               </Button>
             </div>
           </div>

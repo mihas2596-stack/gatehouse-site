@@ -40,7 +40,7 @@ export const PRICES: Record<"standardOnetime" | "deep" | "moveinout" | "recurrin
 
 export const SERVICE_OPTIONS: { key: CalcServiceKey; label: string; tagline: string }[] = [
   { key: "standard", label: "Standard", tagline: "Every room, top to bottom" },
-  { key: "deep", label: "Deep", tagline: "Detailed first-time reset" },
+  { key: "deep", label: "Deep", tagline: "A detailed first-time clean for homes that haven't been professionally cleaned recently." },
   { key: "moveinout", label: "Move-in / Move-out", tagline: "Empty home, full transition clean" },
 ];
 

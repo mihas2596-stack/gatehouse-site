@@ -286,7 +286,7 @@ const Privacy = () => {
           15. PHOTOS OF YOUR HOME</h2>
         <p className="mb-8">
           After each visit the cleaner takes photos of the cleaned rooms for your photo report. We use them only to show
-          you the work and to handle questions about the visit. Published report photos are kept for 90 days after the report is sent. Unpublished photos are kept for up to 90 days after upload. We do not publish them without
+          you the work and to handle questions about the visit. Photos in your private report are kept for 90 days after the report is sent. Unpublished photos are kept for up to 90 days after upload. We do not publish them without
           your written permission.
         </p>
 

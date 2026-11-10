@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { campaignAttribution, trackFunnel } from "@/lib/measurement";
-import { Sparkles } from "lucide-react";
+import { Home, Search, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
@@ -61,7 +61,7 @@ const SMS_DISCLOSURE =
 const SMS_CONSENT_TEXT = `${SMS_CONSENT_MAIN} ${SMS_DISCLOSURE}`;
 const PHOTO_CONSENT_MAIN =
   "I agree to photos of the cleaned rooms for my private cleaning report.";
-const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms not to photograph on your visit page before the visit.";
+const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms you'd rather we skip in photos on your visit page before the visit.";
 const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
 const Quote = () => {
@@ -722,7 +722,9 @@ const Quote = () => {
               <div className="md:col-span-2">
                 <p id="service-label" className="block text-sm font-medium mb-2">Type of cleaning</p>
                 <div role="radiogroup" aria-labelledby="service-label" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {SERVICE_OPTIONS.map((t) => (
+                  {SERVICE_OPTIONS.map((t) => {
+                    const Icon = t.key === "standard" ? Home : t.key === "deep" ? Search : Package;
+                    return (
                     <button
                       key={t.key}
                       type="button"
@@ -736,28 +738,37 @@ const Quote = () => {
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        <Sparkles className={`w-4 h-4 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
+                        <Icon className={`w-4 h-4 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
                         {t.label}
                       </div>
                       <p className="text-sm font-normal text-muted-foreground mt-1">{t.tagline}</p>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
               {service === "standard" && (
                 <div className="md:col-span-2">
-                  <label htmlFor="q-frequency" className="block text-sm font-medium mb-1.5">How often</label>
-                  <select
-                    id="q-frequency"
-                    value={frequency}
-                    onChange={(e) => setFrequency(e.target.value as FrequencyKey)}
-                    className={selectClass}
-                  >
+                  <p id="frequency-label" className="block text-sm font-medium mb-2">How often</p>
+                  <div role="radiogroup" aria-labelledby="frequency-label" className="grid grid-cols-2 gap-3">
                     {FREQUENCY_OPTIONS.map((f) => (
-                      <option key={f.key} value={f.key}>{f.label}</option>
+                      <button
+                        key={f.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={frequency === f.key}
+                        onClick={() => setFrequency(f.key)}
+                        className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
+                          frequency === f.key
+                            ? "border-primary bg-peach/40 text-foreground"
+                            : "border-border bg-background text-muted-foreground hover:border-primary/40"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
                     ))}
-                  </select>
+                  </div>
                 </div>
               )}
 
@@ -792,19 +803,14 @@ const Quote = () => {
 
             {/* Add-ons — collapsed by default so the price form stays short. */}
             <div className="mt-6">
-              <div className="flex flex-wrap items-baseline gap-x-3">
-                <button
-                  type="button"
-                  aria-expanded={extrasOpen}
-                  onClick={() => setExtrasOpen((v) => !v)}
-                  className="min-h-[44px] text-sm font-semibold text-primary underline"
-                >
-                  Add extras (optional)
-                </button>
-                <span className="text-sm text-muted-foreground">
-                  {extrasSummary || "None selected"}
-                </span>
-              </div>
+              <button
+                type="button"
+                aria-expanded={extrasOpen}
+                onClick={() => setExtrasOpen((v) => !v)}
+                className="min-h-[44px] rounded-lg border border-border bg-background px-4 py-2 text-sm font-semibold text-foreground"
+              >
+                Add extras (optional) — {extrasSummary || "None selected"} {extrasOpen ? "⌃" : "⌄"}
+              </button>
               {extrasOpen && (<div className="flex flex-col gap-3 mt-1">
                 {!includedAddons.includes("insideOven") && (
                   <label htmlFor="q-addon-oven" className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
@@ -872,6 +878,11 @@ const Quote = () => {
                       <p className="text-sm text-muted-foreground mt-2">
                         {SERVICE_LABEL_CALC[service]}. Inside oven, fridge and cabinets are included — never charged twice.
                       </p>
+                      {service === "deep" && (
+                        <p className="text-sm mt-2">
+                          <Link to="/services" className="underline text-primary">Compare with a standard clean</Link>
+                        </p>
+                      )}
                     </>
                   ) : !answered ? (
                     <div className="flex flex-col items-center gap-1">
@@ -917,6 +928,7 @@ const Quote = () => {
 
               <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>
               <p className="text-sm text-muted-foreground mt-2">Fixed when you send your request. Nothing is charged today.</p>
+              <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 
               <Button
                 type="button"
@@ -950,7 +962,7 @@ const Quote = () => {
 
               {/* PLANNING THE VISIT — size and extra areas never change the price */}
               <details className="mt-6 rounded-lg border border-border bg-background p-4">
-                <summary className="cursor-pointer font-heading text-base font-bold">More about your home (optional)</summary>
+                <summary className="cursor-pointer font-heading text-base font-bold">More about your home (optional)<span className="mt-0.5 block text-sm font-normal text-muted-foreground">Home size, half bathrooms and extra rooms.</span></summary>
                 <div className="mt-3">
                   <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Approximate home size — if you know it</label>
                   <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>
@@ -1124,7 +1136,7 @@ const Quote = () => {
                     placeholder="Pets, focus areas, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
-                  <p className="mt-1.5 text-sm text-muted-foreground">Cleaning preferences only. Add entry codes privately after confirmation.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">Please don&apos;t put door codes or key details here — you&apos;ll add them privately on your confirmed visit page.</p>
                 </div>
                 <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your home address</h3>
                 <div>
@@ -1274,6 +1286,7 @@ const Quote = () => {
                 </label>
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
+              <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
                 <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="flex-1 min-h-[48px]">
@@ -1282,7 +1295,7 @@ const Quote = () => {
                     : !canProceed
                       ? "Enter a ZIP in our service area"
                       : needsCleaningHistory ? "Answer the cleaning-history question above"
-                      : "Continue to save card — $0 today"}
+                      : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
               <p className="mt-3 text-center text-base">Next: save your card securely on Stripe. $0 charged today.</p>

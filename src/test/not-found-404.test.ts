@@ -40,7 +40,7 @@ describe("api/not-found (via api/_not_found)", () => {
   it("GET page carries the site header and footer (09.11 live finding)", async () => {
     const res = mockRes();
     await notFoundHandler({ method: "GET", headers: {}, query: {} }, res);
-    // Header: logo + nav + See My Price, matching Header.tsx.
+    // Header: logo + nav + See My Price (404 template keeps it; audit item 15 is out of fix7 scope).
     expect(res.body).toContain("<header>");
     expect(res.body).toContain("Gatehouse Home Cleaning");
     expect(res.body).toContain('href="/services"');

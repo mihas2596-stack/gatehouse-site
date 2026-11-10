@@ -136,6 +136,9 @@ function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhotoPick, 
         onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
         className="w-full text-sm mb-1"
       />
+      <p className="text-xs text-muted-foreground mb-2">
+        Photos up to 1 MB each. If your photo is larger, take a screenshot of it first.
+      </p>
       {photoNote && (
         <p className="text-xs text-muted-foreground mb-2">{photoNote}</p>
       )}
@@ -789,13 +792,18 @@ const Report = () => {
                 within one business day.
               </p>
             ) : !paidIssueOpen ? (
-              <button
-                type="button"
-                className="text-sm underline text-muted-foreground"
-                onClick={() => setPaidIssueOpen(true)}
-              >
-                Something wasn&apos;t right? Report an issue with this visit
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="text-sm underline text-muted-foreground"
+                  onClick={() => setPaidIssueOpen(true)}
+                >
+                  Something wasn&apos;t right? Report an issue with this visit
+                </button>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  After payment, reporting an issue starts a review — we&apos;ll email you what happens next.
+                </p>
+              </>
             ) : (
               <div className="text-left max-w-md mx-auto">
                 <p className="text-sm text-muted-foreground mb-3">
@@ -835,6 +843,9 @@ const Report = () => {
                   onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
                   className="w-full text-sm mb-1"
                 />
+                <p className="text-xs text-muted-foreground mb-2">
+                  Photos up to 1 MB each. If your photo is larger, take a screenshot of it first.
+                </p>
                 {issuePhotoNote && (
                   <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
                 )}

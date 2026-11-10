@@ -18,7 +18,8 @@ describe("additional audit acceptance criteria — intended behavior", () => {
   it("the Change card destination allows a different card for a confirmed visit", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, booking: { ...card, card_confirmed: "1", booking_confirmed: "1", confirmed_date: "2026-11-16", confirmed_window: "morning" } }) }));
     render(<MemoryRouter initialEntries={["/save-card?bt=audit-token"]}><SaveCard /></MemoryRouter>);
-    await screen.findByRole("heading", { name: "Booking confirmed" });
+    await screen.findByRole("heading", { name: "Card saved — $0 charged today" });
+    expect(screen.getByText(/Card: saved ✓ · Visit: confirmed for November 16, 2026/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Add.*card|Change.*card|different card/i })).not.toBeNull();
   });
   it("a standalone card save does not claim that a cleaning date is awaiting confirmation", async () => {

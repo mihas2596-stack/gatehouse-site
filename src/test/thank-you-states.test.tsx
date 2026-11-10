@@ -34,7 +34,7 @@ describe("/thank-you card states", () => {
   it("state A: card not saved yet — one last step, $0 today", async () => {
     renderWith({ ok: true, booking: { first: "21.9", service: "Standard Cleaning", date: "2026-11-08" } });
     expect(await screen.findByText("One last step: save your card")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
     expect(screen.getByText("$21.90")).toBeInTheDocument();
     expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
   });
@@ -58,7 +58,7 @@ describe("/thank-you card states", () => {
     expect(screen.getByText(/Your date is awaiting confirmation/)).toBeInTheDocument();
     expect(screen.getByText("client@example.com")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View my visit" })).toBeInTheDocument();
-    expect(screen.getByText(/Your card is charged automatically 24 hours after we send the report/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is charged today — you'll approve your photo report after the clean\./)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save card/ })).not.toBeInTheDocument();
   });
 

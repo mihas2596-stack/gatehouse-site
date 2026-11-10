@@ -40,7 +40,7 @@ const CityPage = () => {
               <li><strong>Price:</strong> published by bedrooms and full bathrooms — <Link to="/quote" className="text-primary underline">see your price</Link>.</li>
               <li><strong>First visit:</strong> if no professional cleaned your home in the last 3 months, your first visit is a deep clean; the calculator shows the first-visit and every-other-week prices.</li>
               <li><strong>Payment:</strong> nothing at booking; charged when you approve the photo report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
-              <li><strong>Schedule:</strong> each visit is arranged and confirmed with you; cancel or reschedule free up to 48 hours before a visit.</li>
+              <li><strong>Schedule:</strong> each visit is arranged and confirmed with you; cancel free up to 48 hours before a visit; rescheduling is always free.</li>
             </ul>
           </div>
 
@@ -50,6 +50,9 @@ const CityPage = () => {
                 <h2 className="font-heading text-2xl font-bold mb-3">{section.heading}</h2>
                 <p className="text-base leading-relaxed text-foreground md:text-lg">
                   {section.text}
+                  {section.link ? (
+                    <> <Link to={section.link.href} className="text-primary underline">{section.link.label}</Link></>
+                  ) : null}
                 </p>
               </section>
             ))}

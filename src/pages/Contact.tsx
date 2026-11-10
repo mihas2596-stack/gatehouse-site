@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Mail, MapPin, Clock, Phone, Send } from "lucide-react";
+import { Mail, MapPin, Phone, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link, useNavigate } from "react-router-dom";
 import SEO from "@/components/SEO";
@@ -13,7 +13,6 @@ const Contact = () => {
     name: "",
     email: "",
     message: "",
-    privacy: false,
     website: "",
   });
   const requestRef = useRef<string | null>(null);
@@ -23,7 +22,6 @@ const Contact = () => {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
     message: useRef<HTMLTextAreaElement>(null),
-    privacy: useRef<HTMLInputElement>(null),
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -46,7 +44,6 @@ const Contact = () => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.email = "Enter a valid email, like name@example.com.";
     const message = String(formData.message ?? "").trim();
     if (message.length < 1) errs.message = "Enter your question.";
-    if (!formData.privacy) errs.privacy = "Please acknowledge our Privacy Policy to continue.";
     return errs;
   };
 
@@ -56,7 +53,7 @@ const Contact = () => {
     const errs = validate();
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      const order: Array<keyof typeof fieldRefs> = ["name", "email", "message", "privacy"];
+      const order: Array<keyof typeof fieldRefs> = ["name", "email", "message"];
       for (const f of order) {
         if (errs[f]) {
           fieldRefs[f].current?.focus();
@@ -185,14 +182,6 @@ const ContactInfo = () => (
 
     <div className="space-y-8">
     <div className="flex items-start gap-3 text-sm text-muted-foreground">
-      <Clock className="w-5 h-5 text-golden mt-0.5" />
-      <div>
-        <p className="font-medium text-foreground">Response Time</p>
-        <p>We reply within one business day.</p>
-      </div>
-    </div>
-
-    <div className="flex items-start gap-3 text-sm text-muted-foreground">
       <MapPin className="w-5 h-5 text-golden mt-0.5" />
       <div>
         <p className="font-medium text-foreground">Service Area</p>
@@ -212,6 +201,7 @@ const ContactInfo = () => (
         title="Gatehouse Home Cleaning Service Area"
       />
     </div>
+    <p className="text-sm text-muted-foreground">Service area — we come to you; there is no walk-in office.</p>
     </div>
   </div>
 );
@@ -226,7 +216,6 @@ interface ContactFormProps {
     name: React.RefObject<HTMLInputElement>;
     email: React.RefObject<HTMLInputElement>;
     message: React.RefObject<HTMLTextAreaElement>;
-    privacy: React.RefObject<HTMLInputElement>;
   };
 }
 
@@ -279,25 +268,10 @@ const ContactForm = ({ formData, handleChange, handleSubmit, isSubmitting, error
         </div>
       </div>
 
-      <div className="mt-5 flex items-start gap-3">
-        <input
-          id="privacy"
-          name="privacy"
-          type="checkbox"
-          ref={fieldRefs.privacy}
-          checked={!!formData.privacy}
-          onChange={handleChange}
-          aria-required="true"
-          aria-invalid={!!errors.privacy}
-          aria-describedby={errors.privacy ? "privacy-error" : undefined}
-          className="mt-1 h-6 w-6 shrink-0 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-        />
-        <label htmlFor="privacy" className="text-base text-foreground leading-relaxed">
-          I acknowledge Gatehouse Home Cleaning will use my email to reply to this question and that my information is handled per the{" "}
-          <Link to="/privacy" className="underline text-primary">Privacy Policy</Link>.
-        </label>
-      </div>
-      {errors.privacy && <p id="privacy-error" role="alert" className="mt-1 text-sm text-destructive">{errors.privacy}</p>}
+      <p className="mt-5 text-sm text-muted-foreground">
+        By sending this message you agree to our{" "}
+        <Link to="/privacy" className="underline text-primary">Privacy Policy</Link>.
+      </p>
 
       <Button variant="hero" size="xl" type="submit" disabled={isSubmitting} className="w-full mt-6 min-h-[44px]">
         {isSubmitting ? "Sending..." : <>Send My Question <Send className="w-5 h-5" /></>}

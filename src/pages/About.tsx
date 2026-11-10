@@ -6,7 +6,7 @@ import { Check } from "lucide-react";
 import nikFounder from "@/assets/nik-founder.jpeg";
 
 const MANIFESTO_ROWS: { good: string }[] = [
-  { good: "Most homes get a price online — before you book; larger homes can email us for a custom quote" },
+  { good: "Most homes get a price online — before you book; homes with 6+ bedrooms or 6+ full bathrooms can email us for a custom quote" },
 ];
 
 
@@ -63,7 +63,7 @@ const About = () => {
           {/* VALUE CARDS */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-16">
             {[
-              { icon: Heart, title: "First Clean Rule", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book." },
+              { icon: Heart, title: "Your First Visit", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. The calculator shows both prices before you book." },
               { icon: Shield, title: "A Schedule You Agree To", desc: "Request every-other-week visits. We arrange and confirm each date and arrival window with you." },
             ].map((v) => (
               <div key={v.title} className="text-center p-8 bg-card rounded-2xl shadow-warm">
@@ -127,7 +127,7 @@ const About = () => {
             See your price online and book your first clean in a few minutes.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote" data-main-cta>See My Price</Link>
+            <Link to="/quote" data-main-cta>Plan My Cleaning</Link>
           </Button>
         </div>
       </section>

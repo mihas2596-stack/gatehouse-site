@@ -10,13 +10,13 @@ import {
 } from "@/components/ui/accordion";
 
 const neighborhoods = [
-  { name: "Sugar Hill", desc: "Sugar Hill — every-other-week cleaning on a fixed day and time." },
-  { name: "Suwanee", desc: "Suwanee — every-other-week cleaning on a fixed day and time." },
-  { name: "Buford", desc: "Buford — every-other-week cleaning on a fixed day and time." },
-  { name: "Duluth", desc: "Duluth — every-other-week cleaning on a fixed day and time." },
-  { name: "Johns Creek", desc: "Johns Creek — every-other-week cleaning on a fixed day and time." },
-  { name: "Alpharetta", desc: "Alpharetta — every-other-week cleaning on a fixed day and time." },
-  { name: "Roswell", desc: "Roswell — every-other-week cleaning on a fixed day and time." },
+  { name: "Sugar Hill", desc: "At the northern edge of Gwinnett County." },
+  { name: "Suwanee", desc: "Built around Town Center, with neighborhoods spreading east toward Lawrenceville-Suwanee Road." },
+  { name: "Buford", desc: "Long-established streets near the historic downtown and newer construction further north." },
+  { name: "Duluth", desc: "Townhomes near Sugarloaf Parkway and single-family streets near the downtown green." },
+  { name: "Johns Creek", desc: "Homes in north Fulton County." },
+  { name: "Alpharetta", desc: "New developments near Avalon and established streets toward Windward." },
+  { name: "Roswell", desc: "Townhomes near the historic district and family homes around Holcomb Bridge Road." },
 ];
 
 const faqs = [
@@ -83,8 +83,11 @@ const Areas = () => {
             <ul className="space-y-3">
               {neighborhoods.map((n) => (
                 <li key={`area-${n.name}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-peach/30 px-4 py-3">
-                  <span className="flex items-center gap-2 text-base font-semibold text-foreground">
-                    <MapPin className="w-5 h-5 text-primary" aria-hidden="true" /> {n.name}, GA
+                  <span className="flex flex-col">
+                    <span className="flex items-center gap-2 text-base font-semibold text-foreground">
+                      <MapPin className="w-5 h-5 text-primary" aria-hidden="true" /> {n.name}, GA
+                    </span>
+                    <span className="text-sm font-normal text-muted-foreground">{n.desc}</span>
                   </span>
                   <span className="flex flex-wrap items-center gap-2">
                     <Link

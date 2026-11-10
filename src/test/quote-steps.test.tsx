@@ -58,14 +58,14 @@ describe("quote steps", () => {
     expect(screen.queryByText(/does not change if we resend a message, publish a new report version, or change the date or cleaner/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/Gate code, where the key is/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
   });
 
   it("add extras are grouped, priced, and none are pre-selected", () => {
     openQuote();
-    expect(screen.getByText("Add extras (optional)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ })).toBeInTheDocument();
     // Extras start collapsed; expand them before touching the controls.
-    fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
     expect((screen.getByLabelText(/Inside oven/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Inside fridge/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Inside cabinets/) as HTMLInputElement).checked).toBe(false);
@@ -105,7 +105,7 @@ describe("quote steps", () => {
       fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${history}$`) }));
       if (oven) {
         // Extras start collapsed.
-        fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
+        fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
         fireEvent.click(screen.getByLabelText(/Inside oven/));
         // Addon price on step 1 is a single $ sign, not "+$$35".
         expect(document.body.textContent).toContain("+$35");
@@ -230,7 +230,7 @@ describe("quote steps", () => {
     expect(screen.getByText(/I’ll be home/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit details" })).toBeInTheDocument();
     expect(screen.getByText("View all details")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
   });
 
   it("city is required on step 2", () => {

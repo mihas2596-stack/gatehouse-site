@@ -21,7 +21,7 @@ describe("booking price confirmation", () => {
     // Step 1 cannot continue while the cleaning-history question is unanswered.
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.queryByRole("heading", { name: "Your visit" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /Deep Detailed/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Deep A detailed/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
     expect(screen.queryByText(/Has a professional cleaner/)).not.toBeInTheDocument();
@@ -45,7 +45,7 @@ describe("booking price confirmation", () => {
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     expect(screen.queryByLabelText(/claiming a founding spot/)).not.toBeInTheDocument();
     // Extras start collapsed.
-    fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
     fireEvent.click(screen.getByLabelText(/Inside oven/));
     expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
     expect(screen.getByText("Future visits (Standard): $224 every other week")).toBeInTheDocument();
@@ -85,16 +85,16 @@ describe("booking price confirmation", () => {
     fireEvent.click(document.getElementById("b-photo")!);
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     fireEvent.click(document.getElementById("b-terms")!);
-    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
     // Editing the price leaves step 3: the save button is gone until the
     // request is reviewed again, with answers preserved.
     fireEvent.click(screen.getByRole("button", { name: "Edit details" }));
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
-    expect(screen.queryByRole("button", { name: "Continue to save card — $0 today" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue to Stripe — $0 today" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByLabelText("Your name *")).toHaveValue("Test Person");
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByRole("button", { name: "Continue to save card — $0 today" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
   });
 });

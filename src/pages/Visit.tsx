@@ -940,10 +940,10 @@ const Visit = () => {
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">
                   <CalendarClock className="inline w-5 h-5 mr-1 -mt-1" aria-hidden="true" />
-                  Rooms not to photograph
+                  Rooms you&apos;d rather we skip in photos
                 </h2>
                 <label htmlFor="v-zones" className="block text-sm font-medium mb-1.5">
-                  Rooms NOT to photograph (optional)
+                  Rooms you&apos;d rather we skip in photos (optional) — e.g. kids&apos; bedrooms.
                 </label>
                 <input
                   id="v-zones"
@@ -1025,7 +1025,7 @@ const Visit = () => {
                       </label>
                       <label className="flex gap-2 items-start">
                         <input type="radio" name="scope" checked={cancelScope === "stop"} onChange={() => setCancelScope("stop")} className="mt-1" />
-                        <span><strong>Cancel this visit and ask Gatehouse to stop repeat visits.</strong></span>
+                        <span><strong>Cancel this visit and stop all future visits.</strong></span>
                       </label>
                     </div>
                     <p className="text-sm mb-3">

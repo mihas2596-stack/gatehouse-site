@@ -4,7 +4,6 @@ import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
-import PaymentSummary from "@/components/PaymentSummary";
 
 type Plan = {
   service?: string;
@@ -213,7 +212,7 @@ const ThankYou = () => {
               : "Use our quote or contact form to send a request. This page alone does not create a booking."}
           </p>
           {received && submission.customerEmailSent === false && <p role="status" className="mb-6">Your message reached us. The automatic email confirmation could not be sent. There is no need to send your message again.</p>}
-          <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "See My Price"}</Link></Button>
+          <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "Plan My Cleaning"}</Link></Button>
         </div>
       </div>
     );
@@ -383,7 +382,7 @@ const ThankYou = () => {
           <h2 className="font-heading text-xl font-bold">What happens next</h2>
           <p className="mt-2 text-lg">{card.kind === "confirmed" ? "Your cleaner arrives during the confirmed window. After cleaning, we email your photo report." : "We check availability and email your confirmation. You can follow the status on your visit page."}</p>
         </div>
-        <PaymentSummary />
+        <p className="mb-6 text-base leading-relaxed">Nothing is charged today — you&apos;ll approve your photo report after the clean.</p>
       </>,
     );
   }
@@ -485,7 +484,7 @@ const ThankYou = () => {
         ) : failed ? (
           "Try saving your card again"
         ) : (
-          "Continue to save card — $0 today"
+          "Continue to Stripe — $0 today"
         )}
       </Button>
       <p className="mt-3 text-center text-sm text-muted-foreground">

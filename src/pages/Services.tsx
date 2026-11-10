@@ -99,7 +99,7 @@ const Services = () => {
             <article key={service.title} className="rounded-2xl border border-border bg-card p-6 shadow-warm flex flex-col">
               <h2 className="font-heading text-2xl font-bold mb-3">{service.title}</h2>
               <p className="mb-4">{service.desc}</p>
-              <p className="font-semibold mb-4">From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit</p>
+              <p className="font-semibold mb-4">From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit — your exact price depends on bedrooms and bathrooms.</p>
               <Button asChild variant="hero" size="lg" className="mt-auto"><Link to={service.link} data-main-cta>See your price</Link></Button>
               <details className="mt-4"><summary className="min-h-[44px] cursor-pointer text-primary underline">What this covers</summary><ul className="mt-2 space-y-2 list-disc pl-5">{service.includes.map((item) => <li key={item}>{item}</li>)}</ul></details>
             </article>
