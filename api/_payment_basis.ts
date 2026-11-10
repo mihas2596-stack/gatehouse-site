@@ -69,6 +69,34 @@ export function issueStateFrom(
 
 export type TimerBlockReason = "issue_open" | "bounced" | "issue_ever" | null;
 
+export type IssueDecisionValue = "payment_requested" | "reclean" | "waived";
+
+export type IssueDecision = {
+  decision: IssueDecisionValue;
+  resolution: string;
+  decided_at: string;
+};
+
+// TASK 1 (fix6): the owner's latest decision on an open issue, read
+// from the journal (`issue_decision` events). The latest event wins:
+// a newer decision supersedes an older one, and a waived visit stays
+// waived — no later decision event can revive the charge.
+export function latestIssueDecision(events: BasisEvent[]): IssueDecision | null {
+  let best: BasisEvent | null = null;
+  for (const e of events) {
+    if (e.event !== "issue_decision") continue;
+    if (!best || e.created_at >= best.created_at) best = e;
+  }
+  if (!best) return null;
+  const d = best.detail?.["decision"];
+  if (d !== "payment_requested" && d !== "reclean" && d !== "waived") return null;
+  return {
+    decision: d,
+    resolution: typeof best.detail?.["resolution"] === "string" ? (best.detail["resolution"] as string) : "",
+    decided_at: best.created_at,
+  };
+}
+
 // Shared timer-eligibility display predicate (U02): the client pages and
 // the cron must agree. A resolved dispute still blocks the timer forever
 // (issue_ever), as does a bounced report — the countdown must never run

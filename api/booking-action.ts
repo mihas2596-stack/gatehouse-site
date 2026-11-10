@@ -36,7 +36,7 @@ import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
 import { normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy, reportEmail } from "./_email_copy.js";
-import { paymentBasis, issueStateFrom, clientApprovedEvent } from "./_payment_basis.js";
+import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
@@ -125,7 +125,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -142,6 +142,9 @@ const ActionSchema = z.object({
   alt_dates: z.array(z.string().min(1).max(20)).max(3).optional(),
   // resolve: agreed re-clean date (YYYY-MM-DD)
   reclean_date: z.string().max(20).optional(),
+  // issue_request_payment / issue_arrange_reclean / issue_waive_charge:
+  // the owner's decision text, shown to the client as "Our response".
+  resolution: z.string().max(1000).optional(),
   // return_report: owner's note back to the cleaner.
   note: z.string().max(1000).optional(),
   // set_cleaner: name as the client should see it; photo only with the
@@ -2020,6 +2023,174 @@ export default async function handler(req: Req, res: Res) {
       }
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
+    }
+
+    if (action === "issue_request_payment" || action === "issue_arrange_reclean" || action === "issue_waive_charge" || action === "issue_renotify") {
+      // TASK 1 (fix6): the owner's three decisions on an open issue,
+      // plus an idempotent re-notification. No decision ever charges
+      // the card: Request payment only notifies the client, who then
+      // approves the report themselves; Arrange re-clean is manual
+      // work by the owner; Waive closes the visit without payment.
+      // Every decision is journaled first (issue_decision) so a retry
+      // or a double-click never sends a second email for the same
+      // decision text.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      if (row.status === "paid") {
+        logErr("issue_decision", "blocked: already paid, needs refund flow");
+        return json(409, { ok: false, error: "already_paid" });
+      }
+      const decisionOf = (a: string): "payment_requested" | "reclean" | "waived" =>
+        a === "issue_arrange_reclean" ? "reclean" : a === "issue_waive_charge" ? "waived" : "payment_requested";
+      const prevDecision = latestIssueDecision(events);
+      const issueIsOpen = issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open;
+      const resolution = (parsed.data.resolution ?? "").trim().slice(0, 1000);
+      const amountCents = typeof row.amount_cents === "number" && row.amount_cents > 0 ? row.amount_cents : null;
+      const amountStr = amountCents !== null ? `$${(amountCents / 100).toFixed(2).replace(/\.00$/, "")}` : null;
+      const clientEmail = (customer.email ?? row.client_email ?? "").trim();
+      const clientName = (customer.name ?? row.client_name ?? "").trim();
+      const reportLink = clientEmail
+        ? `https://www.gatehousehomecleaning.com/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId, email: clientEmail, name: clientName, ts: Math.floor(Date.now() / 1000),
+          }))}`
+        : "";
+      // The client email for a decision, built from the spec texts.
+      // Request payment carries the spec's "Issue reviewed — payment
+      // requested" lines verbatim; re-clean and waive reuse the same
+      // shape with their own outcome line (the spec gives no separate
+      // template for them).
+      const sendDecisionEmail = async (decision: "payment_requested" | "reclean" | "waived", text: string): Promise<boolean> => {
+        if (!clientEmail || !reportLink) return false;
+        const lines =
+          decision === "payment_requested"
+            ? [
+                "We've reviewed your concern about your cleaning.",
+                `Our response: ${text}`,
+                ...(amountStr ? [`Amount due: ${amountStr}`] : []),
+                "Please review your report and approve it when you're ready to pay.",
+                "If something is still unresolved, you can reply to this email.",
+              ]
+            : decision === "reclean"
+              ? [
+                  "We've reviewed your concern about your cleaning.",
+                  `Our response: ${text}`,
+                  "We'll send you an updated report after the re-clean.",
+                  "Nothing will be charged unless you approve the report.",
+                ]
+              : [
+                  "We've reviewed your concern about your cleaning.",
+                  `Our response: ${text}`,
+                  "No charge will be made for this visit.",
+                ];
+        return sendShortClientEmail({
+          secretKey: STRIPE_SECRET_KEY,
+          customer: { email: clientEmail, name: clientName },
+          bookingId,
+          subject: "Update on your cleaning concern",
+          heading: "An update on your cleaning",
+          lines,
+          buttonLabel: "Review your report",
+          buttonUrl: reportLink,
+        });
+      };
+
+      if (action === "issue_renotify") {
+        // Re-notify only after a decision was communicated, and at most
+        // once per 24h per decision — the journal event is the dedupe,
+        // so a double-click or a retry never sends a second email.
+        if (!prevDecision || (prevDecision.decision !== "payment_requested" && prevDecision.decision !== "reclean")) {
+          return json(409, { ok: false, error: "nothing_to_renotify" });
+        }
+        if (!issueIsOpen) {
+          return json(409, { ok: false, error: "nothing_to_resolve" });
+        }
+        const priorRenotify = events
+          .filter((e) => e.event === "issue_renotify"
+            && e.detail?.["decision"] === prevDecision.decision
+            && e.detail?.["decided_at"] === prevDecision.decided_at)
+          .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+        if (priorRenotify && Date.now() - Date.parse(priorRenotify.created_at) < 24 * 3600 * 1000) {
+          return json(200, { ok: true, already: true, decision: prevDecision.decision, email_sent: false });
+        }
+        const renotifyRecorded = await logEventStrict(row.id, bookingId, "owner", "issue_renotify", {
+          decision: prevDecision.decision, decided_at: prevDecision.decided_at,
+        });
+        if (!renotifyRecorded) return json(502, { ok: false, error: "db_error" });
+        const renotifySent = await sendDecisionEmail(prevDecision.decision, prevDecision.resolution);
+        log("issue_renotify", { booking: bookingId, decision: prevDecision.decision, emailSent: renotifySent });
+        return json(200, { ok: true, decision: prevDecision.decision, email_sent: renotifySent });
+      }
+
+      const decision = decisionOf(action);
+      // A repeated waive on an already-waived (closed) visit is a
+      // no-op, not an error: the visit is already closed without
+      // payment, and no second email goes out.
+      if (decision === "waived" && prevDecision?.decision === "waived" && !issueIsOpen) {
+        return json(200, { ok: true, already: true, decision: "waived", email_sent: false });
+      }
+      // Same decision, same text, issue still open: a double-click or
+      // a retry — success without a second journal event or email.
+      // (Waive is excluded here on purpose: a waive whose row close
+      // failed must be allowed to complete on retry, not short-
+      // circuited while the issue is still open.)
+      if (decision !== "waived" && prevDecision?.decision === decision && prevDecision.resolution === resolution && issueIsOpen) {
+        return json(200, { ok: true, already: true, decision, email_sent: false });
+      }
+      if (!issueIsOpen) {
+        logErr("issue_decision", `blocked: no open issue (decision=${decision})`);
+        return json(409, { ok: false, error: "nothing_to_resolve" });
+      }
+      // Request payment and Arrange re-clean must say what the
+      // decision IS — the text is what the client reads as "Our
+      // response". Waive has a fixed default.
+      const decisionText = resolution || (decision === "waived"
+        ? "We've waived the charge for this visit — nothing will be charged."
+        : "");
+      if (!decisionText) {
+        return json(400, { ok: false, error: "resolution_required" });
+      }
+      // Durable record FIRST: the decision event is the authority the
+      // report page and the charge gates read. The email is best
+      // effort after it — a failed send never un-records the decision.
+      // A waive retry whose decision was already logged (row close
+      // failed last time) does not log a second decision event.
+      const decisionAlreadyLogged = prevDecision?.decision === decision && prevDecision.resolution === decisionText;
+      const decidedAt = decisionAlreadyLogged ? prevDecision.decided_at : new Date().toISOString();
+      if (!decisionAlreadyLogged) {
+        const decisionRecorded = await logEventStrict(row.id, bookingId, "owner", "issue_decision", {
+          decision, resolution: decisionText, decided_at: decidedAt,
+        });
+        if (!decisionRecorded) return json(502, { ok: false, error: "db_error" });
+      }
+      if (decision === "waived") {
+        // Waive is terminal: close the dispute in the journal (the
+        // timer stays blocked forever via issue_ever) and clear the
+        // row flag, verified. A failed row write is a 502 — the
+        // decision is recorded, the visit is NOT yet closed.
+        const resolvedEv = latestEvent(events, "issue_resolved");
+        const alreadyResolved = Boolean(resolvedEv && prevDecision && resolvedEv.created_at > prevDecision.decided_at);
+        if (!alreadyResolved) {
+          const resolvedLogged = await logEventStrict(row.id, bookingId, "owner", "issue_resolved", {
+            via: "owner_waive_charge",
+          });
+          if (!resolvedLogged) return json(502, { ok: false, error: "db_error", decision_recorded: true });
+        }
+        const closed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&issue_open=eq.true`, { issue_open: false });
+        if (closed < 0) return json(502, { ok: false, error: "db_error", decision_recorded: true });
+        // Best-effort Stripe mirror: the client/owner pages read the
+        // DB, not shared metadata; a failed mirror never fails the
+        // close itself.
+        try {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+            "metadata[gh_state]": "approved",
+            "metadata[gh_issue_open]": "",
+          });
+        } catch {
+          /* durable state is in the DB */
+        }
+      }
+      const emailSent = await sendDecisionEmail(decision, decisionText);
+      log("issue_decision", { booking: bookingId, decision, emailSent });
+      return json(200, { ok: true, decision, email_sent: emailSent });
     }
 
     if (action === "approve") {

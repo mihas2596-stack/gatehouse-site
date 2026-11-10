@@ -28,7 +28,7 @@ import {
   dbSelectStrict, dbUpdateCount, logEvent,
 } from "./_db.js";
 import {
-  paymentBasis, issueStateFrom, clientApprovedEvent,
+  paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision,
 } from "./_payment_basis.js";
 import {
   reconcileIntent, confirmIntent, confirmAttemptKey,
@@ -271,6 +271,16 @@ export async function chargeVisit(input: {
     row.status = "report_sent";
   }
 
+  // TASK 1 (fix6): a waived charge is terminal. The owner closed the
+  // visit without payment, so no fresh charge may be created for it —
+  // on any basis, even a client approval logged before the waive. The
+  // check sits AFTER the payment_pending recovery above: money that
+  // already moved (an in-flight intent that succeeded) is still
+  // adopted honestly, but a waived visit never starts a new charge.
+  if (latestIssueDecision(events)?.decision === "waived") {
+    return { outcome: "blocked", error: "charge_waived" };
+  }
+
   // Hard gates for a fresh charge (RA05): only a CURRENT published
   // report pays — none/draft/submitted/returned never do, even with an
   // old approval or old publication date still in the record. (The
@@ -399,6 +409,13 @@ export async function chargeVisit(input: {
     await logEvent(row.id, bookingId, "system", "payment_blocked_by_issue", { source });
     return { outcome: "blocked", error: "issue_open" };
   }
+  // TASK 1 (fix6): same race, waived variant — a waive landing
+  // between the claim and the create must stop the payment too.
+  if (latestIssueDecision(preCreateEv.events)?.decision === "waived") {
+    await releaseClaim();
+    await logEvent(row.id, bookingId, "system", "payment_blocked_by_waive", { source });
+    return { outcome: "blocked", error: "charge_waived" };
+  }
 
   // --- Create (one obligation, one idempotency key). ---
   const idemKey = `charge_${bookingId}_v${version}`;
@@ -495,6 +512,11 @@ export async function chargeVisit(input: {
       if (latestReturnedAfterSent(fevents)) return "report_not_current";
       if (issueStateFrom(fevents, frow.issue_open ?? null, frow.issue_ever ?? null).open) {
         return "issue_open";
+      }
+      // TASK 1 (fix6): confirming a live intent after a waive would
+      // charge a visit the owner closed without payment — never.
+      if (latestIssueDecision(fevents)?.decision === "waived") {
+        return "charge_waived";
       }
       const fbounced = frow.report_bounced === true;
       const fsentMs = Math.max(

@@ -47,6 +47,12 @@ type Visit = {
   cleaner_link_reusable?: boolean;
   issue_open: boolean;
   issue_ever: boolean;
+  // TASK 1 (fix6): open-issue detail for the "Open issues" block,
+  // batched by the list endpoint — see api/owner.ts.
+  issue_opened_at?: string | null;
+  issue_reason?: string | null;
+  issue_room?: string | null;
+  issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
   report_bounced: boolean;
   report_sent_at?: string | null;
   payment_failed?: boolean;
@@ -78,6 +84,24 @@ type GhEvent = { id: number; actor: string; event: string; detail: Record<string
 
 const money = (cents: number | null): string =>
   cents ? `$${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : "—";
+
+// TASK 1 (fix6): short "opened 3h ago" label for the Open issues block.
+const timeAgo = (iso: string | null | undefined): string => {
+  const ms = Date.parse(iso ?? "");
+  if (!Number.isFinite(ms)) return "";
+  const mins = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
+
+const ISSUE_DECISION_LABEL: Record<string, string> = {
+  payment_requested: "Payment requested",
+  reclean: "Re-clean arranged",
+  waived: "Charge waived",
+};
 
 // Date-only strings (YYYY-MM-DD) formatted without a timezone shift.
 // Entry status for the owner panel: the quote-time choice (row) wins,
@@ -224,6 +248,9 @@ const Owner = () => {
   const [selected, setSelected] = useState<Visit | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [events, setEvents] = useState<GhEvent[]>([]);
+  // TASK 1 (fix6): the owner's decision text for the open issue —
+  // shown to the client as "Our response".
+  const [decisionResolution, setDecisionResolution] = useState("");
   const [stripeState, setStripeState] = useState("");
   // C9: the status action returns the saved card's brand + last4 —
   // shown in the Payment block as "Visa •••• 4242" when both are known.
@@ -466,6 +493,7 @@ const Owner = () => {
         setSelected(j.visit);
         setPhotos(j.photos ?? []);
         setEvents(j.events ?? []);
+        setDecisionResolution("");
         setCleanerEditing(!j.visit.cleaner_name);
         setFormPhone(j.visit.cleaner_profile?.phone ?? "");
         setFormPhoto(j.visit.cleaner_profile?.photo ?? "");
@@ -997,6 +1025,12 @@ const Owner = () => {
     return isAttention(v);
   });
 
+  // TASK 1 (fix6): the open-issues queue — every visit with an open
+  // dispute, newest first. Reads the list endpoint's batched fields.
+  const openIssues = [...listedVisits]
+    .filter((v) => v.issue_open)
+    .sort((a, b) => String(b.issue_opened_at ?? "").localeCompare(String(a.issue_opened_at ?? "")));
+
   return (
     <div className="min-h-screen bg-background page-shell">
       <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
@@ -1097,6 +1131,36 @@ const Owner = () => {
               </button>
             ))}
           </div>
+          {openIssues.length > 0 && (
+            <section className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4" aria-label="Open issues">
+              <h2 className="font-heading text-lg font-bold text-red-900">Open issues ({openIssues.length})</h2>
+              <p className="text-sm text-red-900 mt-1">
+                Automatic charging is blocked for these visits and never resumes on its own — the client must approve again to pay, or you waive the charge.
+              </p>
+              <ul className="mt-3 space-y-3">
+                {openIssues.map((v) => (
+                  <li key={v.id} className="rounded-lg border border-red-200 bg-card p-3">
+                    <button type="button" className="w-full text-left" onClick={() => void openVisit(v)}>
+                      <span className="font-semibold">{v.client_name ?? "—"}</span>
+                      <span className="text-sm text-muted-foreground"> · {money(v.amount_cents)}</span>
+                      <span className="block text-sm mt-1">
+                        {v.issue_room ? `${v.issue_room}: ` : ""}{v.issue_reason || "no details given"}
+                      </span>
+                      <span className="block text-xs text-muted-foreground mt-1">
+                        Opened {v.issue_opened_at ? new Date(v.issue_opened_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+                        {timeAgo(v.issue_opened_at) ? ` · ${timeAgo(v.issue_opened_at)}` : ""}
+                        {` · ${v.issue_decision ? (ISSUE_DECISION_LABEL[v.issue_decision.decision] ?? v.issue_decision.decision) : "Awaiting your decision"}`}
+                        {v.photo_count ? ` · ${v.photo_count} photo${v.photo_count === 1 ? "" : "s"}` : ""}
+                      </span>
+                      {v.issue_decision?.resolution ? (
+                        <span className="block text-sm mt-1">Your decision: {v.issue_decision.resolution}</span>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <div className="space-y-2">
             {filteredVisits.map((v) => (
               <button
@@ -1156,6 +1220,19 @@ const Owner = () => {
             const resolved = byTimeDesc.find((e) => e.event === "issue_resolved");
             if (resolved && resolved.created_at >= opened.created_at) return null;
             return opened;
+          })();
+          // TASK 1 (fix6): the latest owner decision on this issue,
+          // from the journal — the detail panel renders its state
+          // from this, and offers a re-notification for it.
+          const latestDecision = (() => {
+            const byTimeDesc = [...events].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+            const d = byTimeDesc.find((e) => e.event === "issue_decision");
+            if (!d || typeof d.detail?.["decision"] !== "string") return null;
+            return {
+              decision: d.detail["decision"] as string,
+              resolution: typeof d.detail?.["resolution"] === "string" ? (d.detail["resolution"] as string) : "",
+              decided_at: d.created_at,
+            };
           })();
           const nextAction = nextActionFor(v, paymentFailed);
           const assigned = Boolean(v.cleaner_name);
@@ -1275,24 +1352,75 @@ const Owner = () => {
                   </div>
                 )}
                 {v.issue_open && (
-                  <div className="flex flex-wrap gap-2 mt-2 items-center">
+                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
                     {openIssue && (
                       <p className="text-sm w-full">
                         Issue{typeof openIssue.detail?.room === "string" && openIssue.detail.room ? ` · ${openIssue.detail.room}` : ""}: {typeof openIssue.detail?.reason === "string" && openIssue.detail.reason ? openIssue.detail.reason : "no details given"}
                       </p>
                     )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={acting !== ""}
-                      onClick={() => {
-                        if (!window.confirm("Mark this issue resolved? The client will be able to approve the existing report. Automatic charging stays off for this booking — the client must approve, or you charge manually.")) return;
-                        void runAction("Resolve issue", { action: "resolve", booking_id: v.booking_id });
-                      }}
-                    >
-                      Resolve issue
-                    </Button>
-                    <span className="text-xs text-muted-foreground">Clears the issue without re-sending the report or restarting the review clock.</span>
+                    {latestDecision && (
+                      <p className="text-sm mt-1">
+                        Latest decision: <strong>{ISSUE_DECISION_LABEL[latestDecision.decision] ?? latestDecision.decision}</strong>
+                        {latestDecision.resolution ? ` — ${latestDecision.resolution}` : ""}
+                      </p>
+                    )}
+                    <label htmlFor="issue-decision-text" className="block text-sm font-medium mt-3 mb-1">Your decision for the client *</label>
+                    <textarea
+                      id="issue-decision-text"
+                      value={decisionResolution}
+                      onChange={(e) => setDecisionResolution(e.target.value)}
+                      rows={2}
+                      maxLength={1000}
+                      placeholder="e.g. The original amount stays due — the kitchen was cleaned twice. / We'll come back Tuesday to re-clean the bathroom."
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">The client reads this as “Our response”. Request payment does not charge the card — the client approves the report to pay.</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button
+                        variant="hero"
+                        size="sm"
+                        disabled={acting !== "" || !decisionResolution.trim()}
+                        onClick={() => {
+                          if (!window.confirm(`Ask the client to approve and pay ${money(v.amount_cents)}? Nothing is charged now — the client approves the report to pay.`)) return;
+                          void runAction("Request payment", { action: "issue_request_payment", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                        }}
+                      >
+                        Request payment
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acting !== "" || !decisionResolution.trim()}
+                        onClick={() => {
+                          void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                        }}
+                      >
+                        Arrange re-clean
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acting !== ""}
+                        onClick={() => {
+                          if (!window.confirm("Waive the charge for this visit? The visit closes without payment and can never be charged.")) return;
+                          void runAction("Waive charge", { action: "issue_waive_charge", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                        }}
+                      >
+                        Waive charge
+                      </Button>
+                      {latestDecision && (latestDecision.decision === "payment_requested" || latestDecision.decision === "reclean") && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={acting !== ""}
+                          onClick={() => {
+                            void runAction("Send reminder", { action: "issue_renotify", booking_id: v.booking_id });
+                          }}
+                        >
+                          Send reminder
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">

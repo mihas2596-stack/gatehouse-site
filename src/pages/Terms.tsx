@@ -21,7 +21,7 @@ const Terms = () => {
         <p className="mb-6 font-semibold">
           Effective Date: May 15, 2026
           <br />
-          Last Updated: November 9, 2026
+          Last Updated: November 10, 2026
         </p>
 
         <p className="mb-8">
@@ -114,7 +114,25 @@ const Terms = () => {
           <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide.
         </p>
         <p className="mb-4">
-          <strong>5.2 Payment.</strong> You add a payment card when you book. Nothing is charged at booking. After each visit we send a room-by-room photo report. Your card is charged the visit price when you approve the report, or automatically 24 hours after we send it if you haven&apos;t reported an issue. If you report an issue within that window — a missed item on the checklist, a question about the amount, or damage you believe we caused — automatic charging is blocked for that visit and never resumes on its own, even after the issue is closed. Once we have reviewed the issue with you and told you the outcome and amount, you must approve the report again to pay. The free re-clean in Section 7 applies only to missed checklist items. The 24-hour period runs from when we send the report; if our email provider confirms the report email was undelivered, automatic charging is paused and the period does not run until we send the report to you another way. Payments are processed by Stripe.
+          <strong>5.2 Payment.</strong> You save a payment card when booking. Nothing is charged at booking. After each cleaning, we send you a photo report. Your saved card is charged when you approve the report, or automatically 24 hours after we send it if you have not reported an issue.
+        </p>
+        <p className="mb-4">
+          If you report an issue within that 24-hour period, automatic payment is disabled for that visit. We will review your concern and aim to provide a decision within 72 hours.
+        </p>
+        <p className="mb-4">
+          We may arrange a re-clean, waive the charge, or determine that the original visit amount remains due.
+        </p>
+        <p className="mb-4">
+          If payment remains due, we will explain our decision and ask you to approve the report before charging your saved card. After an issue has been reported, your card will not be charged without your new approval.
+        </p>
+        <p className="mb-4">
+          If a re-clean is performed, we will provide an updated report for your approval.
+        </p>
+        <p className="mb-4">
+          The original 24-hour review period begins when we send your report. If our email provider confirms that the report email was undelivered, automatic payment is paused until we send the report another way.
+        </p>
+        <p className="mb-4">
+          Payments are processed securely by Stripe.
         </p>
         <p className="mb-4">
           <strong>5.3 Late Payment.</strong> Unpaid amounts may accrue a late fee of 1.5% per month or the maximum amount permitted by Georgia law, whichever is less. We may suspend Services for accounts with outstanding balances.

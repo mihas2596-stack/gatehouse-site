@@ -15,7 +15,8 @@ type ReportStateName =
   | "issue_open"
   | "paid"
   | "payment_issue"
-  | "payment_unknown";
+  | "payment_unknown"
+  | "waived";
 
 type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
 
@@ -47,6 +48,10 @@ type ReportData = {
   } | null;
   postpay_issue?: boolean;
   resolution?: { resolved_at: string; reclean_date: string } | null;
+  // TASK 1 (fix6): the owner's latest decision on the issue —
+  // payment_requested / reclean / waived, with its text. The open-
+  // issue view renders its state from this.
+  issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
   error?: string;
   // Follow-up on an already-open issue: the server records it and
   // returns already=true; followup_recorded confirms it was saved.
@@ -306,6 +311,12 @@ const Report = () => {
         // retry re-checks the payment status first.
         if (j.error === "payment_unknown" || j.error === "payment_unconfirmed") {
           setActionError("We couldn't confirm whether your payment went through — please try again. You won't be charged twice; we'll check the payment status first.");
+        }
+        // TASK 1 (fix6): the visit was waived — closed without a
+        // charge. The page now shows the waived state; say so plainly
+        // instead of leaving the generic error.
+        if (j.error === "charge_waived") {
+          setActionError("This visit was closed without a charge — nothing will be charged for it.");
         }
       } else {
         setActionError("Something went wrong — please try again, or email hello@gatehousehomecleaning.com.");
@@ -583,10 +594,24 @@ const Report = () => {
           <div>
             <div className="text-center">
               <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
-              <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Issue reported — automatic payment is blocked for this visit</h1>
+              <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
+                {data.issue_decision?.decision === "payment_requested"
+                  ? "An update on your cleaning"
+                  : data.issue_decision?.decision === "reclean"
+                    ? "We're arranging your re-clean"
+                    : "We're reviewing your concern"}
+              </h1>
               <p className="text-lg text-foreground mb-6">
-                We&apos;ve blocked the automatic charge for this visit. We&apos;ll reply within one business day —
-                a confirmation is also in your email.
+                {data.issue_decision?.decision === "payment_requested" ? (
+                  <>We&apos;ve reviewed your concern. Please review our response and approve the report when you&apos;re ready to pay.</>
+                ) : data.issue_decision?.decision === "reclean" ? (
+                  <>We&apos;ve reviewed your concern. We&apos;ll send you an updated report after the re-clean. Nothing will be charged unless you approve the report.</>
+                ) : (
+                  <>Your payment is paused. We&apos;ll review what happened and reply within one business day. We aim to provide a decision within 72 hours. Nothing will be charged unless you approve the report.</>
+                )}
+                {data.issue_decision?.resolution ? (
+                  <> Our response: “{data.issue_decision.resolution}”</>
+                ) : null}
                 {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
                 {data.issue_reason && data.issue_source === "client" ? (
                   <> You told us: “{data.issue_reason}”</>
@@ -601,28 +626,13 @@ const Report = () => {
                   <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
                 </p>
               )}
-              {data.resolution?.reclean_date ? (
-                <p className="text-base text-foreground mb-6">
-                  A re-clean is agreed for <strong>{data.resolution.reclean_date}</strong>. When you&apos;re happy
-                  with the result, tap below to approve the report — that charges your saved
-                  card{data.amount ? <> {data.amount}</> : null} right away.
-                </p>
-              ) : data.resolution ? (
-                <p className="text-base text-foreground mb-6">
-                  We&apos;ve replied to your issue. When you&apos;re happy with the result, tap below to approve
-                  the report — that charges your saved card{data.amount ? <> {data.amount}</> : null} right away.
-                  Nothing will be charged until you approve — the automatic charge stays blocked for this visit.
-                </p>
-              ) : (
-                <p className="text-base text-foreground mb-6">
-                  We&apos;re looking into it and will reply within one business day. Nothing will be charged
-                  while your issue is open — the automatic charge is blocked for this visit and will
-                  never run on its own. When you&apos;re satisfied, tap below to approve the report — that
-                  charges your saved card{data.amount ? <> {data.amount}</> : null} right away.
-                </p>
-              )}
+              <p className="text-base text-foreground mb-6">
+                {data.issue_decision?.decision === "payment_requested"
+                  ? "Nothing will be charged until you approve — the automatic charge stays blocked for this visit."
+                  : "Nothing will be charged while your issue is open — the automatic charge is blocked for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
+              </p>
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                {busy ? "Processing payment…" : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
+                {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
               </Button>
               <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>
             </div>
@@ -632,7 +642,7 @@ const Report = () => {
               )}
               {!followupOpen ? (
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setFollowupOpen(true)}>
-                  Add to your open issue
+                  {data.issue_decision?.decision === "payment_requested" ? "My issue isn't resolved" : "Add more details"}
                 </Button>
               ) : (
                 <IssueForm
@@ -649,6 +659,29 @@ const Report = () => {
                   onSubmit={() => void act("issue")}
                   onCancel={() => setFollowupOpen(false)}
                 />
+              )}
+            </div>
+            <div className="mt-10">
+              <h2 className="font-heading text-2xl font-bold mb-4 text-center">Your report</h2>
+              {reportPhotos}
+            </div>
+          </div>
+        )}
+
+        {!loading && data?.state === "waived" && (
+          <div>
+            <div className="text-center">
+              <CheckCircle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
+              <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">No charge for this visit</h1>
+              <p className="text-lg text-foreground mb-6">
+                We&apos;ve reviewed your concern and closed this visit without charging your card. Nothing will be charged for this visit.
+                {data.issue_decision?.resolution ? (
+                  <> Our response: “{data.issue_decision.resolution}”</>
+                ) : null}
+              </p>
+              {summary}
+              {actionError && (
+                <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
               )}
             </div>
             <div className="mt-10">

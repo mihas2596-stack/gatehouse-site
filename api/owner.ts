@@ -362,6 +362,41 @@ export default async function handler(req: Req, res: Res) {
       );
       for (const c of cards) cardConfirmed.add(c.visit_id);
     }
+    // TASK 1 (fix6): open-issue detail for the "Open issues" block —
+    // latest issue_opened (opened_at + the client's words) and latest
+    // issue_decision per visit, batched like the other row signals.
+    // The list filters by the row's issue_open flag; these fields only
+    // describe the current issue for those visits.
+    const issueOpened = new Map<string, { opened_at: string; reason: string; room: string }>();
+    const issueDecisions = new Map<string, { decision: string; resolution: string; decided_at: string }>();
+    if (ids.length > 0) {
+      const openedEv = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.issue_opened&order=created_at.desc&limit=500`,
+      );
+      for (const o of openedEv) {
+        if (issueOpened.has(o.visit_id)) continue;
+        issueOpened.set(o.visit_id, {
+          opened_at: o.created_at,
+          reason: typeof o.detail?.["reason"] === "string" ? (o.detail["reason"] as string) : "",
+          room: typeof o.detail?.["room"] === "string" ? (o.detail["room"] as string) : "",
+        });
+      }
+      const decisions = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.issue_decision&order=created_at.desc&limit=500`,
+      );
+      for (const d of decisions) {
+        if (issueDecisions.has(d.visit_id)) continue;
+        const dec = d.detail?.["decision"];
+        if (dec !== "payment_requested" && dec !== "reclean" && dec !== "waived") continue;
+        issueDecisions.set(d.visit_id, {
+          decision: dec,
+          resolution: typeof d.detail?.["resolution"] === "string" ? (d.detail["resolution"] as string) : "",
+          decided_at: d.created_at,
+        });
+      }
+    }
     // N9 (list): client phone for search — also a batched journal read
     // (`client_contact` events, latest per visit), same pattern as above.
     const clientPhone = new Map<string, string>();
@@ -388,6 +423,10 @@ export default async function handler(req: Req, res: Res) {
         entry_agreed: entryAgreed.has(v.id),
         card_confirmed: cardConfirmed.has(v.id),
         client_phone: clientPhone.get(v.id) ?? null,
+        issue_opened_at: issueOpened.get(v.id)?.opened_at ?? null,
+        issue_reason: issueOpened.get(v.id)?.reason ?? null,
+        issue_room: issueOpened.get(v.id)?.room ?? null,
+        issue_decision: issueDecisions.get(v.id) ?? null,
       })),
     });
   } catch (err) {

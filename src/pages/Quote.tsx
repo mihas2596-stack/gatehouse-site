@@ -628,15 +628,15 @@ const Quote = () => {
       <section className="py-4 md:py-6 bg-warm-gradient">
         <div className="container max-w-3xl text-center">
           <h1 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-3xl md:text-[44px] font-bold mb-3 scroll-mt-24 outline-none">
-            A clear <span className="text-gradient-gold">price</span> for your home
+            Let&apos;s plan your <span className="text-gradient-gold">cleaning</span>
           </h1>
-          {step !== 1 && (
-            <p className="text-muted-foreground text-lg">
-              {step === 2
+          <p className="text-muted-foreground text-lg">
+            {step === 1
+              ? "Tell us a little about your home."
+              : step === 2
                 ? "Tell us when you'd like us to come — we'll confirm your date separately, and nothing is charged today."
                 : "Check everything, then save your card — $0 today."}
-            </p>
-          )}
+          </p>
           <div className="mt-5 max-w-md mx-auto">
             <p className="text-center text-sm font-semibold" aria-current="step">
               Step {step} of 3 · {step === 1 ? "Your home & price" : step === 2 ? "Your visit" : "Review & save card"}
@@ -763,6 +763,33 @@ const Quote = () => {
 
             </div>
 
+            {service === "standard" && (
+              <fieldset className="mt-6">
+                <legend className="block text-sm font-medium mb-2">Professionally cleaned in the last 3 months? *</legend>
+                {recentlyCleaned === "no" && (
+                  <p className="text-sm text-muted-foreground mb-2">First visit will be a deep clean.</p>
+                )}
+                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" className="grid grid-cols-2 gap-3">
+                  {(["yes", "no"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      role="radio"
+                      aria-checked={recentlyCleaned === v}
+                      onClick={() => setRecentlyCleaned(v)}
+                      className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
+                        recentlyCleaned === v
+                          ? "border-primary bg-peach/40 text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {v === "yes" ? "Yes" : "No"}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
             {/* Add-ons — collapsed by default so the price form stays short. */}
             <div className="mt-6">
               <div className="flex flex-wrap items-baseline gap-x-3">
@@ -822,36 +849,6 @@ const Quote = () => {
               </div>)}
             </div>
 
-            {service === "standard" && (
-              <fieldset className="mt-6">
-                <legend className="block text-sm font-medium mb-2">Has a professional cleaner cleaned this home in the last 3 months? *</legend>
-                <p className="text-sm text-muted-foreground mb-2">If you answer No, your first visit is a deep clean.</p>
-                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" className="grid grid-cols-2 gap-3">
-                  {(["yes", "no"] as const).map((v) => (
-                    <button
-                      key={v}
-                      type="button"
-                      role="radio"
-                      aria-checked={recentlyCleaned === v}
-                      onClick={() => setRecentlyCleaned(v)}
-                      className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
-                        recentlyCleaned === v
-                          ? "border-primary bg-peach/40 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:border-primary/40"
-                      }`}
-                    >
-                      {v === "yes" ? "Yes" : "No"}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-            )}
-
-            <p className="mt-6 text-sm text-foreground">
-              Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
-              <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
-            </p>
-
             {/* Result */}
             <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
               {tier === null ? (
@@ -865,12 +862,12 @@ const Quote = () => {
                 </p>
               ) : (
                 <>
-                  <p className="text-sm font-medium text-muted-foreground mb-1">Your price</p>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Your cleaning cost</p>
                   {service !== "standard" ? (
                     // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
-                      <p className="font-heading text-4xl md:text-5xl font-bold text-primary">
-                        {fmt$(oneTimeTotal ?? 0)} <span className="text-xl font-semibold">one-time</span>
+                      <p className="font-heading text-3xl sm:text-4xl font-bold text-primary">
+                        One-time cleaning: {fmt$(oneTimeTotal ?? 0)}
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
                         {SERVICE_LABEL_CALC[service]}. Inside oven, fridge and cabinets are included — never charged twice.
@@ -880,8 +877,8 @@ const Quote = () => {
                     <div className="flex flex-col items-center gap-1">
                       <p className="text-base text-foreground">
                         {isRecurring
-                          ? <>Regular visits: <strong>{fmt$(breakdown?.recurring_total ?? 0)}</strong> every other week.</>
-                          : <>One-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
+                          ? <>Estimated regular visits: <strong>{fmt$(breakdown?.recurring_total ?? 0)}</strong> every other week.</>
+                          : <>Estimated one-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first. Not sure? Pick your best guess — we review the scope with you before confirming your visit.
@@ -889,30 +886,19 @@ const Quote = () => {
                     </div>
                   ) : breakdown ? (
                     <div className="flex flex-col items-center gap-1">
-                      {isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? (
+                      {isRecurring ? (
                         <>
-                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                            {fmt$(breakdown.recurring_total)} per visit
-                          </span>
+                          <p className="font-heading text-2xl sm:text-3xl font-bold text-primary">
+                            First visit ({breakdown.first_service === "deep" ? "Deep clean" : "Standard"}): {fmt$(breakdown.first_total)}
+                          </p>
                           <p className="text-base font-semibold text-foreground mt-1.5">
-                            First visit: {fmt$(breakdown.first_total)} · then {fmt$(breakdown.recurring_total)} per visit, every other week
+                            Future visits (Standard): {fmt$(breakdown.recurring_total)} every other week
                           </p>
                         </>
                       ) : (
-                        <>
-                          <span className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                            First visit: {fmt$(breakdown.first_total)}
-                            {breakdown.first_service === "deep" && <span className="text-xl font-semibold"> — deep clean</span>}
-                          </span>
-                          {isRecurring && (
-                            <p className="text-base font-semibold text-foreground mt-1.5">
-                              Then {fmt$(breakdown.recurring_total)} per visit, every other week
-                            </p>
-                          )}
-                          {!isRecurring && (
-                            <p className="text-base font-semibold text-foreground mt-1.5">One-time visit</p>
-                          )}
-                        </>
+                        <p className="font-heading text-3xl sm:text-4xl font-bold text-primary">
+                          One-time cleaning: {fmt$(breakdown.first_total)}
+                        </p>
                       )}
                       {breakdown.first_service === "deep" && (
                         <p className="text-sm text-muted-foreground mt-1">
@@ -1003,12 +989,19 @@ const Quote = () => {
                     We&apos;ll review the cleaning scope before confirming your visit. Your visit price is fixed when you send your request. If the scope review shows different work is needed, we agree any change with you before confirming, never after.
                   </p>
                 )}
+                <p className="mt-3 text-sm text-foreground">
+                  Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
+                  <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
+                </p>
               </details>
               </>)}
               {step === 3 && (<>
-                <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Review &amp; save card</h2>
+                <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Save your card securely</h2>
               <p className="text-sm text-foreground mb-6">
                 Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
+              </p>
+              <p className="text-sm text-foreground mb-6">
+                Nothing is charged today. After your cleaning, you&apos;ll receive a photo report. Your card is charged when you approve it, or 24 hours after we send it if you haven&apos;t reported an issue.
               </p>
               <div className="mb-6 rounded-lg border border-border bg-background p-5 text-base">
                 <div className="flex items-center justify-between gap-3">

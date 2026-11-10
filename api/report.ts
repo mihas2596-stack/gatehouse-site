@@ -22,7 +22,7 @@
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
-import { clientApprovedEvent, issueStateFrom } from "./_payment_basis.js";
+import { clientApprovedEvent, issueStateFrom, latestIssueDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 
 import { chargeVisit } from "./_payment_obligation.js";
@@ -423,7 +423,7 @@ async function reconcilePaymentMethod(
   return { pm, ambiguous: false };
 }
 
-type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown";
+type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown" | "waived";
 
 function deriveState(meta: Record<string, string>): ReportState {
   const state = meta["gh_state"] ?? "";
@@ -675,6 +675,10 @@ export default async function handler(req: Req, res: Res) {
     // charge that can never happen.
     const timerIssue = issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null);
     const timerBounced = (row?.report_bounced ?? false) || meta["gh_report_bounced"] === "1";
+    // TASK 1 (fix6): the owner's latest decision on the issue, and
+    // whether the charge was waived — a waived visit is its own
+    // client state (no Approve button), not "awaiting".
+    const issueDecision = latestIssueDecision(events);
     const view = () => {
       const sentAt = meta["gh_report_sent_at"] ?? null;
       // N20: a bounced report never starts the 24h clock (the timer
@@ -691,7 +695,10 @@ export default async function handler(req: Req, res: Res) {
       return {
         requestId,
         ok: true,
-        state: deriveState(meta),
+        // TASK 1 (fix6): a waived visit shows its own state — the
+        // derived "awaiting" would wrongly offer an Approve button
+        // for a visit the owner closed without payment.
+        state: issueDecision?.decision === "waived" ? "waived" as ReportState : deriveState(meta),
         booking,
         photos: items.map((p) => p.url),
         photo_items: items,
@@ -742,6 +749,11 @@ export default async function handler(req: Req, res: Res) {
         // the client's words.
         issue_source: meta["gh_issue_open"] === "1" ? meta["gh_issue_source"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
+        // TASK 1 (fix6): the owner's latest decision on the issue
+        // (payment_requested / reclean / waived, with its text) — the
+        // report page renders its state from this, never from a stale
+        // resolution field.
+        issue_decision: issueDecision,
         // §10/§11: the cleaner's completed checklist travels with the
         // report — the client sees what was actually done, room by room.
         checklist: row?.checklist ?? null,
@@ -897,6 +909,15 @@ export default async function handler(req: Req, res: Res) {
       }
       if (row && ((row.report_status != null && row.report_status !== "sent") || returnedAfterSent)) {
         res.status(409).json({ requestId, ok: false, error: "report_not_current" });
+        return;
+      }
+      // TASK 1 (fix6): a waived charge is terminal — the visit was
+      // closed without payment, so no approval may arm a charge for
+      // it, not even from a stale tab or an approval logged before
+      // the waive. chargeVisit enforces the same gate; this returns
+      // the honest error before logging any approval.
+      if (latestIssueDecision(events)?.decision === "waived") {
+        res.status(409).json({ ...view(), error: "charge_waived" });
         return;
       }
       // RA08: the client pays for the publication they actually saw.
@@ -1272,7 +1293,10 @@ export default async function handler(req: Req, res: Res) {
           ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
           : {}),
       });
-      // Client: the confirmation promised on the page.
+      // Client: the confirmation promised on the page. Subject and
+      // body are the spec's "Issue received" text verbatim; the
+      // payment-in-flight variant keeps its honest separate wording
+      // (the spec does not cover a charge already moving).
       if (customer.email) {
         await sendMail({
           from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
@@ -1280,10 +1304,9 @@ export default async function handler(req: Req, res: Res) {
           reply_to: "hello@gatehousehomecleaning.com",
           subject: paymentInFlight
             ? "We received your report — a payment was already in progress"
-            : "We received your report — the charge is paused",
+            : "We received your cleaning concern",
           text:
-            `Hi ${firstName},\n\nIssue received.${paymentInFlight ? " A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right." : " The charge is paused — nothing will be charged while we look into it, and it will not resume on its own. Once we've fixed it, you approve the report again to pay."}\n` +
-            `We'll reply within one business day.\n\n` +
+            `Hi ${firstName},\n\n${paymentInFlight ? "A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right.\n\nWe'll reply within one business day." : "We've received your message and paused payment for this visit.\n\nWe'll review your concern and reply within one business day. We aim to provide a decision within 72 hours.\n\nYour card won't be charged unless you approve the report."}\n\n` +
             (room ? `Room: ${room}\n` : "") +
             (reason ? `What you told us: ${reason}\n\n` : "\n") +
             `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,

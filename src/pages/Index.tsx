@@ -128,7 +128,7 @@ const Index = () => {
               One-time, recurring, and deep cleaning for homes in Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. See your price online. Review your photo report after the clean.
             </p>
             <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
-              <Link to="/quote" data-main-cta>See My Price</Link>
+              <Link to="/quote" data-main-cta>Plan My Cleaning</Link>
             </Button>
           </div>
           <figure>

@@ -332,7 +332,7 @@ describe("RA07 issue vs charge barrier", () => {
     // Not in flight: the field is absent (only the in-flight
     // response carries payment_in_flight: true).
     expect(issue.body["payment_in_flight"]).toBeUndefined();
-    expect(resendSubjects).toContain("We received your report — the charge is paused");
+    expect(resendSubjects).toContain("We received your cleaning concern");
     // An owner charge is NOT the client's resolve-and-pay consent:
     // the open dispute blocks it outright, creates no intent, and
     // leaves the dispute open.

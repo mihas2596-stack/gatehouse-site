@@ -31,9 +31,9 @@ describe("booking price confirmation", () => {
     openQuote();
     fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
     // Unified breakdown: one first-visit total, explicitly labeled as a deep clean.
-    expect(screen.getByText("First visit: $329", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("— deep clean")).toBeInTheDocument();
-    expect(screen.getByText("Then $189 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("First visit (Deep clean): $329")).toBeInTheDocument();
+    expect(screen.getByText(/Homes not cleaned professionally in the last 3 months start with a deep clean/)).toBeInTheDocument();
+    expect(screen.getByText("Future visits (Standard): $189 every other week")).toBeInTheDocument();
   });
 
   it("shows one unified regular total for the confirmed scenario", () => {
@@ -47,8 +47,8 @@ describe("booking price confirmation", () => {
     // Extras start collapsed.
     fireEvent.click(screen.getByRole("button", { name: "Add extras (optional)" }));
     fireEvent.click(screen.getByLabelText(/Inside oven/));
-    expect(screen.getByText("First visit: $224", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("First visit: $224 · then $224 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
+    expect(screen.getByText("Future visits (Standard): $224 every other week")).toBeInTheDocument();
     // No founding language anywhere on the page.
     expect(screen.queryByText(/founding/i)).not.toBeInTheDocument();
   });
@@ -68,7 +68,7 @@ describe("booking price confirmation", () => {
       expect(screen.getByText(/Test booking: prices on this page are reduced for a payment test/)).toBeInTheDocument();
     });
     // Regular $189 recurring M at 1/100 = $1.89, capped at the $1.50 test ceiling.
-    expect(screen.getByText("First visit: $1.50", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("First visit (Standard): $1.50")).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 
