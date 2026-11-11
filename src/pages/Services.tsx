@@ -2,56 +2,38 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Home, CalendarClock } from "lucide-react";
 import SEO from "@/components/SEO";
-import { type ServiceKey } from "@/config/pricing";
 import { PRICES, ADDONS , fmtPrice, globalTestCutActive, scaleTestPrice} from "@/config/calculator";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 type ServiceCard = {
   icon: typeof Sparkles;
   title: string;
   link: string;
-  serviceKey?: ServiceKey;
   desc: string;
-  includes: string[];
 };
 
 const mainService: ServiceCard = {
   icon: CalendarClock,
   title: "Every Other Week",
   link: "/quote?service=recurring",
-  serviceKey: "recurring",
   desc: "Regular upkeep, arranged with you every other week. We confirm each visit’s date, arrival window and cleaner.",
-  includes: [
-    "Each visit arranged and confirmed with you",
-    "All rooms dusted & vacuumed",
-    "Bathrooms cleaned & polished",
-    "Kitchen counters & appliances wiped",
-    "Floors mopped throughout",
-    "Trash removed & bins lined",
-  ],
 };
 
 const alsoAvailable: ServiceCard[] = [
   {
-    icon: Sparkles, title: "Deep clean", link: "/quote?service=deep", serviceKey: "deep",
-    desc: "A detailed reset for a lived-in home — the full standard checklist, plus inside the oven, fridge and cabinets. Choose it when your home needs more than regular upkeep, or as your first visit after 3 months without a professional clean.",
-    includes: ["All standard-clean checklist items", "Inside oven, fridge and cabinets", "Detailed dusting and scrubbing in kitchens and bathrooms"],
+    icon: Sparkles, title: "Deep clean", link: "/quote?service=deep",
+    desc: "A detailed reset for a lived-in home, including inside the oven, fridge and cabinets.",
   },
   {
     icon: Sparkles,
     title: "One-time clean",
     link: "/quote?service=standard&frequency=onetime",
-    serviceKey: "standard",
     desc: "A single thorough refresh that dusts, vacuums, mops, and cleans bathrooms and kitchens throughout your home.",
-    includes: ["All rooms dusted & vacuumed", "Bathrooms cleaned & polished", "Kitchen counters & appliances wiped", "Floors mopped throughout", "Trash removed & bins lined"],
   },
   {
     icon: Home,
     title: "Move‑in / Move‑out",
     link: "/quote?service=moveinout",
-    serviceKey: "moveinout",
-    desc: "A thorough clean for an empty home — every cabinet, drawer and appliance cleaned inside and out, so the home is ready to move into or hand over.",
-    includes: ["Complete deep clean of all rooms", "Inside every cabinet & drawer", "Every appliance cleaned inside and out", "Interior windows available as an add-on"],
+    desc: "A thorough clean for an empty home, including the inside of cabinets, drawers and appliances.",
   },
 ];
 
@@ -101,7 +83,6 @@ const Services = () => {
               <p className="mb-4">{service.desc}</p>
               <p className="font-semibold mb-4">From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit — your exact price depends on bedrooms and bathrooms.</p>
               <Button asChild variant="hero" size="lg" className="mt-auto"><Link to={service.link} data-main-cta>See your price</Link></Button>
-              <details className="mt-4"><summary className="min-h-[44px] cursor-pointer text-primary underline">What this covers</summary><ul className="mt-2 space-y-2 list-disc pl-5">{service.includes.map((item) => <li key={item}>{item}</li>)}</ul></details>
             </article>
           ))}
         </div>
@@ -200,63 +181,6 @@ const comparisonCards = (disp: (n: number) => number) => {
     title,
     rows: rows.map((r) => ({ label: r.label, value: r[keys[i]] })),
   }));
-};
-
-const ServiceCardBlock = ({
-  service: s,
-  headingLevel,
-  compact = false,
-}: {
-  service: ServiceCard;
-  headingLevel: "h2" | "h3";
-  compact?: boolean;
-}) => {
-  const Heading = headingLevel;
-  return (
-    <div className={`flex flex-col ${compact ? "" : "lg:flex-row"} gap-8 items-start bg-card rounded-2xl p-6 md:p-10 shadow-warm`}>
-      <div className="flex-1">
-        <div className="w-14 h-14 rounded-xl bg-peach/50 flex items-center justify-center mb-5">
-          <s.icon className="w-7 h-7 text-primary" />
-        </div>
-        <Heading className={`font-heading font-bold mb-2 ${compact ? "text-xl md:text-2xl" : "text-2xl md:text-3xl"}`}>{s.title}</Heading>
-        <p className="text-foreground leading-relaxed mb-6">{s.desc}</p>
-        <Button variant="hero" size="lg" asChild>
-          <Link to={s.link} data-main-cta>See your price</Link>
-        </Button>
-      </div>
-      <div className="flex-1 w-full">
-        <div className="bg-background rounded-xl px-6 py-4">
-          <ul className="space-y-1.5 mb-4">
-            {s.includes.slice(0, 3).map((item) => (
-              <li key={`preview-${item}`} className="flex items-start gap-2 text-base text-foreground">
-                <Sparkles className="w-3.5 h-3.5 text-golden mt-0.5 flex-shrink-0" />
-                {item}
-              </li>
-            ))}
-          </ul>
-          {s.includes.length > 3 && (
-            <Accordion type="single" collapsible>
-              <AccordionItem value="included" className="border-b-0">
-                <AccordionTrigger className="font-heading text-lg font-semibold hover:no-underline pt-0 min-h-[44px]">
-                  {s.includes.length - 3} more included
-                </AccordionTrigger>
-                <AccordionContent>
-                  <ul className="space-y-2 pt-2">
-                    {s.includes.slice(3).map((item) => (
-                      <li key={item} className="flex items-start gap-2 text-base text-foreground">
-                        <Sparkles className="w-4 h-4 text-golden mt-0.5 flex-shrink-0" />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 };
 
 export default Services;

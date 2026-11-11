@@ -61,6 +61,7 @@ describe("fix7 — UX audit fixes", () => {
 
   it("step 1: Deep card has its own icon tagline and a compare link", () => {
     openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Deep/ }));
     expect(screen.getByText("A detailed first-time clean for homes that haven't been professionally cleaned recently.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Compare with a standard clean" });
@@ -78,12 +79,13 @@ describe("fix7 — UX audit fixes", () => {
     expect(btn().textContent).not.toMatch(/None selected/);
   });
 
-  it("step 2: More about your home names its contents", () => {
+  it("step 2 omits the optional home planning block and SMS opt-in", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByText("Home size, half bathrooms and extra rooms.")).toBeInTheDocument();
+    expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /Text me booking updates/ })).not.toBeInTheDocument();
   });
 
   it("step 2: Notes warns against door codes", () => {
@@ -103,14 +105,14 @@ describe("fix7 — UX audit fixes", () => {
 
   it("home page: How it works 02/03, city line, single CTA wording", () => {
     render(<HelmetProvider><MemoryRouter><Index /></MemoryRouter></HelmetProvider>);
-    expect(screen.getByText("We’ll email you to confirm your date and arrival window (morning, midday or afternoon) — and your cleaner, before the visit.")).toBeInTheDocument();
-    expect(screen.getByText("Get your photos and checklist. Approve to pay when you're happy — or report an issue.")).toBeInTheDocument();
-    expect(screen.getByText(/Don't see your city\?/)).toBeInTheDocument();
+    expect(screen.getByText("We’ll email you to confirm your date, arrival window and who’s coming.")).toBeInTheDocument();
+    expect(screen.getByText("Get a private photo report and checklist after the visit.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Check our service area" })).toBeInTheDocument();
     expect(document.getElementById("when-you-pay")).not.toBeNull();
-    const ctas = screen.getAllByRole("link", { name: "Plan My Cleaning" });
+    const ctas = screen.getAllByRole("link", { name: "See My Price" });
     expect(ctas).toHaveLength(2);
     for (const cta of ctas) expect(cta.getAttribute("href")).toBe("/quote");
-    expect(screen.queryByText("See My Price")).not.toBeInTheDocument();
+    expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
   });
 
   it("FAQ data: 2–4 hour estimate and always-free rescheduling", () => {

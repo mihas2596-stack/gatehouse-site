@@ -1,14 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Heart, Shield } from "lucide-react";
 import SEO from "@/components/SEO";
-import { Check } from "lucide-react";
 import nikFounder from "@/assets/nik-founder.jpeg";
-
-const MANIFESTO_ROWS: { good: string }[] = [
-  { good: "Most homes get a price online — before you book; homes with 6+ bedrooms or 6+ full bathrooms can email us for a custom quote" },
-];
-
 
 const About = () => {
   return (
@@ -60,21 +53,6 @@ const About = () => {
             </div>
           </div>
 
-          {/* VALUE CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-16">
-            {[
-              { icon: Heart, title: "Your First Visit", desc: "If a professional cleaned your home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. You'll see both prices before you book." },
-              { icon: Shield, title: "A Schedule You Agree To", desc: "Request every-other-week visits. We arrange and confirm each date and arrival window with you." },
-            ].map((v) => (
-              <div key={v.title} className="text-center p-8 bg-card rounded-2xl shadow-warm">
-                <div className="w-14 h-14 rounded-xl bg-peach/50 flex items-center justify-center mx-auto mb-5">
-                  <v.icon className="w-7 h-7 text-primary" />
-                </div>
-                <h3 className="font-heading text-xl font-semibold mb-2">{v.title}</h3>
-                <p className="text-muted-foreground text-sm leading-relaxed">{v.desc}</p>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -90,23 +68,10 @@ const About = () => {
               Clear price online before you book, a photo report after every clean, and every date confirmed with you. Cancellation rules are listed in our FAQ and Terms.
             </p>
             <p className="text-foreground/80 leading-relaxed mt-3">
-              The bedroom photo shown on our homepage is from a Gatehouse clean. Other illustrative images are labelled. Your private report photos are never published without separate permission.
+              The bedroom photo shown on our homepage is from a Gatehouse clean. Other illustrative images are labeled. Your private report photos are never published without separate permission.
             </p>
           </div>
 
-          <h3 className="font-heading text-lg font-semibold text-primary mb-4">Gatehouse Home Cleaning</h3>
-
-          <div className="space-y-4">
-            {MANIFESTO_ROWS.map((row, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-3 text-foreground font-medium bg-card rounded-xl p-5 shadow-warm md:py-4 md:px-5 md:border-l-4 md:border-primary"
-              >
-                <Check className="w-5 h-5 shrink-0 mt-0.5 text-primary" aria-hidden="true" />
-                <span className="leading-relaxed">{row.good}</span>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -124,10 +89,10 @@ const About = () => {
         <div className="container text-center max-w-2xl">
           <h2 className="font-heading text-3xl font-bold mb-4">Ready to start?</h2>
           <p className="text-foreground/80 text-lg mb-8">
-            See your price online and book your first clean in a few minutes.
+            See your price online and request your first visit.
           </p>
           <Button variant="hero" size="xl" asChild>
-            <Link to="/quote" data-main-cta>Plan My Cleaning</Link>
+            <Link to="/quote" data-main-cta>See My Price</Link>
           </Button>
         </div>
       </section>

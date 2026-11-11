@@ -12,7 +12,7 @@ vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-14T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-const pill = () => screen.queryByRole("link", { name: "Plan My Cleaning" });
+const pill = () => screen.queryByRole("link", { name: "See My Price" });
 
 describe("fix9 — mobile walkthrough fixes", () => {
   it("sticky pill stays on focus of button/summary, hides on focus of a real field", () => {

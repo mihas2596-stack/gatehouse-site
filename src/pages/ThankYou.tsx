@@ -212,7 +212,7 @@ const ThankYou = () => {
               : "Use our quote or contact form to send a request. This page alone does not create a booking."}
           </p>
           {received && submission.customerEmailSent === false && <p role="status" className="mb-6">Your message reached us. The automatic email confirmation could not be sent. There is no need to send your message again.</p>}
-          <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "Plan My Cleaning"}</Link></Button>
+          <Button variant="hero" size="lg" asChild><Link to={received ? "/" : "/quote"}>{received ? "Back to Home" : "See My Price"}</Link></Button>
         </div>
       </div>
     );

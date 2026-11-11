@@ -319,7 +319,7 @@ const Cleaner = () => {
         {data.confirmed === false && (
           <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
             <p className="text-base font-semibold">Visit awaiting confirmation</p>
-            <p className="text-base text-muted-foreground">Wait for confirmation before travelling. Photos and sending unlock after confirmation.</p>
+            <p className="text-base text-muted-foreground">Wait for confirmation before traveling. Photos and sending unlock after confirmation.</p>
           </div>
         )}
 

@@ -4,7 +4,7 @@ import Footer from "./Footer";
 import MobileStickyCTA, { isMarketingRoute } from "./MobileStickyCTA";
 
 // Dashboard pages (owner, cleaner, client visit, report) get a compact
-// service footer: the big marketing footer and its "Plan My Cleaning" CTA
+// service footer: the big marketing footer and its "See My Price" CTA
 // must not compete with working actions on these pages.
 const DASHBOARD_PREFIXES = ["/owner", "/cleaner", "/visit", "/report", "/thank-you", "/quote", "/save-card"];
 

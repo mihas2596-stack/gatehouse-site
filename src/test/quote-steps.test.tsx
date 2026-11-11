@@ -25,7 +25,7 @@ const fillStep2 = () => {
 describe("quote steps", () => {
   it("shows only the active step, keeps answers on back, and uses the exact step buttons", () => {
     openQuote();
-    expect(screen.getByRole("heading", { name: "Let's plan your cleaning" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Your name *")).not.toBeInTheDocument();
     expect(screen.queryByText("Request this booking")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
@@ -38,7 +38,7 @@ describe("quote steps", () => {
 
     fireEvent.change(screen.getByLabelText("Your name *"), { target: { value: "Test Person" } });
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
-    expect(screen.getByRole("heading", { name: "Let's plan your cleaning" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByLabelText("Your name *")).toHaveValue("Test Person");
   });
@@ -50,7 +50,7 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByRole("heading", { name: "Save your card securely" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     // The sentence is split: the lead is semibold, the rest regular.
     expect(screen.getByText("Today: $0")).toBeInTheDocument();
     expect(screen.getByText(/Your card is charged automatically 24 hours after we send the report/)).toBeInTheDocument();
@@ -79,8 +79,10 @@ describe("quote steps", () => {
 
   it("step 1 follows the simplified spec: estimate until answered, deep-clean line only on No", () => {
     openQuote();
-    expect(screen.getByRole("heading", { name: "Let's plan your cleaning" })).toBeInTheDocument();
-    expect(screen.getByText("Tell us a little about your home.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
+    expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
+    expect(screen.queryByText("Your cleaning cost")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     expect(screen.getByText("Your cleaning cost")).toBeInTheDocument();
     expect(screen.getByText("Professionally cleaned in the last 3 months? *")).toBeInTheDocument();
     // Unanswered cleaning history: the price is an estimate, not confirmed.
@@ -114,32 +116,33 @@ describe("quote steps", () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
       fillStep2();
       fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-      expect(screen.getByRole("heading", { name: "Save your card securely" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     };
     // Defaults (3-bed M, cleaned recently, every other week): first
     // == recurring, so the first recurring branch renders.
     goToStep3("Yes", false);
-    expect(screen.getByText("$189 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("First visit $189, then $189 per visit, every other week")).toBeInTheDocument();
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
     cleanup();
+    sessionStorage.removeItem("gh_quote_draft_v1");
     // Same home + oven: both totals move by the $35 addon, still equal.
     goToStep3("Yes", true);
-    expect(screen.getByText("$224 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("First visit $224, then $224 per visit, every other week")).toBeInTheDocument();
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
     cleanup();
+    sessionStorage.removeItem("gh_quote_draft_v1");
     // Not cleaned recently: first visit is a deep clean, then the
     // recurring price — the second recurring branch renders. The
     // line is split across JSX fragments, so assert on page text.
     goToStep3("No", false);
-    expect(document.body.textContent).toContain("First visit $329 (deep clean) , then $189 every other week");
+    expect(document.body.textContent).toContain("First visit $329 (deep clean), then $189 per visit, every other week");
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
   });
 
-  it("home details live on step 2, not step 1, and step changes land focus on the new heading", () => {
+  it("home planning inputs are omitted and step changes focus the new heading", () => {
     openQuote();
     expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
-    expect(screen.getByText(/Your price is locked in when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
@@ -148,12 +151,12 @@ describe("quote steps", () => {
     // the testable half of the scroll fix (the effect scrolls the
     // heading into view, then focuses it).
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Your visit" }));
-    expect(screen.getByText("More about your home (optional)")).toBeInTheDocument();
-    expect(screen.getByLabelText("Approximate home size — if you know it")).toBeInTheDocument();
-    expect(screen.getByText("Any extra areas to clean?")).toBeInTheDocument();
+    expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
+    expect(screen.queryByText("Any extra areas to clean?")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
-    expect(screen.getByRole("heading", { name: "Let's plan your cleaning" })).toBeInTheDocument();
-    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Let's plan your cleaning" }));
+    expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "See your cleaning price" }));
     expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
   });
 
@@ -164,7 +167,7 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByRole("heading", { name: "Save your card securely" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByText("Today: $0")).toBeInTheDocument();
     expect(screen.getByText("Review, then pay")).toBeInTheDocument();
     expect(screen.getByText("Something missed?")).toBeInTheDocument();

@@ -25,7 +25,7 @@ export const CITIES: City[] = [
     title: "House Cleaning in Suwanee, GA | Gatehouse Home Cleaning",
     description: "Every-other-week house cleaning in Suwanee, GA. See your price online, then request a date. We confirm each visit with you.",
     sections: [
-      { heading: "Homes in Suwanee", text: "Suwanee is a suburb built around Town Center, with neighborhoods spreading east toward Lawrenceville-Suwanee Road. The quote asks for an approximate home size to plan the visit; the price is based on bedrooms and full bathrooms." },
+      { heading: "Homes in Suwanee", text: "Suwanee is a suburb built around Town Center, with neighborhoods spreading east toward Lawrenceville-Suwanee Road." },
       { heading: "What a visit covers", text: "Every visit covers the same rooms in the same order: kitchen, bathrooms, bedrooms, then living areas and hallways. Stair railings get wiped, stairs get vacuumed, beds are made and trash is emptied. Your cleaner brings their own vacuum, mop, cloths and products, so nothing needs to be waiting in the laundry room." },
       { heading: "Scheduling and payment", text: "Most homes get a price online; homes with 6+ bedrooms or 6+ full bathrooms can email us for a custom quote. You see your every-other-week price on screen, request a day and arrival window, and we confirm within one business day. Nothing is charged at booking. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue. Cancel free up to 48 hours before a visit; rescheduling is always free." },
     ],
@@ -58,7 +58,7 @@ export const CITIES: City[] = [
     title: "House Cleaning in Johns Creek, GA | Gatehouse Home Cleaning",
     description: "Every-other-week house cleaning in Johns Creek, GA. See your price online, then request a date. We confirm each visit with you.",
     sections: [
-      { heading: "Homes in Johns Creek", text: "Johns Creek sits in north Fulton County. The quote asks for a size band to plan the visit. The displayed price is based on bedrooms, full bathrooms and your cleaning selections." },
+      { heading: "Homes in Johns Creek", text: "Johns Creek sits in north Fulton County." },
       { heading: "What a visit covers", text: "Each visit follows the published room-by-room checklist: countertops, sinks and appliance exteriors in the kitchen; toilets, tubs, showers, mirrors and floors in every bathroom; dusting and floors in bedrooms and living areas. Extras beyond the checklist — inside the oven, inside the fridge, interior windows, inside cabinets, extra pet-hair work — are optional add-ons with fixed prices." },
       { heading: "Scheduling and payment", text: "Scheduling in Johns Creek is deliberately simple. You choose the day and arrival window that works, and we arrange and confirm each recurring visit with you. There is no membership fee, no promo code and no long-term commitment. Your card is charged after the visit, when you approve the photo report — or automatically 24 hours after we send the report if you haven't reported an issue." },
     ],

@@ -26,7 +26,7 @@ const CityPage = () => {
           </h1>
           <p className="text-foreground text-lg">{city.description}</p>
           <Button asChild variant="hero" size="lg" className="mt-6 rounded-full px-8">
-            <Link to={`/quote?city=${encodeURIComponent(city.name)}`} data-main-cta>See price &amp; request a date</Link>
+            <Link to={`/quote?city=${encodeURIComponent(city.name)}`} data-main-cta>See My Price</Link>
           </Button>
         </div>
       </section>
@@ -45,7 +45,7 @@ const CityPage = () => {
           </div>
 
           <div className="space-y-10">
-            {city.sections.filter((section) => !/booking and payment|scheduling and payment/i.test(section.heading)).map((section) => (
+            {city.sections.filter((section) => section.heading === `Homes in ${city.name}`).map((section) => (
               <section key={section.heading}>
                 <h2 className="font-heading text-2xl font-bold mb-3">{section.heading}</h2>
                 <p className="text-base leading-relaxed text-foreground md:text-lg">

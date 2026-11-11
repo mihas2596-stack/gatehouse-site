@@ -21,10 +21,10 @@ describe("fix10 — ChatGPT spec, item 1: canonical payment sentence", () => {
   it("home 'When you pay' is two short paragraphs, not the old definition list", () => {
     render(<MemoryRouter><HelmetProvider><Index /></HelmetProvider></MemoryRouter>);
 
-    // Structure kept: heading + anchor id + the issue details below.
+    // Structure kept: heading + anchor id.
     expect(screen.getByRole("heading", { name: "When you pay" })).toBeInTheDocument();
     expect(document.getElementById("when-you-pay")).not.toBeNull();
-    expect(screen.getByText("What if something was missed?")).toBeInTheDocument();
+    expect(screen.queryByText("What if something was missed?")).not.toBeInTheDocument();
 
     // The two canonical paragraphs, verbatim.
     expect(screen.getByText("Save your card at booking — you pay $0 today.")).toBeInTheDocument();

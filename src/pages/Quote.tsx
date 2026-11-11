@@ -15,14 +15,8 @@ import {
   ADDONS,
   ADDONS_INCLUDED_IN,
   MAX_INTERIOR_WINDOWS,
-  SIZE_BANDS,
-  SIZE_BAND_LABEL,
-  EXTRA_ZONES,
-  EXTRA_ZONE_LABEL,
-  type ExtraZoneKey,
   BEDROOM_CHOICES,
   FULL_BATH_CHOICES,
-  HALF_BATH_CHOICES,
   FREQUENCY_OPTIONS,
   FREQUENCY_LABEL,
   SERVICE_OPTIONS,
@@ -30,7 +24,6 @@ import {
   type CalcServiceKey,
   type FrequencyKey,
   type PriceBreakdown,
-  type SizeBandKey,
 } from "@/config/calculator";
 
 import {
@@ -55,30 +48,59 @@ const resolveService = (param: string | null): CalcServiceKey => {
 // Exact consent wording, stored with every booking request.
 const TERMS_CONSENT_TEXT =
   "I agree to the Terms, including binding arbitration (Section 16), and acknowledge the Privacy Policy.";
-const SMS_CONSENT_MAIN = "Text me booking updates. Optional — email works too.";
-const SMS_DISCLOSURE =
-  "Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.";
-const SMS_CONSENT_TEXT = `${SMS_CONSENT_MAIN} ${SMS_DISCLOSURE}`;
 const PHOTO_CONSENT_MAIN =
   "I agree to photos of the cleaned rooms for my private cleaning report.";
 const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms you'd rather we skip in photos on your visit page before the visit.";
 const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
+type QuoteDraft = {
+  savedAt: number;
+  zip: string;
+  bedrooms: number;
+  fullBaths: number;
+  recentlyCleaned: "yes" | "no" | "";
+  frequency: FrequencyKey;
+  service: CalcServiceKey;
+  addons: {
+    insideOven: boolean;
+    insideFridge: boolean;
+    insideCabinets: boolean;
+    interiorWindows: number;
+    pets: boolean;
+  };
+};
+
+const QUOTE_DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+function readQuoteDraft(key: string | null): Partial<QuoteDraft> {
+  if (!key) return {};
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return {};
+    const draft: Partial<QuoteDraft> = JSON.parse(raw);
+    const age = Date.now() - (draft.savedAt ?? 0);
+    if (age >= 0 && age < QUOTE_DRAFT_MAX_AGE_MS) return draft;
+    sessionStorage.removeItem(key);
+  } catch { /* Storage may be disabled or the draft may be unreadable. */ }
+  return {};
+}
+
 const Quote = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
 
-  const [sizeBand, setSizeBand] = useState<SizeBandKey>("notsure");
-  const [extraZones, setExtraZones] = useState<ExtraZoneKey[]>([]);
-  const toggleZone = (key: ExtraZoneKey) =>
-    setExtraZones((prev) => (prev.includes(key) ? prev.filter((z) => z !== key) : [...prev, key]));
-  const [bedrooms, setBedrooms] = useState<number>(3);
-  const [fullBaths, setFullBaths] = useState<number>(2);
-  const [halfBaths, setHalfBaths] = useState<number>(0);
-  const [recentlyCleaned, setRecentlyCleaned] = useState<"yes" | "no" | "">("");
-  const [frequency, setFrequency] = useState<FrequencyKey>(params.get("frequency") === "onetime" ? "onetime" : "every2weeks");
-  const [service, setService] = useState<CalcServiceKey>(resolveService(params.get("service")));
-  const [zip, setZip] = useState("");
+  const initialService = resolveService(params.get("service"));
+  const initialFrequency = params.get("frequency") === "onetime" ? "onetime" : "every2weeks";
+  const selectedService = params.has("service") || params.has("frequency");
+  const draftKey = params.has("tp") ? null
+    : selectedService ? `gh_quote_draft_v1:${initialService}:${initialFrequency}` : "gh_quote_draft_v1";
+  const [draft] = useState(() => readQuoteDraft(draftKey));
+  const [bedrooms, setBedrooms] = useState<number>(draft.bedrooms ?? 3);
+  const [fullBaths, setFullBaths] = useState<number>(draft.fullBaths ?? 2);
+  const [recentlyCleaned, setRecentlyCleaned] = useState<"yes" | "no" | "">(draft.recentlyCleaned ?? "");
+  const [frequency, setFrequency] = useState<FrequencyKey>(draft.frequency ?? initialFrequency);
+  const [service, setService] = useState<CalcServiceKey>(draft.service ?? initialService);
+  const [zip, setZip] = useState(draft.zip ?? "");
   // Owner price-test mode: a signed `tp` token in the URL switches this
   // quote to reduced test prices — but ONLY after the server verifies the
   // token (signature + expiry). An unverified token never scales prices,
@@ -121,16 +143,26 @@ const Quote = () => {
     flexible: "I'm flexible",
   };
 
-  const [insideOven, setInsideOven] = useState(false);
-  const [insideFridge, setInsideFridge] = useState(false);
-  const [insideCabinets, setInsideCabinets] = useState(false);
-  const [interiorWindows, setInteriorWindows] = useState(0);
-  const [pets, setPets] = useState(false);
+  const [insideOven, setInsideOven] = useState(draft.addons?.insideOven ?? false);
+  const [insideFridge, setInsideFridge] = useState(draft.addons?.insideFridge ?? false);
+  const [insideCabinets, setInsideCabinets] = useState(draft.addons?.insideCabinets ?? false);
+  const [interiorWindows, setInteriorWindows] = useState(draft.addons?.interiorWindows ?? 0);
+  const [pets, setPets] = useState(draft.addons?.pets ?? false);
 
   const addons = useMemo(
     () => ({ insideOven, insideFridge, insideCabinets, interiorWindows, pets }),
     [insideOven, insideFridge, insideCabinets, interiorWindows, pets]
   );
+
+  useEffect(() => {
+    if (!draftKey) return;
+    // Only calculator inputs are saved. Contact details, access, consent and
+    // prices stay out of the draft. A restored quote always recalculates.
+    const current: QuoteDraft = { savedAt: Date.now(), zip, bedrooms, fullBaths, recentlyCleaned, frequency, service, addons };
+    try {
+      sessionStorage.setItem(draftKey, JSON.stringify(current));
+    } catch { /* A browser that blocks storage can still request a visit. */ }
+  }, [draftKey, zip, bedrooms, fullBaths, recentlyCleaned, frequency, service, addons]);
 
   const tier = tierFor(bedrooms, fullBaths);
   const answered = recentlyCleaned !== "";
@@ -169,7 +201,7 @@ const Quote = () => {
       service === "deep" || service === "moveinout"
         ? calcPrice({ bedrooms, fullBaths, service, frequency: "onetime", addons, testScale: testMode })
         : null,
-    [service, bedrooms, fullBaths, addons]
+    [service, bedrooms, fullBaths, addons, testMode]
   );
 
   // The headline first-visit price used for the booking request.
@@ -184,17 +216,8 @@ const Quote = () => {
   // 6+ full bathrooms) have no table price, but the request still goes
   // through — as a custom-quote request, not a ZIP error.
   const isLargeHome = tier === null;
-  // Scope-planning flags: an unsure or very large size, or any extra area,
-  // means the owner reviews the scope with the client BEFORE confirming.
-  // None of this ever changes the shown price by itself.
-  const scopeReasons: string[] = [
-    ...(sizeBand === "notsure" ? ["home size not sure"] : []),
-    ...(sizeBand === "4000plus" ? ["4,000+ sq ft"] : []),
-    ...(extraZones.length ? [`extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}`] : []),
-  ];
-  const scopeReview = scopeReasons.length > 0;
   const canProceed = zipInArea;
-  const showPrice = !zipOutOfArea && tier !== null;
+  const showPrice = zipInArea && tier !== null;
 
   // ---- Booking request form ----
   const { toast } = useToast();
@@ -209,7 +232,6 @@ const Quote = () => {
     website: "",
     termsConsent: false,
     photoConsent: false,
-    smsConsent: false,
     city: params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
     state: "GA",
     apt: "",
@@ -257,7 +279,7 @@ const Quote = () => {
   useEffect(() => {
     requestRef.current = null;
     setSubmitError("");
-  }, [sizeBand, bedrooms, fullBaths, halfBaths, recentlyCleaned, frequency, service, zip, addons, extraZones]);
+  }, [bedrooms, fullBaths, recentlyCleaned, frequency, service, zip, addons]);
   const refs = {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
@@ -428,10 +450,8 @@ const Quote = () => {
         pets ? ADDONS.pets.label : "",
       ].filter(Boolean).join(", ");
       const summary = [
-        SIZE_BAND_LABEL[sizeBand],
         `${bedrooms} BR`,
         `${fullBaths} full BA`,
-        `${halfBaths} half BA`,
         `Tier ${tier}`,
         SERVICE_LABEL_CALC[service],
         service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time",
@@ -449,15 +469,13 @@ const Quote = () => {
             ? `Total ${fmt$(breakdown.first_total)} (one visit${breakdown.first_service === "deep" ? ", deep clean" : ""})`
             : `Price ${fmt$(mainPrice)} per visit`,
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
-        extraZones.length ? `Extra areas to clean: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : "",
-        scopeReview ? `Scope review needed: YES (${scopeReasons.join("; ")})` : "",
       ].filter(Boolean).join(" · ");
       // Idempotency: one request_id per booking attempt, kept in
       // sessionStorage so a retry — even after a page reload — reuses it and
       // the server reproduces the same booking instead of a duplicate. The id
       // rotates when the booking content changes or after a successful send.
       if (!requestRef.current) {
-        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, mainPrice, sizeBand, extraZones, entryMethod, entryDetail, entryNotes, booking.city, booking.state, booking.apt]);
+        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, mainPrice, entryMethod, entryDetail, entryNotes, booking.city, booking.state, booking.apt]);
         let id: string | null = null;
         try {
           if (sessionStorage.getItem("gh_request_sig") === sig) id = sessionStorage.getItem("gh_request_id");
@@ -472,7 +490,6 @@ const Quote = () => {
       const consentRecord = [
         "Consent record",
         `Timestamp: ${requestRef.current.time}`,
-        `sms_consent: ${booking.smsConsent} — "${SMS_CONSENT_TEXT}"`,
         `terms_consent: ${booking.termsConsent} — "${TERMS_CONSENT_TEXT}"`,
         `photo_consent: ${booking.photoConsent} — "${PHOTO_CONSENT_TEXT}"`,
       ].join("\n");
@@ -486,15 +503,11 @@ const Quote = () => {
         date: booking.date,
         time: booking.time,
         message: `${summary}${booking.notes ? `\n\nNotes: ${booking.notes}` : ""}\n\n${consentRecord}`,
-        extra_zones: extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", "),
-        scope_review: scopeReview,
-        scope_reasons: scopeReasons.join("; "),
         notes: booking.notes.trim(),
         consent_record: consentRecord,
         bedrooms: String(bedrooms),
-        bathrooms: String(fullBaths + halfBaths * 0.5),
+        bathrooms: String(fullBaths),
         full_baths: String(fullBaths),
-        half_baths: String(halfBaths),
         zip: zip || "",
         address: fullAddress,
         city: booking.city.trim(),
@@ -517,7 +530,6 @@ const Quote = () => {
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
         photo_consent: booking.photoConsent,
-        sms_consent: booking.smsConsent,
       };
       setSubmitError("");
       const res = await fetch("/api/send-contact-email", {
@@ -549,7 +561,11 @@ const Quote = () => {
       }
       if (!data?.ok) throw new Error("Booking request failed");
       // Booking accepted: the next booking in this tab gets a fresh request_id.
-      try { sessionStorage.removeItem("gh_request_id"); sessionStorage.removeItem("gh_request_sig"); } catch { /* ignore */ }
+      try {
+        sessionStorage.removeItem("gh_request_id");
+        sessionStorage.removeItem("gh_request_sig");
+        if (draftKey) sessionStorage.removeItem(draftKey);
+      } catch { /* Storage may be disabled. */ }
       requestRef.current = null;
       trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" }, payload.request_id);
       // Recap shown on /thank-you: price, date, arrival window, current
@@ -632,20 +648,20 @@ const Quote = () => {
     <div className="page-shell readable-flow">
       <SEO
         title="See Your Cleaning Price | Gatehouse"
-        description="Enter your home size, bedrooms and bathrooms to see your cleaning price online, then pick a day."
+        description="See your cleaning price online before sharing your contact details, then request a visit."
         url="https://gatehousehomecleaning.com/quote"
       />
       <section className="py-4 md:py-6 bg-warm-gradient">
         <div className="container max-w-3xl text-center">
           <h1 id="quote-step-1-heading" tabIndex={-1} className="font-heading text-3xl md:text-[44px] font-bold mb-3 scroll-mt-24 outline-none">
-            Let&apos;s plan your <span className="text-gradient-gold">cleaning</span>
+            {step === 1 ? "See your cleaning price" : step === 2 ? "Request a visit" : "Review your request"}
           </h1>
           <p className="text-muted-foreground text-lg">
             {step === 1
-              ? "Tell us a little about your home."
+              ? "No email or card needed to see your price."
               : step === 2
-                ? "Tell us when you'd like us to come — we'll confirm your date separately, and nothing is charged today."
-                : "Check everything, then save your card — $0 today."}
+                ? "Choose your preferred date. We’ll confirm availability by email."
+                : "Check your visit details before saving your card."}
           </p>
           <div className="mt-5 max-w-md mx-auto">
             <p className="text-center text-sm font-semibold" aria-current="step">
@@ -682,7 +698,7 @@ const Quote = () => {
             )}
 
             {step === 1 && (<>
-            <p className="text-sm text-muted-foreground mb-6">Bedrooms, full bathrooms, ZIP, service type and frequency set your price.</p>
+            <p className="text-sm text-muted-foreground mb-6">Choose your rooms and cleaning type to see your price.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="md:col-span-2">
                 <label htmlFor="q-zip" className="block text-sm font-medium mb-1.5">ZIP code (service area check)</label>
@@ -881,6 +897,8 @@ const Quote = () => {
                 <p className="text-base font-semibold text-foreground">
                   We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. <a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us</a> and we’ll let you know when we expand to your area.
                 </p>
+              ) : !zipInArea ? (
+                <p className="text-base text-foreground">Enter your ZIP code to see your price.</p>
               ) : (
                 <>
                   <p className="text-sm font-medium text-muted-foreground mb-1">Your cleaning cost</p>
@@ -941,8 +959,8 @@ const Quote = () => {
                 </>
               )}
 
-              <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>
-              <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request. Nothing is charged today.</p>
+              {showPrice && <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>}
+              {showPrice && <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request.</p>}
               <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 
               <Button
@@ -967,97 +985,37 @@ const Quote = () => {
               {step === 2 && (<>
                 <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
-              <p className="text-sm text-foreground mb-6">
-                We confirm your date within one business day. Nothing is charged at booking. After the visit you get a photo report first — the charge comes when you approve it, or 24 hours after it&apos;s sent if you haven&apos;t reported an issue.
-              </p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip || "—"}</p>
+                <p className="text-muted-foreground mt-1">{bedrooms} bed, {fullBaths} full bath · ZIP {zip || "—"}</p>
+                <Link to="/whats-included" className="inline-flex min-h-[44px] items-center text-primary underline">See the full room-by-room list</Link>
               </div>
 
-              {/* PLANNING THE VISIT — size and extra areas never change the price */}
-              <details className="mt-6 rounded-lg border border-border bg-background p-4">
-                <summary className="cursor-pointer font-heading text-base font-bold">More about your home (optional)<span className="mt-0.5 block text-sm font-normal text-muted-foreground">Home size, half bathrooms and extra rooms.</span></summary>
-                <div className="mt-3">
-                  <label htmlFor="q-size" className="block text-sm font-medium mb-1.5">Approximate home size — if you know it</label>
-                  <select id="q-size" value={sizeBand} onChange={(e) => setSizeBand(e.target.value as SizeBandKey)} className={selectClass}>
-                    {SIZE_BANDS.map((b) => (
-                      <option key={b.key} value={b.key}>{b.label}</option>
-                    ))}
-                  </select>
-                  <p className="mt-1.5 text-sm text-muted-foreground">An estimate is fine. This helps us plan enough cleaning time.</p>
-                </div>
-                <div className="mt-4">
-                  <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
-                  <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
-                    {HALF_BATH_CHOICES.map((n) => (
-                      <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
-                    ))}
-                  </select>
-                  <p className="mt-1.5 text-sm text-muted-foreground">Planning only — half bathrooms don&apos;t change your price.</p>
-                </div>
-                <fieldset className="mt-4">
-                  <legend className="text-sm font-medium">Any extra areas to clean?</legend>
-                  <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
-                    {EXTRA_ZONES.map((z) => (
-                      <label key={z.key} htmlFor={`q-zone-${z.key}`} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
-                        <input
-                          id={`q-zone-${z.key}`} type="checkbox"
-                          checked={extraZones.includes(z.key)} onChange={() => toggleZone(z.key)}
-                          className="h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-                        />
-                        {z.label}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-                {scopeReview && (
-                  <p className="mt-3 text-sm font-medium text-foreground">
-                    We&apos;ll confirm the details with you before confirming your visit. Your price is locked in when you send your request. If the details show different work is needed, we agree any change with you before confirming, never after.
-                  </p>
-                )}
-                <p className="mt-3 text-sm text-foreground">
-                  Every visit covers your rooms top to bottom — kitchen, bathrooms, bedrooms and living areas.{" "}
-                  <a href="/whats-included" className="underline text-primary">See the full room-by-room list</a>.
-                </p>
-              </details>
               </>)}
               {step === 3 && (<>
-                <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Save your card securely</h2>
-              <p className="text-sm text-foreground mb-6">
-                Check everything below, then send your request. Saving a card does not confirm your date — we confirm within one business day.
-              </p>
-              <p className="text-sm text-foreground mb-6">
-                Nothing is charged today. After your cleaning, you&apos;ll receive a photo report. Your card is charged when you approve it, or 24 hours after we send it if you haven&apos;t reported an issue.
-              </p>
               <div className="mb-6 rounded-lg border border-border bg-background p-5 text-base">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-heading text-lg font-bold">Your request</h3>
+                  <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-lg font-bold outline-none">Your request</h2>
                   <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
                 </div>
                 <dl className="mt-3 space-y-2">
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-left sm:text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-left sm:text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-left sm:text-right">{fullAddress || "—"}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-left sm:text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
                   {entryMethod === "decide_later" && (
                     <p className="mt-1 text-sm text-foreground">We will email you before your visit to help arrange entry. You don&apos;t need to share a door code now.</p>
                   )}
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-left sm:text-right">$0</dd></div>
                 </dl>
+                <p className="mt-4 rounded-xl bg-sage/15 p-4 text-base leading-relaxed"><strong>Your date is still a request.</strong> We confirm your date, arrival window and cleaner by email within one business day.</p>
                 <details className="mt-4">
-                  <summary className="cursor-pointer text-sm font-semibold text-primary">View all details</summary>
+                  <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
                   <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
-                    <dt className="font-semibold">Home</dt><dd>{sizeBand !== "notsure" ? `${SIZE_BAND_LABEL[sizeBand]}, ` : ""}{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip}{extraZones.length ? ` · Extra areas: ${extraZones.map((z) => EXTRA_ZONE_LABEL[z]).join(", ")}` : ""}</dd>
-                    <dt className="font-semibold">Service</dt><dd>{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd>
-                    <dt className="font-semibold">Price</dt><dd>{isLargeHome ? "Custom quote — we confirm your price with you before anything is booked" : service === "standard" && breakdown ? <>{isRecurring && breakdown.first_total === breakdown.recurring_total && breakdown.first_service === "standard" ? <>{fmt$(breakdown.recurring_total)} per visit, every other week</> : <>First visit {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}{isRecurring ? <> , then {fmt$(breakdown.recurring_total)} every other week</> : ", one-time"}</>}</> : <>{fmt$(mainPrice ?? 0)} one-time</>}</dd>
-                    <dt className="font-semibold">Date</dt><dd>{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
+                    <dt className="font-semibold">Home</dt><dd>{bedrooms} bedrooms · {fullBaths} full bathrooms</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{fullAddress}</dd>
                   </dl>
-                  {scopeReview && (
-                    <p className="mt-3 text-sm text-foreground">We&apos;ll confirm the details with you before confirming your visit. Your price is locked in when you send your request. If the details show different work is needed, we agree any change with you before confirming, never after.</p>
-                  )}
                 </details>
               </div>
               </>)}
@@ -1103,18 +1061,7 @@ const Quote = () => {
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.phone && <p id="b-phone-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.phone}</p>}
-                  <p className="mt-1.5 text-sm text-muted-foreground">For arrival updates on the day of your visit.</p>
-                </div>
-                <div className="md:col-span-2 flex items-start gap-3">
-                  <input
-                    id="b-sms" name="smsConsent" type="checkbox"
-                    checked={booking.smsConsent} onChange={handleBookingChange}
-                    className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
-                  />
-                  <label htmlFor="b-sms" className="text-sm text-foreground leading-snug">
-                    {SMS_CONSENT_MAIN}
-                    <span className="mt-1 block text-sm text-muted-foreground">{SMS_DISCLOSURE}</span>
-                  </label>
+                  <p className="mt-1.5 text-sm text-muted-foreground">For updates about your visit.</p>
                 </div>
                 <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your preferred visit</h3>
                 <div>
@@ -1280,11 +1227,10 @@ const Quote = () => {
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               <div className="mt-6"><PaymentSummary showCard /></div>
-              <p className="mt-4 rounded-xl bg-sage/15 p-4 text-base leading-relaxed"><strong>Your date is still a request.</strong> We confirm your date, arrival window and cleaner by email within one business day.</p>
               <section className="mt-5 text-base leading-relaxed" aria-label="Changes and home access">
                 <h3 className="font-semibold">Changes &amp; home access</h3>
-                <p className="mt-2">Cancel free at least 48 hours before your visit; later cancellations cost $25.</p>
-                <p className="mt-2">Please arrange entry before the visit. <a href="/terms#terms-6" target="_blank" rel="noopener noreferrer" className="underline text-primary">Read the access policy</a>.</p>
+                <p className="mt-2">Cancel free at least 48 hours before your visit. Later cancellations cost $25.</p>
+                <p className="mt-2">Please arrange entry before the visit. <a href="/terms#terms-4" target="_blank" rel="noopener noreferrer" className="underline text-primary">See how to arrange access</a>.</p>
               </section>
               <div className="mt-5 flex items-start gap-3">
                 <input
@@ -1313,7 +1259,7 @@ const Quote = () => {
                       : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
-              <p className="mt-3 text-center text-base">Next: save your card securely on Stripe. $0 charged today.</p>
+              <p className="mt-3 text-center text-base">Stripe handles your card details.</p>
               <p className="text-sm text-muted-foreground text-center mt-3">
                 Questions? Call <a href="tel:+17705258599" className="underline">(770) 525-8599</a> or email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>.
               </p>

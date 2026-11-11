@@ -61,13 +61,11 @@ describe("fix8 — clarity: tier wording", () => {
     expect(TIER_ROOM_LABEL.L).toBe("4–5 bed or 4–5 bath");
   });
 
-  it("homepage pricing table shows the tier strings and the single rule", () => {
+  it("homepage has no tariff table or starting price", () => {
     renderPage(<Index />);
-    expect(screen.getByText("Up to 2 bedrooms and up to 2 full bathrooms")).toBeInTheDocument();
-    expect(screen.getByText("3 bedrooms or 3 full bathrooms")).toBeInTheDocument();
-    expect(screen.getByText("4–5 bedrooms or 4–5 full bathrooms")).toBeInTheDocument();
-    expect(screen.getByText(/Your price is set by the larger of your two counts: up to 2 is Small, 3 is Medium, 4–5 is Large\./)).toBeInTheDocument();
-    expect(screen.getByText(/Most homes get their price online before booking\./)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(/visits from \$/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
   it("services page states the same tier rule", () => {
@@ -114,14 +112,15 @@ describe("fix8 — clarity: no jargon in client-facing copy", () => {
   it("quote step 1 has no jargon, including the unanswered-history price box", () => {
     openQuote();
     assertNoJargon();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     expect(screen.getByText(/we'll confirm the details with you before your visit\./)).toBeInTheDocument();
-    expect(screen.getByText(/Your price is locked in when you send your request\. Nothing is charged today\./)).toBeInTheDocument();
+    expect(screen.getByText(/Your price is locked in when you send your request\./)).toBeInTheDocument();
   });
 
-  it("quote step 2 planning note has no scope wording", () => {
+  it("quote step 2 summary has no scope wording", () => {
     goToStep2();
     assertNoJargon();
-    expect(screen.getByText(/We'll confirm the details with you before confirming your visit\./)).toBeInTheDocument();
+    expect(screen.getByText("Price so far:")).toBeInTheDocument();
   });
 });
 
@@ -160,19 +159,14 @@ describe("fix8 — clarity: step-1 validation is never silent", () => {
   });
 });
 
-describe("fix8 — clarity: half bathrooms", () => {
-  it("step 2 and step 3 never show '0 half bath', but show a real count", () => {
+describe("quote bathroom summary", () => {
+  it("uses full bathrooms only and links to the correct access terms", () => {
     goToStep2();
-    // The summary line omits half baths at 0 (the select's own
-    // "0 half bathrooms" option is not a summary line).
     expect(screen.getByText(/3 bed, 2 full bath · ZIP 30024/)).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/0 half bath · ZIP/);
-    fireEvent.change(screen.getByLabelText("Half bathrooms"), { target: { value: "2" } });
-    expect(screen.getByText(/3 bed, 2 full bath, 2 half bath · ZIP 30024/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Half bathrooms")).not.toBeInTheDocument();
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByRole("heading", { name: "Save your card securely" })).toBeInTheDocument();
-    expect(screen.getByText(/3 bed, 2 full bath, 2 half bath · ZIP 30024/)).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/0 half bath · ZIP/);
+    expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See how to arrange access" })).toHaveAttribute("href", "/terms#terms-4");
   });
 });

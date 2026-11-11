@@ -162,9 +162,9 @@ const ContactInfo = () => (
           <div className="w-12 h-12 shrink-0 rounded-lg bg-golden-light flex items-center justify-center group-hover:bg-golden/30 transition-colors">
             <Mail className="w-6 h-6 text-accent-foreground" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="font-semibold">Email Us</p>
-            <p className="text-muted-foreground text-base break-all">hello@gatehousehomecleaning.com</p>
+            <p className="text-muted-foreground text-sm break-words sm:text-base">hello@<wbr />gatehousehomecleaning.com</p>
           </div>
         </a>
         <a href="tel:+17705258599" className="flex items-center gap-4 p-4 bg-card rounded-xl shadow-warm hover:shadow-warm-lg transition-all group min-h-[44px]">

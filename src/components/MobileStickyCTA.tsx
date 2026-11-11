@@ -79,7 +79,7 @@ const MobileStickyCTA = () => {
         to="/quote"
         className="flex min-h-[48px] items-center justify-center rounded-full bg-primary px-6 text-base font-bold text-primary-foreground shadow-lg no-underline"
       >
-        Plan My Cleaning
+        See My Price
       </Link>
     </nav>
   );

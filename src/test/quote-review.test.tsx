@@ -15,6 +15,23 @@ afterEach(cleanup);
 const openQuote = () => render(<MemoryRouter><Quote /></MemoryRouter>);
 
 describe("booking price confirmation", () => {
+  it("restores the calculator after reload without restoring visit details", () => {
+    const first = openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    fireEvent.change(screen.getByLabelText("Your name *"), { target: { value: "Example Customer" } });
+    first.unmount();
+
+    openQuote();
+    expect(screen.getByLabelText("ZIP code (service area check)")).toHaveValue("30024");
+    expect(screen.getByLabelText("Bedrooms")).toHaveValue("4");
+    expect(screen.getByText("First visit (Standard): $239")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    expect(screen.getByLabelText("Your name *")).toHaveValue("");
+  });
+
   it("requires cleaning history for standard cleans but not deep cleans", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
@@ -30,6 +47,7 @@ describe("booking price confirmation", () => {
   it("shows the deep first visit in the result", () => {
     openQuote();
     fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     // Unified breakdown: one first-visit total, explicitly labeled as a deep clean.
     expect(screen.getByText("First visit (Deep clean): $329")).toBeInTheDocument();
     expect(screen.getByText(/Homes not cleaned professionally in the last 3 months start with a deep clean/)).toBeInTheDocument();
