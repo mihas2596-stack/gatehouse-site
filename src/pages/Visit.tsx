@@ -268,6 +268,9 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           )}
         </dl>
       </div>
+      {rep.amount && (
+        <p className="text-sm text-muted-foreground">Price confirmed for this visit.</p>
+      )}
       {canAct && rep.state !== "awaiting" && (
         <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4">
           {rep.state === "payment_issue" ? (

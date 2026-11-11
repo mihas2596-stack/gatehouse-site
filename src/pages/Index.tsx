@@ -190,20 +190,8 @@ const Index = () => {
           {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
           <div id="when-you-pay" className="mt-8 border-t border-border pt-6">
             <h3 className="font-heading text-lg font-bold text-sage-foreground">When you pay</h3>
-            <dl className="mt-3 space-y-4">
-              <div>
-                <dt className="font-semibold text-sage-foreground">At booking</dt>
-                <dd className="mt-0.5 text-base leading-relaxed text-foreground">Save your card. You pay $0.</dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-sage-foreground">After your clean</dt>
-                <dd className="mt-0.5 text-base leading-relaxed text-foreground">Review your photo report. Approve it to pay.</dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-sage-foreground">After 24 hours</dt>
-                <dd className="mt-0.5 text-base leading-relaxed text-foreground">If you haven’t approved or reported an issue, we charge your card automatically 24 hours after we send the report.</dd>
-              </div>
-            </dl>
+            <p className="mt-3 text-base leading-relaxed text-foreground">Save your card at booking — you pay $0 today.</p>
+            <p className="mt-2 text-base leading-relaxed text-foreground">See your photo report before payment. Approve to pay, or report an issue. If no issue is reported, your card is charged automatically 24 hours after the report is sent.</p>
             <details className="mt-5 rounded-lg border border-border bg-card px-4 py-3">
               <summary className="cursor-pointer text-base font-semibold text-sage-foreground">What if something was missed?</summary>
               <p className="mt-2 text-base leading-relaxed text-foreground">
