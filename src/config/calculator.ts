@@ -40,7 +40,7 @@ export const PRICES: Record<"standardOnetime" | "deep" | "moveinout" | "recurrin
 
 export const SERVICE_OPTIONS: { key: CalcServiceKey; label: string; tagline: string }[] = [
   { key: "standard", label: "Standard", tagline: "Every room, top to bottom" },
-  { key: "deep", label: "Deep", tagline: "A detailed first-time clean for homes that haven't been professionally cleaned recently." },
+  { key: "deep", label: "Deep", tagline: "A detailed clean with oven, fridge, and cabinet interiors included." },
   { key: "moveinout", label: "Move-in / Move-out", tagline: "A full clean for an empty home when you're moving in or out." },
 ];
 
@@ -240,14 +240,15 @@ export function priceBreakdown(opts: {
   bedrooms: number;
   fullBaths: number;
   frequency: FrequencyKey;
-  recentlyCleaned: boolean;
+  /** Legacy quotes may still request the original deep-first option. */
+  recentlyCleaned?: boolean;
   addons?: AddonSelection;
   /** Owner price-test mode (signed token, verified server-side): 1/10 prices. */
   testScale?: boolean;
 }): PriceBreakdown | null {
   const tier = tierFor(opts.bedrooms, opts.fullBaths);
   if (!tier) return null;
-  const deepFirst = !opts.recentlyCleaned;
+  const deepFirst = opts.recentlyCleaned === false;
   const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
   const recurring_total = PRICES.recurring[tier];
 
