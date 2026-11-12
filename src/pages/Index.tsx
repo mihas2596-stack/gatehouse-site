@@ -142,7 +142,7 @@ const Index = () => {
           )}
           {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
           <section id="when-you-pay" aria-labelledby="when-you-pay-heading" className="mt-9 scroll-mt-24 rounded-2xl border border-border bg-card p-5 sm:mt-10 sm:p-8">
-            <h3 id="when-you-pay-heading" className="font-heading text-[1.625rem] font-bold leading-tight text-sage-foreground sm:text-[1.875rem] lg:text-[2rem]">When you pay</h3>
+            <h3 id="when-you-pay-heading" className="font-heading !text-[1.625rem] font-bold leading-tight text-sage-foreground sm:!text-[1.875rem] lg:!text-[2rem]">When you pay</h3>
             <p className="mt-3 text-[1.25rem] leading-relaxed text-sage-foreground sm:text-[1.375rem]"><strong>Save your card at booking — you pay $0 today.</strong></p>
             <p className="mt-3 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">
               See your photo report before payment. Approve to pay, or report an issue.{" "}
