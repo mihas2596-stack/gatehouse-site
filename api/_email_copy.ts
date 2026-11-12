@@ -26,6 +26,7 @@ export function paymentEmailCopy(amount: string): string {
 export function emailDocument(options: {
   firstName: string; heading: string; paragraphs: string[];
   action?: { url: string; label: string };
+  linkNote?: boolean;
 }): string {
   const paragraphs = options.paragraphs.flatMap((p) => p.split("\n\n")).filter(Boolean);
   const paragraph = (p: string) => `<p style="margin:18px 0;">${esc(p).replace(/\n/g, "<br>")}</p>`;
@@ -34,7 +35,7 @@ export function emailDocument(options: {
     `<p style="font-size:16px;font-weight:bold;color:#35563d;">GATEHOUSE HOME CLEANING</p><p>Hi ${esc(options.firstName)},</p><h1 style="font-size:28px;line-height:1.25;margin:18px 0;">${esc(options.heading)}</h1>` +
     paragraphs.slice(0, 2).map(paragraph).join("") + action + paragraphs.slice(2).map(paragraph).join("") +
     `<p style="border-top:1px solid #e6d8c9;padding-top:20px;font-size:16px;">Questions? Reply to this email or contact <a href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>` +
-    (options.action ? `<p style="font-size:16px;color:#4c4945;">Keep this email — its private link is for this visit.</p>` : "") + `<p>Gatehouse Home Cleaning</p></div>`;
+    (options.action && options.linkNote !== false ? `<p style="font-size:16px;color:#4c4945;">Keep this email — its private link is for this visit.</p>` : "") + `<p>Gatehouse Home Cleaning</p></div>`;
 }
 
 export function reportEmail(options: {
