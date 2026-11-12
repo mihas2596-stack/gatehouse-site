@@ -97,11 +97,11 @@ const Index = () => {
     </section>
 
     {/* 2. HOW IT WORKS — three numbered steps, sample on demand, pay memo. */}
-    <section className={sectionClass} style={{ background: "hsl(var(--surface-alt))" }}>
+    <section className="border-b border-border/60 bg-[hsl(var(--surface-alt))] py-10 sm:py-12 lg:py-14" aria-labelledby="how-it-works">
       <div className="container">
-        <div className="mx-auto max-w-2xl">
-          <h2 className="mb-6 text-center font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">How it works</h2>
-          <ol className="space-y-5">
+        <div className="mx-auto max-w-3xl">
+          <h2 id="how-it-works" className="mb-7 font-heading text-[1.875rem] font-bold leading-tight text-sage-foreground sm:mb-9 sm:text-[2.125rem] lg:text-[2.25rem]">How it works</h2>
+          <ol className="flex flex-col gap-5 sm:gap-7">
             {howItWorks.map(({ n, title, text }) => (
               <li key={n} className="flex items-start gap-4">
                 <span
@@ -110,9 +110,9 @@ const Index = () => {
                 >
                   {n}
                 </span>
-                <div>
-                  <p className="font-heading text-lg font-bold text-sage-foreground">{title}</p>
-                  <p className="mt-1 text-base leading-relaxed text-foreground">{text}</p>
+                <div className="min-w-0">
+                  <p className="font-heading text-[1.375rem] font-bold leading-tight text-sage-foreground lg:text-[1.5rem]">{title}</p>
+                  <p className="mt-1.5 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">{text}</p>
                 </div>
               </li>
             ))}
@@ -122,7 +122,7 @@ const Index = () => {
               ref={sampleToggleRef}
               variant="outline"
               size="sm"
-              className="min-h-[44px] rounded-full text-base"
+              className="min-h-[48px] rounded-full px-5 text-[1.125rem]"
               aria-expanded={sampleOpen}
               aria-controls="home-sample-report"
               onClick={() => setSampleOpen((v) => !v)}
@@ -134,18 +134,22 @@ const Index = () => {
             <div id="home-sample-report" className="mt-6">
               <ReportShowcase />
               <div className="mt-4 text-center">
-                <Button variant="outline" size="sm" className="min-h-[44px] rounded-full" onClick={closeSample}>
+                <Button variant="outline" size="sm" className="min-h-[48px] rounded-full px-5 text-[1.125rem]" onClick={closeSample}>
                   Close sample report
                 </Button>
               </div>
             </div>
           )}
           {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
-          <div id="when-you-pay" className="mt-8 border-t border-border pt-6">
-            <h3 className="font-heading text-lg font-bold text-sage-foreground">When you pay</h3>
-            <p className="mt-3 text-base leading-relaxed text-foreground">Save your card at booking — you pay $0 today.</p>
-            <p className="mt-2 text-base leading-relaxed text-foreground">See your photo report before payment. Approve to pay, or report an issue. If no issue is reported, your card is charged automatically 24 hours after the report is sent.</p>
-          </div>
+          <section id="when-you-pay" aria-labelledby="when-you-pay-heading" className="mt-9 scroll-mt-24 rounded-2xl border border-border bg-card p-5 sm:mt-10 sm:p-8">
+            <h3 id="when-you-pay-heading" className="font-heading text-[1.625rem] font-bold leading-tight text-sage-foreground sm:text-[1.875rem] lg:text-[2rem]">When you pay</h3>
+            <p className="mt-3 text-[1.25rem] leading-relaxed text-sage-foreground sm:text-[1.375rem]"><strong>Save your card at booking — you pay $0 today.</strong></p>
+            <p className="mt-3 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">
+              See your photo report before payment. Approve to pay, or report an issue.{" "}
+              <br />
+              If no issue is reported, your card is charged automatically 24 hours after the report is sent.
+            </p>
+          </section>
         </div>
       </div>
     </section>
