@@ -81,6 +81,7 @@ export default function SaveCard() {
   const unknown = status === "unknown" || status === "pending" || status === "failed";
   const choice = status === "ready" && hasCard && !chosen && !entry;
   const done = !entry && (status === "saved" || (hasCard && chosen)) && !unknown;
+  const awaitingConfirmation = done && Boolean(bt) && !confirmed;
   const showForm = !cancelled && !unknown && status !== "loading" && !done && (!hasCard || entry);
   const visitLink = `/visit?bt=${encodeURIComponent(bt)}`;
   const brand = booking?.card_brand?.replace(/\b\w/g, (c) => c.toUpperCase()) || "Card";
@@ -115,13 +116,19 @@ export default function SaveCard() {
           {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
         </> : <>
           {done ? <CheckCircle className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" /> : <CreditCard className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" />}
-          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : done ? "Card saved — $0 charged today" : "Last step: save your card — $0 today"}</h1>
-          {done && (
+          <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Add a different card — $0 today" : choice ? "Choose a card for this visit" : awaitingConfirmation ? "Cleaning request received" : done ? "Card saved — $0 charged today" : "Last step: save your card — $0 today"}</h1>
+          {awaitingConfirmation && <p className="mb-4 text-lg font-semibold">Card saved · $0 charged today</p>}
+          {done && !awaitingConfirmation && (
             <p className="mt-2 mb-4 text-base font-semibold text-foreground">
-              Card: saved ✓ · Visit: {!bt ? "not requested yet" : confirmed ? `confirmed for ${formatDateLong(booking?.confirmed_date)}` : "awaiting confirmation"}
+              Card: saved ✓ · Visit: {!bt ? "not requested yet" : `confirmed for ${formatDateLong(booking?.confirmed_date)}`}
             </p>
           )}
-          <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? !bt ? "Your payment method is saved. To request a cleaning, choose your service and date below." : confirmed ? `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : `Your date is awaiting confirmation. We'll email your cleaner and arrival window ${booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
+          {awaitingConfirmation ? (
+            <p className="mb-6 text-lg leading-relaxed"><strong>No action needed right now.</strong> We’re arranging your visit. We’ll email you an update on your date, arrival window and cleaner {booking?.confirm_by ? `by ${booking.confirm_by}` : "within one business day"}.</p>
+          ) : (
+            <p className="text-lg mb-6">{entry ? "Update your payment method securely through Stripe. Saving a different card does not change your visit or charge you today." : choice ? "A card saved earlier is used for this booking only after you choose it. Nothing is charged today." : done ? !bt ? "Your payment method is saved. To request a cleaning, choose your service and date below." : `Your cleaning is confirmed for ${formatDateLong(booking?.confirmed_date)}${booking?.confirmed_window ? ` · ${formatArrivalWindow(booking.confirmed_window)}` : ""}.` : bt ? "Save a card for this visit through Stripe. The card alone does not confirm your date." : "Save a payment method through Stripe. This page alone does not create a cleaning request."}</p>
+          )}
+          {done && bt && <Button asChild variant="hero" size="lg" className="mb-6 w-full"><Link to={visitLink}>View my visit</Link></Button>}
           {booking && <dl className="rounded-xl border border-border bg-card p-5 text-left space-y-3 mb-6">
             {booking.service && <div><dt className="font-semibold">Service</dt><dd>{booking.service}</dd></div>}
             {(booking.confirmed_date || booking.date) && <div><dt className="font-semibold">{confirmed ? "Confirmed date" : "Requested date"}</dt><dd>{formatDateLong(booking.confirmed_date || booking.date)}</dd></div>}
@@ -132,7 +139,7 @@ export default function SaveCard() {
           {blocked && <p role="status" className="rounded-xl bg-sage/15 p-5 mb-6 text-left">Automatic payment is blocked for this visit because an issue was reported. Updating your card does not restart it. You choose when to approve your report and pay.</p>}
           {error && <p role="alert" className="mb-4 rounded-lg bg-destructive/10 p-4">{error}</p>}
           {choice && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy} onClick={() => void confirm()}>{busy ? "Confirming…" : "Use this card for this booking — $0 today"}</Button>}
-          {hasCard && !entry && <Button variant="outline" size="lg" className="w-full mb-4" onClick={() => setEntry(true)}>Add a different card</Button>}
+          {hasCard && !entry && <Button variant={done ? "link" : "outline"} size="lg" className={done ? "underline" : "w-full mb-4"} onClick={() => setEntry(true)}>Add a different card</Button>}
           {showForm && <>
             {!blocked && <div className="mb-6"><PaymentSummary showCard /></div>}
             {params.get("canceled") === "1" && <p className="mb-6">Card entry was cancelled. You can try again when you're ready.</p>}
@@ -146,7 +153,7 @@ export default function SaveCard() {
             </form>
           </>}
           {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
-          {bt && <p className="mt-6"><Link to={visitLink} className="underline font-semibold">View my visit</Link></p>}
+          {bt && !done && <p className="mt-6"><Link to={visitLink} className="underline font-semibold">View my visit</Link></p>}
         </>}
       </div>
     </div>
