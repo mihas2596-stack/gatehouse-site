@@ -19,7 +19,6 @@ describe("booking price confirmation", () => {
     const first = openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fireEvent.change(screen.getByLabelText("Your name *"), { target: { value: "Example Customer" } });
     first.unmount();
@@ -32,35 +31,25 @@ describe("booking price confirmation", () => {
     expect(screen.getByLabelText("Your name *")).toHaveValue("");
   });
 
-  it("requires cleaning history for standard cleans but not deep cleans", () => {
+  it("uses the selected service instead of cleaning history", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
-    // Step 1 cannot continue while the cleaning-history question is unanswered.
-    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.queryByRole("heading", { name: "Your visit" })).not.toBeInTheDocument();
+    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /^One-time$/ }));
+    expect(screen.getByText("One-time cleaning: $219")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /^Deep A detailed/ }));
+    expect(screen.getByText("One-time cleaning: $329")).toBeInTheDocument();
+    expect(screen.queryByText(/Future visits/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
-    expect(screen.queryByText(/Has a professional cleaner/)).not.toBeInTheDocument();
-  });
-
-  it("shows the deep first visit in the result", () => {
-    openQuote();
-    fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
-    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    // Unified breakdown: one first-visit total, explicitly labeled as a deep clean.
-    expect(screen.getByText("First visit (Deep clean): $329")).toBeInTheDocument();
-    expect(screen.getByText(/Homes not cleaned professionally in the last 3 months start with a deep clean/)).toBeInTheDocument();
-    expect(screen.getByText("Future visits (Standard): $189 every other week")).toBeInTheDocument();
   });
 
   it("shows one unified regular total for the confirmed scenario", () => {
-    // 3bd/2ba, Standard, every other week, cleaned=Yes, oven +$35:
+    // 3bd/2ba, Standard, every other week, oven +$35:
     // first visit $224 (189 + 35), then $224 per visit. The Founding
     // Clients program is closed — no founding checkbox exists anymore.
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     expect(screen.queryByLabelText(/claiming a founding spot/)).not.toBeInTheDocument();
     // Extras start collapsed.
     fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
@@ -81,7 +70,6 @@ describe("booking price confirmation", () => {
       </MemoryRouter>,
     );
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     await waitFor(() => {
       expect(screen.getByText(/Test booking: prices on this page are reduced for a payment test/)).toBeInTheDocument();
     });
@@ -94,7 +82,6 @@ describe("booking price confirmation", () => {
     Element.prototype.scrollIntoView = vi.fn();
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });

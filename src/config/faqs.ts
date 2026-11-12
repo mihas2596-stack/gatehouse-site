@@ -6,8 +6,8 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How much does it cost?",
     group: "Booking",
-    a: "Your price depends on bedrooms, full bathrooms, the type of clean, frequency, cleaning history and add-ons. An approximate home size and half bathrooms help us plan your visit; they do not change your price. Homes with 6+ bedrooms or 6+ full bathrooms — email hello@gatehousehomecleaning.com for a custom quote.",
-    link: { href: "/#pricing", label: "See the pricing table" },
+    a: "Your price depends on bedrooms, full bathrooms, the cleaning service you choose, frequency and add-ons. Homes with 6+ bedrooms or 6+ full bathrooms — email hello@gatehousehomecleaning.com for a custom quote.",
+    link: { href: "/quote", label: "See your cleaning price" },
   },
   {
     q: "How do I pay?",

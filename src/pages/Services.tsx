@@ -143,8 +143,6 @@ const Services = () => {
             ))}
           </div>
           <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
-            Haven&apos;t had a professional clean in the last 3 months? Your first visit is a deep clean — that rule is
-            explained on the quote page before you send anything, and after that first visit standard rates apply.
             Deep and move-in/out prices already include the oven, fridge and cabinet interiors — they are never charged twice.
           </p>
         </div>
@@ -158,7 +156,7 @@ const Services = () => {
 type ComparisonRow = { label: string; standard: React.ReactNode; deep: React.ReactNode; move: React.ReactNode };
 
 const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
-  { label: "Best for", standard: "Regular upkeep of a lived-in home", deep: "A reset — or no professional clean in the last 3 months", move: "An empty home, moving in or out" },
+  { label: "Best for", standard: "Regular upkeep of a lived-in home", deep: "A more detailed reset", move: "An empty home, moving in or out" },
   { label: "Home state", standard: "Lived-in home", deep: "Lived-in home", move: "Empty home — nothing left inside" },
   { label: "Room-by-room checklist", standard: "Included", deep: "Included", move: "Included" },
   { label: "Inside oven", standard: <>Add-on +${disp(ADDONS.insideOven.price)} per visit</>, deep: "Included", move: "Included" },

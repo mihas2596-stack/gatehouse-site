@@ -34,7 +34,6 @@ const fillStep2 = () => {
 const goToStep3 = () => {
   openQuote();
   fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-  fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
   fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
   fillStep2();
   fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
@@ -63,7 +62,7 @@ describe("fix7 — UX audit fixes", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("radio", { name: /^Deep/ }));
-    expect(screen.getByText("A detailed first-time clean for homes that haven't been professionally cleaned recently.")).toBeInTheDocument();
+    expect(screen.getByText("A detailed clean with oven, fridge, and cabinet interiors included.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Compare with a standard clean" });
     expect(link.getAttribute("href")).toBe("/services");
   });
@@ -82,7 +81,6 @@ describe("fix7 — UX audit fixes", () => {
   it("step 2 omits the optional home planning block and SMS opt-in", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /Text me booking updates/ })).not.toBeInTheDocument();
@@ -91,7 +89,6 @@ describe("fix7 — UX audit fixes", () => {
   it("step 2: Notes warns against door codes", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByText("Please don't put door codes or key details here — you'll add them privately on your confirmed visit page.")).toBeInTheDocument();
   });

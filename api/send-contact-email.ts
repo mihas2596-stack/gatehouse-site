@@ -926,10 +926,8 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
       try {
         const firstName = firstNameOf(name);
 
-        // Parse "Professionally cleaned in last 3 months: Yes/No" from the message summary.
-        const cleanedMatch = /Professionally cleaned in last 3 months:\s*(Yes|No)/i.exec(message || "");
-        const cleanedRecently = typeof parsed.data.cleaned_recently === "boolean"
-          ? parsed.data.cleaned_recently : cleanedMatch ? cleanedMatch[1].toLowerCase() === "yes" : true;
+        // Only old calculator pages submit a cleaning-history flag.
+        const cleanedRecently = parsed.data.cleaned_recently !== false;
 
         // Home details and service label for the customer.
         const baths = bathrooms ? String(bathrooms).replace(/\.0$/, "") : "";

@@ -58,7 +58,6 @@ type QuoteDraft = {
   zip: string;
   bedrooms: number;
   fullBaths: number;
-  recentlyCleaned: "yes" | "no" | "";
   frequency: FrequencyKey;
   service: CalcServiceKey;
   addons: {
@@ -97,7 +96,6 @@ const Quote = () => {
   const [draft] = useState(() => readQuoteDraft(draftKey));
   const [bedrooms, setBedrooms] = useState<number>(draft.bedrooms ?? 3);
   const [fullBaths, setFullBaths] = useState<number>(draft.fullBaths ?? 2);
-  const [recentlyCleaned, setRecentlyCleaned] = useState<"yes" | "no" | "">(draft.recentlyCleaned ?? "");
   const [frequency, setFrequency] = useState<FrequencyKey>(draft.frequency ?? initialFrequency);
   const [service, setService] = useState<CalcServiceKey>(draft.service ?? initialService);
   const [zip, setZip] = useState(draft.zip ?? "");
@@ -158,21 +156,15 @@ const Quote = () => {
     if (!draftKey) return;
     // Only calculator inputs are saved. Contact details, access, consent and
     // prices stay out of the draft. A restored quote always recalculates.
-    const current: QuoteDraft = { savedAt: Date.now(), zip, bedrooms, fullBaths, recentlyCleaned, frequency, service, addons };
+    const current: QuoteDraft = { savedAt: Date.now(), zip, bedrooms, fullBaths, frequency, service, addons };
     try {
       sessionStorage.setItem(draftKey, JSON.stringify(current));
     } catch { /* A browser that blocks storage can still request a visit. */ }
-  }, [draftKey, zip, bedrooms, fullBaths, recentlyCleaned, frequency, service, addons]);
+  }, [draftKey, zip, bedrooms, fullBaths, frequency, service, addons]);
 
   const tier = tierFor(bedrooms, fullBaths);
-  const answered = recentlyCleaned !== "";
-  const needsCleaningHistory = service === "standard" && !answered;
-  const cleanedRecently = recentlyCleaned === "yes";
   // Frequency only applies to a standard clean.
   const isRecurring = service === "standard" && frequency === "every2weeks";
-  // Standard cleans in homes not cleaned professionally in the last 3 months
-  // start with a deep clean.
-  const deepFirstVisit = service === "standard" && recentlyCleaned === "no";
 
   // UNIFIED PRICE BREAKDOWN — the single source of truth for every price
   // shown on this page AND sent with the booking request. One first-visit
@@ -186,14 +178,11 @@ const Quote = () => {
             bedrooms,
             fullBaths,
             frequency,
-            // Unanswered cleaning history prices as a standard clean; the UI
-            // asks the client to answer before the first-visit price is final.
-            recentlyCleaned: cleanedRecently || !answered,
             addons,
             testScale: testMode,
           })
         : null,
-    [service, bedrooms, fullBaths, frequency, cleanedRecently, answered, addons, testMode]
+    [service, bedrooms, fullBaths, frequency, addons, testMode]
   );
   // Deep and move-in/out are one-time by nature.
   const oneTimeTotal = useMemo(
@@ -244,9 +233,7 @@ const Quote = () => {
   const [entryNotes, setEntryNotes] = useState("");
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   // Step-1 validation errors: shown inline (never silent) when Continue is
-  // pressed with the cleaning-history question unanswered or the ZIP
-  // missing/invalid.
-  const [step1HistoryError, setStep1HistoryError] = useState(false);
+  // pressed with a missing or invalid ZIP.
   const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -279,7 +266,7 @@ const Quote = () => {
   useEffect(() => {
     requestRef.current = null;
     setSubmitError("");
-  }, [bedrooms, fullBaths, recentlyCleaned, frequency, service, zip, addons]);
+  }, [bedrooms, fullBaths, frequency, service, zip, addons]);
   const refs = {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
@@ -347,12 +334,6 @@ const Quote = () => {
   };
 
   const goToStep2 = () => {
-    if (needsCleaningHistory) {
-      setStep1HistoryError(true);
-      document.getElementById("cleaning-history")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      document.getElementById("q-recent-yes")?.focus();
-      return;
-    }
     if (!canProceed) {
       if (!zipEntered) setStep1ZipError(zip.length === 0 ? "Enter your ZIP code to see your price." : "Enter a 5-digit ZIP code.");
       document.getElementById("q-zip")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
@@ -392,12 +373,12 @@ const Quote = () => {
     ? "Custom quote — we confirm your price with you before confirming your visit, and before anything is charged"
     : service === "standard" && breakdown
       ? isRecurring
-        ? `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+        ? `First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
         : `One-time: ${fmt$(breakdown.first_total)}`
       : mainPrice !== null
         ? `${fmt$(mainPrice)} one-time`
         : "";
-  const canSubmit = canProceed && !needsCleaningHistory && !isSubmitting;
+  const canSubmit = canProceed && !isSubmitting;
   // Full address for the booking: street, unit, city, state, ZIP.
   const fullAddress = useMemo(() => {
     const street = booking.address.trim();
@@ -416,10 +397,6 @@ const Quote = () => {
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitLock.current) return;
-    if (needsCleaningHistory) {
-      document.getElementById("q-recent-yes")?.focus();
-      return;
-    }
     if (!canProceed) {
       toast({
         title: "Enter a ZIP in our service area",
@@ -455,18 +432,15 @@ const Quote = () => {
         `Tier ${tier}`,
         SERVICE_LABEL_CALC[service],
         service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time",
-         `Professionally cleaned in last 3 months: ${answered ? (cleanedRecently ? "Yes" : "No") : "Not answered"}`,
         `Street address: ${fullAddress}`,
         zip ? `ZIP ${zip}` : "",
         `Entry: ${entrySummaryLabel(entryMethod || null, entryDetail || null)}`,
         isLargeHome
           ? "Custom quote requested — home has 6+ bedrooms or 6+ full bathrooms, no table price"
           : isRecurring && breakdown
-          ? answered
-            ? `First visit ${fmt$(breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
-            : `From ${fmt$(breakdown.recurring_total)} per visit, every other week — answer the cleaning-history question to confirm the first-visit price`
+            ? `First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
           : breakdown
-            ? `Total ${fmt$(breakdown.first_total)} (one visit${breakdown.first_service === "deep" ? ", deep clean" : ""})`
+            ? `Total ${fmt$(breakdown.first_total)} (one visit)`
             : `Price ${fmt$(mainPrice)} per visit`,
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
@@ -521,7 +495,6 @@ const Quote = () => {
         // price is never trusted for the signed booking token.
         frequency: isRecurring ? "every2weeks" : "onetime",
         service_key: service,
-        cleaned_recently: answered ? cleanedRecently : undefined,
         addons: { insideOven, insideFridge, insideCabinets, interiorWindows, pets },
         recurring: isRecurring && breakdown ? String(breakdown.recurring_total) : "",
         test_token: testMode ? testToken : undefined,
@@ -584,9 +557,9 @@ const Quote = () => {
       const recapPrice =
         service === "standard" && breakdown
           ? isRecurring
-            ? effFirst === effRecurring && breakdown.first_service === "standard"
+            ? effFirst === effRecurring
               ? `${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
-              : `First visit ${fmt$(effFirst ?? breakdown.first_total)}${breakdown.first_service === "deep" ? " (deep clean)" : ""}, then ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
+              : `First visit ${fmt$(effFirst ?? breakdown.first_total)}, then ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
             : `One-time: ${fmt$(effFirst ?? breakdown.first_total)}`
           : effFirst !== null
             ? `${fmt$(effFirst)} one-time`
@@ -616,7 +589,6 @@ const Quote = () => {
             service: SERVICE_LABEL_CALC[service],
             first: effFirst,
             recurring: effRecurring,
-            firstIsDeep: breakdown?.first_service === "deep",
           },
           serverPriceChanged,
         },
@@ -801,37 +773,6 @@ const Quote = () => {
 
             </div>
 
-            {service === "standard" && (
-              <fieldset className="mt-5 min-w-0" id="cleaning-history">
-                <legend className="mb-1 text-base font-semibold">Professionally cleaned in the last 3 months? *</legend>
-                <p id="history-help" className="mb-2 text-base text-muted-foreground">
-                  {recentlyCleaned === "no" ? "First visit will be a deep clean." : "Your answer determines the type and price of your first visit."}
-                </p>
-                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" aria-describedby={step1HistoryError ? "history-help history-error" : "history-help"} className="flex gap-2">
-                  {(["yes", "no"] as const).map((v) => (
-                    <button
-                      key={v}
-                      id={v === "yes" ? "q-recent-yes" : "q-recent-no"}
-                      type="button"
-                      role="radio"
-                      aria-checked={recentlyCleaned === v}
-                      onClick={() => { setRecentlyCleaned(v); setStep1HistoryError(false); }}
-                      className={`min-h-[44px] min-w-[76px] rounded-lg border-2 px-4 py-2 text-base font-semibold transition-colors ${
-                        recentlyCleaned === v
-                          ? "border-primary bg-peach/40 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:border-primary/40"
-                      }`}
-                    >
-                      {v === "yes" ? "Yes" : "No"}
-                    </button>
-                  ))}
-                </div>
-                {step1HistoryError && (
-                  <p id="history-error" role="alert" className="mt-2 text-sm text-destructive">Please answer this — it sets your first-visit price.</p>
-                )}
-              </fieldset>
-            )}
-
             {/* Add-ons — collapsed by default so the price form stays short. */}
             <div className="mt-6">
               <button
@@ -917,23 +858,12 @@ const Quote = () => {
                         </p>
                       )}
                     </>
-                  ) : !answered ? (
-                    <div className="flex flex-col items-center gap-1">
-                      <p className="text-base text-foreground">
-                        {isRecurring
-                          ? <>Estimated regular visits: <strong>{fmt$(breakdown?.recurring_total ?? 0)}</strong> every other week.</>
-                          : <>Estimated one-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
-                      </p>
-                      <p className="text-base text-muted-foreground">
-                        Answer the question above to see your first-visit price. If you&apos;re unsure, we&apos;ll confirm the details with you before your visit.
-                      </p>
-                    </div>
                   ) : breakdown ? (
                     <div className="flex flex-col items-center gap-1">
                       {isRecurring ? (
                         <>
                           <p className="font-heading text-[1.75rem] font-bold leading-tight text-primary sm:text-[2rem]">
-                            First visit ({breakdown.first_service === "deep" ? "Deep clean" : "Standard"}): {fmt$(breakdown.first_total)}
+                            First visit (Standard): {fmt$(breakdown.first_total)}
                           </p>
                           <p className="mt-2 text-[1.125rem] font-semibold leading-relaxed text-foreground sm:text-[1.25rem]">
                             Future visits (Standard): {fmt$(breakdown.recurring_total)} every other week
@@ -942,11 +872,6 @@ const Quote = () => {
                       ) : (
                         <p className="font-heading text-3xl sm:text-4xl font-bold text-primary">
                           One-time cleaning: {fmt$(breakdown.first_total)}
-                        </p>
-                      )}
-                      {breakdown.first_service === "deep" && (
-                        <p className="mt-2 max-w-[44ch] text-base text-muted-foreground">
-                          Homes not cleaned professionally in the last 3 months start with a deep clean. It includes the inside of the oven, fridge and cabinets.
                         </p>
                       )}
                       {priceBlockAddons && (
@@ -997,7 +922,7 @@ const Quote = () => {
                   <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
                 </div>
                 <dl className="mt-3 space-y-2">
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-left sm:text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}{deepFirstVisit ? " · First visit: Deep clean" : ""}</dd></div>
+                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-left sm:text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-left sm:text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
                   <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-left sm:text-right">{fullAddress || "—"}</dd></div>
@@ -1206,7 +1131,7 @@ const Quote = () => {
                 <p><strong>Your price:</strong></p>
                 {service === "standard" && breakdown ? (
                   <>
-                    <p className="mt-1">First visit: {fmt$(breakdown.first_total)}{breakdown.first_service === "deep" ? " (deep clean)" : ""}</p>
+                    <p className="mt-1">First visit: {fmt$(breakdown.first_total)}</p>
                     {isRecurring && <p className="mt-1">Then: {fmt$(breakdown.recurring_total)} per visit, every other week</p>}
                     {!isRecurring && <p className="mt-1">One-time visit</p>}
                   </>
@@ -1253,7 +1178,6 @@ const Quote = () => {
                     ? "Sending..."
                     : !canProceed
                       ? "Enter a ZIP in our service area"
-                      : needsCleaningHistory ? "Answer the cleaning-history question above"
                       : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
