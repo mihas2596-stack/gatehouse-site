@@ -15,7 +15,8 @@ afterEach(cleanup);
 const openQuote = () => render(<MemoryRouter><Quote /></MemoryRouter>);
 
 describe("booking price confirmation", () => {
-  it("restores the calculator after reload without restoring visit details", () => {
+  it("restores the calculator and the visit details after reload", () => {
+    sessionStorage.removeItem("gh_quote_draft_v1");
     const first = openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "4" } });
@@ -24,11 +25,16 @@ describe("booking price confirmation", () => {
     first.unmount();
 
     openQuote();
+    // Lands back on step 2 (the step the visitor was on) with the
+    // visit details restored.
+    expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your name *")).toHaveValue("Example Customer");
+    // Step 1 is restored too (go back to check).
+    fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
     expect(screen.getByLabelText("ZIP code (service area check)")).toHaveValue("30024");
     expect(screen.getByLabelText("Bedrooms")).toHaveValue("4");
     expect(screen.getByText("First visit (Standard): $239")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByLabelText("Your name *")).toHaveValue("");
+    sessionStorage.removeItem("gh_quote_draft_v1");
   });
 
   it("uses the selected service instead of cleaning history", () => {

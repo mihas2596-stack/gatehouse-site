@@ -67,6 +67,29 @@ type QuoteDraft = {
     interiorWindows: number;
     pets: boolean;
   };
+  // Step 2 (fix round 3, 12.11): the visit details are part of the draft
+  // too, so a reload mid-form restores the whole form, not just step 1.
+  // Consent checkboxes and prices stay out (consent is re-given, prices
+  // are always recalculated). Entry is a preference, never a secret —
+  // codes/key locations are never part of it.
+  step?: 1 | 2 | 3;
+  contact?: {
+    name: string;
+    email: string;
+    phone: string;
+    address: string;
+    date: string;
+    time: string;
+    notes: string;
+    city: string;
+    state: string;
+    apt: string;
+  };
+  entry?: {
+    method: EntryMethodChoice | "";
+    detail: EntryDetailChoice | "";
+    notes: string;
+  };
 };
 
 const QUOTE_DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -152,16 +175,6 @@ const Quote = () => {
     [insideOven, insideFridge, insideCabinets, interiorWindows, pets]
   );
 
-  useEffect(() => {
-    if (!draftKey) return;
-    // Only calculator inputs are saved. Contact details, access, consent and
-    // prices stay out of the draft. A restored quote always recalculates.
-    const current: QuoteDraft = { savedAt: Date.now(), zip, bedrooms, fullBaths, frequency, service, addons };
-    try {
-      sessionStorage.setItem(draftKey, JSON.stringify(current));
-    } catch { /* A browser that blocks storage can still request a visit. */ }
-  }, [draftKey, zip, bedrooms, fullBaths, frequency, service, addons]);
-
   const tier = tierFor(bedrooms, fullBaths);
   // Frequency only applies to a standard clean.
   const isRecurring = service === "standard" && frequency === "every2weeks";
@@ -211,26 +224,26 @@ const Quote = () => {
   // ---- Booking request form ----
   const { toast } = useToast();
   const [booking, setBooking] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    address: "",
-    date: "",
-    time: "",
-    notes: "",
+    name: draft.contact?.name ?? "",
+    email: draft.contact?.email ?? "",
+    phone: draft.contact?.phone ?? "",
+    address: draft.contact?.address ?? "",
+    date: draft.contact?.date ?? "",
+    time: draft.contact?.time ?? "",
+    notes: draft.contact?.notes ?? "",
     website: "",
     termsConsent: false,
     photoConsent: false,
-    city: params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
-    state: "GA",
-    apt: "",
+    city: draft.contact?.city ?? params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
+    state: draft.contact?.state ?? "GA",
+    apt: draft.contact?.apt ?? "",
   });
   // Entry preference (not a secret): chosen on step 2, stored with the
   // booking, shown on step 3, thank-you, owner and cleaner surfaces.
   // Codes/key locations are never part of it.
-  const [entryMethod, setEntryMethod] = useState<EntryMethodChoice | "">("");
-  const [entryDetail, setEntryDetail] = useState<EntryDetailChoice | "">("");
-  const [entryNotes, setEntryNotes] = useState("");
+  const [entryMethod, setEntryMethod] = useState<EntryMethodChoice | "">(draft.entry?.method ?? "");
+  const [entryDetail, setEntryDetail] = useState<EntryDetailChoice | "">(draft.entry?.detail ?? "");
+  const [entryNotes, setEntryNotes] = useState(draft.entry?.notes ?? "");
   const [bookingErrors, setBookingErrors] = useState<Record<string, string>>({});
   // Step-1 validation errors: shown inline (never silent) when Continue is
   // pressed with a missing or invalid ZIP.
@@ -238,7 +251,34 @@ const Quote = () => {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  // Restore the step the visitor was on (a reload mid-form lands back
+  // on step 2, not step 1). Clamp to 1 when the draft has no ZIP — a
+  // step-2 restore without a ZIP makes no sense.
+  const [step, setStep] = useState<1 | 2 | 3>(
+    (draft.step === 2 || draft.step === 3) && (draft.zip ?? "") !== "" ? draft.step : 1
+  );
+
+  // Draft save (moved below the step-2 state it reads): the draft covers
+  // the whole form (steps 1 and 2) so a reload restores everything the
+  // visitor typed. Consent checkboxes and prices stay out: consent is
+  // re-given, prices recalculate.
+  useEffect(() => {
+    if (!draftKey) return;
+    const current: QuoteDraft = {
+      savedAt: Date.now(),
+      zip, bedrooms, fullBaths, frequency, service, addons,
+      step,
+      contact: {
+        name: booking.name, email: booking.email, phone: booking.phone,
+        address: booking.address, date: booking.date, time: booking.time,
+        notes: booking.notes, city: booking.city, state: booking.state, apt: booking.apt,
+      },
+      entry: { method: entryMethod, detail: entryDetail, notes: entryNotes },
+    };
+    try {
+      sessionStorage.setItem(draftKey, JSON.stringify(current));
+    } catch { /* A browser that blocks storage can still request a visit. */ }
+  }, [draftKey, zip, bedrooms, fullBaths, frequency, service, addons, step, booking, entryMethod, entryDetail, entryNotes]);
   // Extras start collapsed so the price form stays short; the summary
   // line always shows what is selected, even while collapsed.
   const [extrasOpen, setExtrasOpen] = useState(false);

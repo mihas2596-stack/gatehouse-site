@@ -245,6 +245,29 @@ describe("quote steps", () => {
     expect(screen.getByText(/email you before your visit to help arrange entry/)).toBeVisible();
   });
 
+  it("restores step 2 details and the step after a reload", () => {
+    sessionStorage.removeItem("gh_quote_draft_v1");
+    const { unmount } = openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    fillStep2();
+    // Simulate a reload: unmount and remount. sessionStorage survives.
+    unmount();
+    openQuote();
+    // Lands back on step 2 with the details restored.
+    expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your name *")).toHaveValue("Test Person");
+    expect(screen.getByLabelText("Email *")).toHaveValue("test@example.com");
+    expect(screen.getByLabelText("Phone *")).toHaveValue("7705550100");
+    expect(screen.getByLabelText("Street address *")).toHaveValue("123 Test Street");
+    expect(screen.getByLabelText("City *")).toHaveValue("Sugar Hill");
+    expect(screen.getByLabelText("Preferred date *")).toHaveValue("2099-12-01");
+    expect(screen.getByRole("radio", { name: /I’ll be home/ })).toBeChecked();
+    // Consent is NOT restored — the visitor re-gives it.
+    expect(screen.getByLabelText(/I agree to photos of the cleaned rooms/)).not.toBeChecked();
+    sessionStorage.removeItem("gh_quote_draft_v1");
+  });
+
   it("rejects a non-Georgia state on step 2", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
