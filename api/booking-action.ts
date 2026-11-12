@@ -28,7 +28,7 @@ import { reportReplyAddress } from "./_report_reply.js";
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createHash, randomBytes } from "crypto";
 import {
-  dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, dbUpdate, dbUpdateCount, dbUpsert, logEvent, logEventStrict,
+  dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, dbDeleteCount, dbUpdate, dbUpdateCount, dbUpsert, logEvent, logEventStrict,
   newCleanerToken, hashToken, tokenHashEquals, storageSignDownload,
   storageSignUpload, storageObjectInfo, storageRemove, ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES,
 } from "./_db.js";
@@ -125,7 +125,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -1313,6 +1313,77 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(visit.id, bookingId, "owner", "cleaner_link_revoked", { had_link: hadLink });
       log("revoke_cleaner_link", { booking: bookingId, had_link: hadLink });
       return json(200, { ok: true, revoked: hadLink });
+    }
+
+    // Owner deletes a visit permanently: the visit row(s), its journal,
+    // its report photos (DB rows + the private bucket objects) and its
+    // entry arrangement. DB-only, like owner_cancel / revoke_cleaner_link:
+    // it runs before the Stripe-customer lookup and never calls Stripe —
+    // payments, customers and payouts stay exactly as they are. The
+    // cleaner link dies with the visit row (it is derived from the row's
+    // token/issuance columns, not a separate record). Idempotent:
+    // deleting an already-deleted visit succeeds with deleted: false.
+    if (action === "delete_visit") {
+      if (!dbConfigured()) {
+        return json(501, { ok: false, error: "db_not_configured" });
+      }
+      const latest = await latestBookingRowStrict(bookingId);
+      if (!latest.ok) return json(503, { ok: false, error: "db_unreadable" });
+      if (!latest.row) {
+        return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: [], photos_removed: 0, photos_storage_failed: 0, events_deleted: 0 });
+      }
+      const all = await dbSelectStrict<{ id: string }>(
+        "gh_visits",
+        `select=id&booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc`,
+      );
+      if (!all.ok) return json(503, { ok: false, error: "db_unreadable" });
+      const visitIds = all.rows.map((r) => r.id).filter(Boolean);
+      if (visitIds.length === 0) {
+        return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: [], photos_removed: 0, photos_storage_failed: 0, events_deleted: 0 });
+      }
+      // Report photos first: remove the bucket objects, then the rows.
+      // A storage failure is reported, not fatal — the object is
+      // unreferenced once the visit row is gone (no signed URL can be
+      // minted for it), but the caller must know it survived.
+      let photosRemoved = 0;
+      let photosStorageFailed = 0;
+      for (const visitId of visitIds) {
+        const photos = await dbSelectStrict<{ id: string; storage_path: string }>(
+          "gh_photos",
+          `visit_id=eq.${encodeURIComponent(visitId)}`,
+        );
+        if (!photos.ok) return json(502, { ok: false, error: "db_error" });
+        for (const photo of photos.rows) {
+          const removed = await storageRemove(photo.storage_path);
+          if (removed) photosRemoved++;
+          else photosStorageFailed++;
+        }
+        const photosGone = await dbDeleteCount("gh_photos", `visit_id=eq.${encodeURIComponent(visitId)}`);
+        if (photosGone < 0) return json(502, { ok: false, error: "db_error" });
+        // Entry arrangement (secret included) — verified delete.
+        const accessGone = await deleteAccess(visitId);
+        if (!accessGone) return json(502, { ok: false, error: "db_error" });
+      }
+      // Journal for the whole booking, then the visit row(s) last —
+      // verified, so a failure here leaves the visit in place and the
+      // caller can retry (the cleanup above is idempotent).
+      const eventsGone = await dbDeleteCount("gh_events", `booking_id=eq.${encodeURIComponent(bookingId)}`);
+      if (eventsGone < 0) return json(502, { ok: false, error: "db_error" });
+      const visitsGone = await dbDeleteCount("gh_visits", `booking_id=eq.${encodeURIComponent(bookingId)}`);
+      if (visitsGone < 0) return json(502, { ok: false, error: "db_error" });
+      if (visitsGone === 0) {
+        return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: visitIds, photos_removed: photosRemoved, photos_storage_failed: photosStorageFailed, events_deleted: eventsGone });
+      }
+      log("delete_visit", { booking: bookingId, visits: visitsGone, photos: photosRemoved, photos_storage_failed: photosStorageFailed, events: eventsGone });
+      return json(200, {
+        ok: true,
+        booking_id: bookingId,
+        deleted: true,
+        visit_ids: visitIds,
+        photos_removed: photosRemoved,
+        photos_storage_failed: photosStorageFailed,
+        events_deleted: eventsGone,
+      });
     }
 
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, bookingId);

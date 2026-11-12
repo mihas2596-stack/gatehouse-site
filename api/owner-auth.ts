@@ -10,7 +10,7 @@
 //     used to mail links to anyone else, and it always answers ok:true on
 //     throttle so a caller cannot probe whether a link was just sent.
 //   POST { action: "verify", ol } -> { ok: true, session } when the link
-//     token verifies, else 401. The session token (os1, 24h) is what the
+//     token verifies, else 401. The session token (os1, 30 days) is what the
 //     /owner page then sends as its Bearer token.
 //   GET ?token= -> verifies an owner test-price token's signature and
 //     expiry WITHOUT creating anything (folded from test-price-check.ts).

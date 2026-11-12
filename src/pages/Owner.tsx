@@ -216,7 +216,17 @@ const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
 type OwnerFilter = "attention" | "upcoming" | "past" | "completed" | "cancelled" | "all";
 
 const Owner = () => {
-  const [token, setToken] = useState(() => sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "");
+  const [token, setToken] = useState(() => {
+    // The session persists in localStorage across tabs and browser
+    // restarts (30 days); sessionStorage is read only as a fallback for
+    // sessions minted before this change. The hand-typed admin token
+    // stays session-only by design.
+    try {
+      return localStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_owner_session") ?? sessionStorage.getItem("gh_admin_token") ?? "";
+    } catch {
+      return "";
+    }
+  });
   const tokenRef = useRef(token);
   tokenRef.current = token;
   const [verifyingLogin, setVerifyingLogin] = useState(false);
@@ -323,8 +333,8 @@ const Owner = () => {
     [token],
   );
 
-  // Email-link login: /owner?ol=<token> exchanges the link for a 24h
-  // session, stored like the hand-typed key. The token is stripped from
+  // Email-link login: /owner?ol=<token> exchanges the link for a 30-day
+  // session, stored in localStorage. The token is stripped from
   // the URL right away so it does not linger in the address bar.
   useEffect(() => {
     const ol = new URLSearchParams(window.location.search).get("ol");
@@ -342,7 +352,7 @@ const Owner = () => {
       .then((j) => {
         setVerifyingLogin(false);
         if (j?.ok && typeof j.session === "string") {
-          sessionStorage.setItem("gh_owner_session", j.session);
+          try { localStorage.setItem("gh_owner_session", j.session); sessionStorage.removeItem("gh_owner_session"); } catch { /* storage unavailable */ }
           setToken(j.session);
         } else {
           setError("This login link is invalid or expired — request a new one below.");
@@ -362,7 +372,7 @@ const Owner = () => {
       if (tokenRef.current !== token) return;
       if (!j.ok) {
         if (j.error === "unauthorized") {
-          try { sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
+          try { localStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
           tokenRef.current = "";
           selectedIdRef.current = null;
           visitEpochRef.current++;
@@ -581,6 +591,37 @@ const Owner = () => {
         const fresh = visits.find((x) => x.id === selected.id);
         if (fresh) void openVisit(fresh);
       }
+    } finally {
+      if (operationSeqRef.current === operation) setActing("");
+    }
+  };
+
+  // Delete a visit permanently (owner only). Unlike runAction, the
+  // detail view is closed on success: the visit is gone, so there is
+  // nothing to re-open — runAction's re-open would resurrect the stale
+  // card from its pre-delete list snapshot.
+  const deleteVisit = async (v: Visit) => {
+    if (!window.confirm("Delete this visit permanently? This removes the visit, its activity record, its report photos and its entry arrangement. It does not touch Stripe — payments, customers and payouts stay as they are. This cannot be undone.")) return;
+    const operation = ++operationSeqRef.current;
+    setActing("Delete visit");
+    setActionMsg("Delete visit: working…");
+    try {
+      const j = await act({ action: "delete_visit", booking_id: v.booking_id });
+      if (j.ok) {
+        selectedIdRef.current = null;
+        visitEpochRef.current++;
+        setSelected(null);
+        setActionMsg(j["already_deleted"] === true
+          ? "This visit was already deleted."
+          : "Visit deleted.");
+        void loadList();
+      } else {
+        setActionMsg(`Delete visit: ${j.error ?? "failed"}`);
+        void loadList();
+      }
+    } catch {
+      setActionMsg("Delete visit: couldn't reach the server — the visit may or may not have been deleted. Reloading the list before you retry.");
+      void loadList();
     } finally {
       if (operationSeqRef.current === operation) setActing("");
     }
@@ -1485,6 +1526,20 @@ const Owner = () => {
                     <p className="text-xs text-muted-foreground mt-1">Cancelling is not possible after the report is sent — the server refuses it.</p>
                   </div>
                 )}
+                {/* Delete — every visit, any status: the server removes
+                    the row, journal, photos and entry arrangement, and
+                    never touches Stripe. */}
+                <div className="mt-3">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={acting !== ""}
+                    onClick={() => void deleteVisit(v)}
+                  >
+                    Delete visit
+                  </Button>
+                  <p className="text-xs text-muted-foreground mt-1">Deletes the visit, its activity record, report photos and entry arrangement. Payments and Stripe records stay as they are. This cannot be undone.</p>
+                </div>
               </section>
 
               {/* B. Cleaner — assignment and link in one block */}

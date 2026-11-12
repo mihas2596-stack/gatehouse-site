@@ -89,7 +89,10 @@ describe("owner login and visit switching", () => {
     open();
     expect(await screen.findByRole("heading", { name: "Visits" })).toBeInTheDocument();
     expect(window.location.search).toBe("");
-    expect(sessionStorage.getItem("gh_owner_session")).toBe("test-owner-session");
+    // The emailed-login session persists in localStorage (30 days);
+    // no copy is left in sessionStorage.
+    expect(localStorage.getItem("gh_owner_session")).toBe("test-owner-session");
+    expect(sessionStorage.getItem("gh_owner_session")).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
     expect(await screen.findByRole("button", { name: /Casey Alpha/ })).toBeInTheDocument();
   });

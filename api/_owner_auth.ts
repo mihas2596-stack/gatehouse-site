@@ -6,7 +6,7 @@
 //      (OWNER_NOTIFICATION_EMAIL env, see api/_owner_email.ts).
 //   2. /owner?ol=<token> -> POST /api/owner-auth { action: "verify" }
 //      exchanges it for a
-//      24h session token (os1), stored in sessionStorage like the key.
+//      30-day session token (os1), stored in localStorage like the key.
 //   3. Owner APIs accept `Bearer <ADMIN_TOKEN>` OR a valid os1 session.
 // Both token types are HMAC-signed with keys derived from ADMIN_TOKEN, so
 // rotating ADMIN_TOKEN in Vercel invalidates every outstanding link/session.
@@ -16,8 +16,8 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 /** Seconds a login link stays clickable (24 hours). */
 export const OWNER_LOGIN_LINK_TTL_SEC = 24 * 3600;
-/** Hours a verified panel session stays valid. */
-export const OWNER_SESSION_TTL_SEC = 24 * 3600;
+/** Seconds a verified panel session stays valid (30 days). */
+export const OWNER_SESSION_TTL_SEC = 30 * 24 * 3600;
 
 const loginKey = (adminToken: string): Buffer =>
   createHash("sha256").update(`gatehouse-owner-login:${adminToken}`).digest();

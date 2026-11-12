@@ -1,5 +1,5 @@
 // Owner email-link login tokens (owner order 2026-10-24): link tokens (ol1,
-// 24h) exchange for session tokens (os1, 24h); owner APIs accept the
+// 24h) exchange for session tokens (os1, 30 days); owner APIs accept the
 // hand-typed key or a valid session via isOwnerAuth.
 import { describe, expect, it } from "vitest";
 import {
@@ -48,8 +48,8 @@ describe("owner session tokens (os1)", () => {
     expect(verifyOwnerSessionToken(login, ADMIN, NOW)).toBe(false);
     expect(verifyOwnerLoginToken(session, ADMIN, NOW)).toBe(false);
   });
-  it("session TTL is 24 hours", () => {
-    expect(OWNER_SESSION_TTL_SEC).toBe(24 * 3600);
+  it("session TTL is 30 days", () => {
+    expect(OWNER_SESSION_TTL_SEC).toBe(30 * 24 * 3600);
   });
 });
 
