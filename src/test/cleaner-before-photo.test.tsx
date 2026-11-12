@@ -59,30 +59,31 @@ describe("cleaner before-photo flow", () => {
     expect(screen.getByText(/No after photo yet/)).toBeInTheDocument();
   });
 
-  it("a room with only an after photo is not ready and submit is blocked naming the before photo", async () => {
+  it("a room with only an after photo is not ready and Finish is disabled naming the before photo", async () => {
     fixture = makeView({ photos: [photo("photo-1", "Kitchen", "after")] });
     open();
     const checkbox = await screen.findByRole("checkbox", { name: "Counters wiped" });
     expect(checkbox).toBeDisabled();
     expect(screen.getAllByText("Rooms ready: 0 of 1")).toHaveLength(2);
     expect(screen.getByText("Still need a before photo (or a reason): Kitchen")).toBeInTheDocument();
+    // Idea 13: Finish is disabled while rooms are not ready, so the
+    // submit error is never reached by tapping it.
+    expect(screen.getByRole("button", { name: "Finish & send report" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
-    await waitFor(() => expect(screen.getByText(/Some rooms still need a before photo/)).toBeInTheDocument());
     expect(posts.filter((p) => p.action === "submit")).toHaveLength(0);
-    expect(screen.getByText("This room still needs a before photo (or a reason).")).toBeInTheDocument();
   });
 
-  it("a room with only a before photo unlocks the checklist but is still not ready", async () => {
+  it("a room with only a before photo unlocks the checklist but Finish is still disabled", async () => {
     fixture = makeView({ photos: [photo("photo-0", "Kitchen", "before")] });
     open();
     const checkbox = await screen.findByRole("checkbox", { name: "Counters wiped" });
     expect(checkbox).toBeEnabled();
     expect(screen.getAllByText("Rooms ready: 0 of 1")).toHaveLength(2);
     expect(screen.getByText("Still need an after photo (or a reason): Kitchen")).toBeInTheDocument();
+    // Idea 13: Finish stays disabled until the after photo exists.
+    expect(screen.getByRole("button", { name: "Finish & send report" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
-    await waitFor(() => expect(screen.getByText(/Some rooms still need an after photo/)).toBeInTheDocument());
     expect(posts.filter((p) => p.action === "submit")).toHaveLength(0);
-    expect(screen.getByText("This room still needs an after photo (or a reason).")).toBeInTheDocument();
   });
 
   it("a set reason unlocks the checklist and satisfies both photo requirements", async () => {

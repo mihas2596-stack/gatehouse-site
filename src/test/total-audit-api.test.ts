@@ -12,16 +12,16 @@ import ownerHandler from "../../api/owner";
 
 const SECRET = "sk_test_total_audit";
 const BID = "audit-existing-bid";
-const row: Record<string, unknown> = { id: "audit-row", booking_id: BID, status: "requested", amount_cents: 18400, service: "Standard", visit_date: "2026-11-16" };
+const row: Record<string, unknown> = { id: "audit-row", booking_id: BID, status: "requested", amount_cents: 18400, service: "Standard", visit_date: "2026-11-23" };
 let emails: Record<string, unknown>[], inserts: Record<string, unknown>[], events: Record<string, unknown>[], failEventWrites: boolean;
 let oldVisits: Record<string, unknown>[], photoRows: Record<string, unknown>[], deletePhotoRequests: string[], failStorage: boolean;
 let ownerRows: Record<string, unknown>[];
 let foreignBinding: boolean, failVisitUpdates: boolean, failVisitInsert: boolean;
 function response() { return { code: 0, body: {} as Record<string, unknown>, status(n: number) { this.code=n;return this; }, json(b: Record<string, unknown>) { this.body=b; }, setHeader: vi.fn(), end: vi.fn() }; }
-function token() { const key=createHash("sha256").update(`gatehouse-booking-link:${SECRET}`).digest(); const iv=randomBytes(12); const c=createCipheriv("aes-256-gcm",key,iv); const ct=Buffer.concat([c.update(JSON.stringify({bid:BID,email:"audit@example.com",name:"Current Booking Name",ts:Math.floor(Date.now()/1000),first:"184",service:"Standard",date:"2026-11-16"})),c.final()]);return `v2.${Buffer.concat([iv,c.getAuthTag(),ct]).toString("base64url")}`; }
+function token() { const key=createHash("sha256").update(`gatehouse-booking-link:${SECRET}`).digest(); const iv=randomBytes(12); const c=createCipheriv("aes-256-gcm",key,iv); const ct=Buffer.concat([c.update(JSON.stringify({bid:BID,email:"audit@example.com",name:"Current Booking Name",ts:Math.floor(Date.now()/1000),first:"184",service:"Standard",date:"2026-11-23"})),c.final()]);return `v2.${Buffer.concat([iv,c.getAuthTag(),ct]).toString("base64url")}`; }
 const ok=(data: unknown,status=200)=>({ok:status>=200&&status<300,status,json:async()=>data,text:async()=>JSON.stringify(data)});
 beforeEach(()=>{
- vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-11-14T12:00:00Z"));
+ vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-11-19T12:00:00Z"));
  ownerRows=[];row.is_test=false;emails=[];inserts=[];events=[];failEventWrites=false;oldVisits=[];photoRows=[];deletePhotoRequests=[];failStorage=false;row.status="requested";row.client_email="audit@example.com";foreignBinding=false;failVisitUpdates=false;failVisitInsert=false;
  vi.stubEnv("ADMIN_TOKEN","audit-owner");
  vi.stubEnv("STRIPE_SECRET_KEY",SECRET);vi.stubEnv("RESEND_API_KEY","audit-mail");vi.stubEnv("SUPABASE_URL","https://audit.supabase.co");vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY","audit-db");vi.stubEnv("CRON_SECRET","audit-cron");
@@ -68,7 +68,7 @@ const cardPost=async()=>{const r=response();await cardHandler({method:"POST",hea
 const cron=async()=>{const r=response();await cronHandler({method:"GET",headers:{authorization:"Bearer audit-cron"}},r as never);return r;};
 
 
-const quoteRequest = (extra: Record<string, unknown> = {}) => ({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"f9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-20",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",...extra}});
+const quoteRequest = (extra: Record<string, unknown> = {}) => ({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"f9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-23",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",...extra}});
 
 describe("additional audit acceptance criteria — intended behavior",()=>{
  it("saving a card cannot claim success when its authoritative event failed to persist",async()=>{failEventWrites=true;const r=await cardPost();expect(r.body.ok).toBe(false);});
@@ -109,9 +109,9 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
   expect((await cardPost()).code).toBe(200);
   expect(emails).toHaveLength(2);
  });
- it("a cancelled visit with an earlier confirmation does not return active booking confirmation",async()=>{row.status="cancelled";events=[{booking_id:BID,event:"visit_confirmed",detail:{date:"2026-11-16",window:"morning"},created_at:new Date().toISOString()}];const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token()}},r as never);expect((r.body.booking as Record<string,string>)?.booking_confirmed).not.toBe("1");});
+ it("a cancelled visit with an earlier confirmation does not return active booking confirmation",async()=>{row.status="cancelled";events=[{booking_id:BID,event:"visit_confirmed",detail:{date:"2026-11-23",window:"morning"},created_at:new Date().toISOString()}];const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token()}},r as never);expect((r.body.booking as Record<string,string>)?.booking_confirmed).not.toBe("1");});
  it("a paid oven extra appears in the cleaner's persistent work checklist",async()=>{
-  const r=response();await quoteHandler({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"e9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-20",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",addons:{insideOven:true}}},r as never);
+  const r=response();await quoteHandler({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"e9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-23",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",addons:{insideOven:true}}},r as never);
   expect(r.code).toBe(200);expect(inserts[0]?.amount_cents).toBe(18400);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/oven/i);
  });
  it("retention reaches visit 21 after the first 20 old visits have no photos",async()=>{

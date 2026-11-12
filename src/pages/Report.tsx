@@ -4,6 +4,7 @@ import { CheckCircle, Camera, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { IssueForm } from "@/components/IssueForm";
 import { fmtDateUS } from "@/lib/formatDate";
 
 type ReportStateName =
@@ -24,6 +25,7 @@ type ReportData = {
   ok: boolean;
   state: ReportStateName;
   booking?: { first?: string; service?: string; date?: string };
+  cleaner_name?: string | null;
   photos?: string[];
   photo_items?: PhotoItem[];
   amount?: string | null;
@@ -72,90 +74,6 @@ const fmtDeadline = (iso: string): string => {
     timeZoneName: "short",
   });
 };
-
-// The "Report an issue" form, shared by the awaiting view (first issue)
-// and the open-issue view (follow-up on an already-open issue). Defined
-// at module level so typing never remounts it and loses focus. The two
-// uses differ only in the submit label and the helper text.
-type IssueFormProps = {
-  rooms: string[];
-  room: string;
-  onRoom: (v: string) => void;
-  text: string;
-  onText: (v: string) => void;
-  photoNote: string;
-  onPhotoPick: (file: File | null) => void;
-  busy: boolean;
-  submitLabel: string;
-  helper: string;
-  onSubmit: () => void;
-  onCancel: () => void;
-};
-
-function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhotoPick, busy, submitLabel, helper, onSubmit, onCancel }: IssueFormProps) {
-  return (
-    <div className="text-left">
-      <label htmlFor="issue-room" className="block font-semibold mb-2">
-        Which room?
-      </label>
-      <select
-        id="issue-room"
-        value={room}
-        onChange={(e) => onRoom(e.target.value)}
-        className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-      >
-        <option value="">Choose a room…</option>
-        {rooms.map((r) => (
-          <option key={r} value={r}>{r}</option>
-        ))}
-        <option value="Kitchen">Kitchen</option>
-        <option value="Bathroom">Bathroom</option>
-        <option value="Bedroom">Bedroom</option>
-        <option value="Living areas">Living areas</option>
-        <option value="Other">Other / not listed</option>
-      </select>
-      <label htmlFor="issue-text" className="block font-semibold mb-2">
-        What isn&apos;t right?
-      </label>
-      <textarea
-        id="issue-text"
-        value={text}
-        onChange={(e) => onText(e.target.value)}
-        rows={4}
-        maxLength={500}
-        placeholder="Tell us what we missed — the automatic charge is blocked for this visit."
-        className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-      />
-      <label htmlFor="issue-photo" className="block font-semibold mb-2">
-        Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
-      </label>
-      <input
-        id="issue-photo"
-        type="file"
-        accept="image/*"
-        onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
-        className="w-full text-sm mb-1"
-      />
-      <p className="text-xs text-muted-foreground mb-2">
-        Photos up to 1 MB each. If your photo is larger, take a screenshot of it first.
-      </p>
-      {photoNote && (
-        <p className="text-xs text-muted-foreground mb-2">{photoNote}</p>
-      )}
-      <p className="text-xs text-muted-foreground mb-3">
-        {helper}
-      </p>
-      <div className="flex flex-col sm:flex-row gap-3">
-        <Button variant="hero" size="lg" disabled={busy || !text.trim()} onClick={onSubmit}>
-          {busy ? "Sending…" : submitLabel}
-        </Button>
-        <Button variant="outline" size="lg" disabled={busy} onClick={onCancel}>
-          Back
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 const Report = () => {
   const [searchParams] = useSearchParams();
@@ -334,8 +252,9 @@ const Report = () => {
   const summaryRows: Array<[string, string]> = [];
   if (booking.service) summaryRows.push(["Service", booking.service]);
   if (booking.date) summaryRows.push(["Visit date", fmtDateUS(booking.date)]);
+  if (data?.cleaner_name) summaryRows.push(["Cleaned by", data.cleaner_name]);
   if (data?.amount) summaryRows.push(["This visit", data.amount]);
-  else if (booking.first) summaryRows.push(["First visit", booking.first]);
+  else if (booking.first) summaryRows.push(["This visit", booking.first]);
 
   // A sent report with no photos and no checklist is not ready to approve.
   const reportEmpty =
@@ -811,55 +730,23 @@ const Report = () => {
                   automatically. Tell us what wasn&apos;t right — we&apos;ll review
                   it and reply by email within one business day.
                 </p>
-                <label htmlFor="paid-issue-room" className="block font-semibold mb-2">Which room?</label>
-                <select
-                  id="paid-issue-room"
-                  className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
-                  value={issueRoom}
-                  onChange={(e) => setIssueRoom(e.target.value)}
-                >
-                  <option value="">Choose a room…</option>
-                  {Array.from(new Set((data.photo_items ?? []).map((p) => p.room).filter(Boolean))).map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                  <option value="Something else">Something else</option>
-                </select>
-                <label htmlFor="paid-issue-text" className="block font-semibold mb-2">What happened?</label>
-                <textarea
-                  id="paid-issue-text"
-                  className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
-                  rows={3}
-                  value={issueText}
-                  onChange={(e) => setIssueText(e.target.value)}
-                  placeholder="Tell us what wasn't right"
-                />
-                <label htmlFor="paid-issue-photo" className="block font-semibold mb-2">
-                  Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
-                </label>
-                <input
-                  id="paid-issue-photo"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onPhotoPick(e.target.files?.[0] ?? null)}
-                  className="w-full text-sm mb-1"
-                />
-                <p className="text-xs text-muted-foreground mb-2">
-                  Photos up to 1 MB each. If your photo is larger, take a screenshot of it first.
-                </p>
-                {issuePhotoNote && (
-                  <p className="text-xs text-muted-foreground mb-2">{issuePhotoNote}</p>
-                )}
                 {actionError && (
                   <p className="text-sm text-destructive mb-3" role="alert">{actionError}</p>
                 )}
-                <div className="flex gap-3">
-                  <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act("issue")}>
-                    {busy ? "Sending…" : "Send"}
-                  </Button>
-                  <Button variant="outline" disabled={busy} onClick={() => setPaidIssueOpen(false)}>
-                    Back
-                  </Button>
-                </div>
+                <IssueForm
+                  rooms={reportRooms}
+                  room={issueRoom}
+                  onRoom={setIssueRoom}
+                  text={issueText}
+                  onText={setIssueText}
+                  photoNote={issuePhotoNote}
+                  onPhotoPick={onPhotoPick}
+                  busy={busy}
+                  submitLabel="Send"
+                  helper="This adds to your visit record — we'll review it and reply by email within one business day."
+                  onSubmit={() => void act("issue")}
+                  onCancel={() => setPaidIssueOpen(false)}
+                />
               </div>
             )}
             <div className="mt-6">

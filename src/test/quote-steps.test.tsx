@@ -3,9 +3,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
-// Pinned past the global test-price window (until 2026-11-06T10:33Z,
-// extended 2026-11-03) so regular-price assertions stay deterministic.
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-14T00:00:00Z"));
+// Pinned past the global test-price window (until 2026-11-18T20:59:59Z,
+// extended 2026-11-12 by 5 days) so regular-price assertions stay deterministic.
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-19T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);

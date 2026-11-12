@@ -34,6 +34,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
+import { buildWorkRooms } from "./_work_scope.js";
 import { normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
@@ -710,33 +711,6 @@ function validCleanerPhone(raw: string): boolean {
   const t = raw.trim();
   return t.length === 0 || (t.length <= 40 && /^[+()\-.\s\d]+$/.test(t) && /\d/.test(t));
 }
-
-const DEFAULT_CHECKLIST = {
-  rooms: [
-    { name: "Kitchen", items: [
-      { label: "Counters and sink cleaned", done: false },
-      { label: "Appliance exteriors wiped", done: false },
-      { label: "Floor vacuumed and mopped", done: false },
-      { label: "Trash emptied", done: false },
-    ] },
-    { name: "Bathrooms", items: [
-      { label: "Toilet, shower/tub and sink cleaned", done: false },
-      { label: "Mirrors polished", done: false },
-      { label: "Floor cleaned", done: false },
-      { label: "Trash emptied", done: false },
-    ] },
-    { name: "Bedrooms", items: [
-      { label: "Surfaces dusted", done: false },
-      { label: "Floor vacuumed / cleaned", done: false },
-      { label: "Bed made (if requested)", done: false },
-    ] },
-    { name: "Living room", items: [
-      { label: "Surfaces dusted", done: false },
-      { label: "Floor vacuumed / cleaned", done: false },
-      { label: "Cushions straightened", done: false },
-    ] },
-  ],
-};
 
 // Reconcile the saved-card state with Stripe itself: the webhook normally
 // maintains gh_payment_method, but a missing webhook secret or a dropped
@@ -3342,7 +3316,13 @@ export default async function handler(req: Req, res: Res) {
             service: meta["gh_service"] ?? null,
             amount_cents: parseInt(meta["gh_first_price_cents"] ?? "", 10) || null,
             cleaner_name: meta["gh_cleaner_name"] ?? null,
-            checklist: DEFAULT_CHECKLIST,
+            // One checklist source: the same buildWorkRooms the quote
+            // flow uses (public task labels). No dimensions are stored
+            // in the booking metadata, so this is the standard scope
+            // with the public category names (Kitchen, Bathrooms,
+            // Bedrooms, Living room); deep / move-in-out add the
+            // extra tasks.
+            checklist: { rooms: buildWorkRooms({ deep: /deep|move-in/i.test(meta["gh_service"] ?? "") }) },
             status: "scheduled",
           },
         );

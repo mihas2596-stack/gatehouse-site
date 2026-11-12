@@ -196,6 +196,18 @@ describe("visit state + fee math", () => {
     // Cancelling a visit whose date already passed is free.
     expect(cancelFeeCents({ gh_state: "card_ready" }, "2020-01-15", Date.now())).toBe(0);
   });
+
+  it("waived: a waived visit is its own state — never approved or report_sent", () => {
+    // The waive mirror writes gh_state "approved" into shared metadata;
+    // the journal flag is the authority and must win over it.
+    expect(deriveVisitState({ gh_state: "approved", gh_report_sent_at: "2026-11-08T10:00:00.000Z", gh_charge_waived: "1" })).toBe("waived");
+    expect(deriveVisitState({ gh_state: "card_ready", gh_report_sent_at: "2026-11-08T10:00:00.000Z", gh_charge_waived: "1" })).toBe("waived");
+    // Without the flag nothing changes.
+    expect(deriveVisitState({ gh_state: "card_ready", gh_report_sent_at: "2026-11-08T10:00:00.000Z" })).toBe("report_sent");
+    // Terminal states still win over waived.
+    expect(deriveVisitState({ gh_state: "paid", gh_charge_waived: "1" })).toBe("paid");
+    expect(deriveVisitState({ gh_state: "cancelled", gh_charge_waived: "1" })).toBe("cancelled");
+  });
 });
 
 describe("/api/visit", () => {

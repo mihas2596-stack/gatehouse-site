@@ -23,7 +23,7 @@ import { emailDocument } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
-import { issueStateFrom, timerBlockReason } from "./_payment_basis.js";
+import { issueStateFrom, latestIssueDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
@@ -242,6 +242,11 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
     gh_no_photo_zones: row.no_photo_zones ?? "",
     gh_payment_method: paymentMethodId,
     gh_issue_open: issueOpen ? "1" : "",
+    // A waived visit is its own client state (no "Card we'll charge"):
+    // the latest issue decision lives in the journal, and the waive
+    // mirror writes gh_state "approved" into shared metadata, so the
+    // flag has to come from the journal, not from gh_state.
+    gh_charge_waived: latestIssueDecision(events)?.decision === "waived" ? "1" : "",
   };
 }
 // Write this booking's DB/journal state into the shared customer's
@@ -470,7 +475,7 @@ async function findCustomerByBooking(
 export type VisitState =
   | "card_needed" | "card_failed" | "awaiting_confirmation" | "confirmed"
   | "date_declined" | "report_sent" | "issue_open" | "approved" | "paid"
-  | "payment_issue" | "payment_unknown" | "cancelled" | "date_passed";
+  | "payment_issue" | "payment_unknown" | "cancelled" | "date_passed" | "waived";
 
 // B6: a visit whose date is already past is its own state. Without it a
 // stale requested/confirmed booking kept asking the client to save a card
@@ -487,6 +492,12 @@ export function deriveVisitState(meta: Record<string, string>, requestedDate = "
   const state = meta["gh_state"] ?? "";
   if (state === "cancelled") return "cancelled";
   if (state === "paid") return "paid";
+  // A waived visit is closed without a charge — it must never surface
+  // as "approved" (the waive mirror writes gh_state "approved") or as
+  // "report_sent" (which would show "Card we'll charge"). Checked
+  // before the issue/approved branches: the waive clears issue_open
+  // and the journal is the authority.
+  if (meta["gh_charge_waived"] === "1") return "waived";
   if (state === "payment_failed") return "payment_issue";
   if (state === "date_declined") return "date_declined";
   if (meta["gh_issue_open"] === "1" || state === "issue_open") return "issue_open";

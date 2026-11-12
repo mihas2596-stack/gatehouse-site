@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { IssueForm } from "@/components/IssueForm";
 import { fmtDateUS } from "@/lib/formatDate";
 import { toVisitMethod, entrySummaryLabel, entryChoiceSettled, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
 
@@ -24,6 +25,7 @@ type VisitStateName =
   | "paid"
   | "payment_issue"
   | "payment_unknown"
+  | "waived"
   | "date_passed"
   | "cancelled";
 
@@ -64,6 +66,11 @@ type VisitData = {
   error?: string;
 };
 
+// JourneySteps has 5 steps (0–4): a current past the last index marks
+// every step done, none current — used for a paid visit, whose journey
+// is finished.
+const STEPS_DONE = 5;
+
 const STATE_HEADLINE: Record<string, string> = {
   card_needed: "Request received — one step left",
   card_failed: "Your card couldn't be saved",
@@ -78,6 +85,9 @@ const STATE_HEADLINE: Record<string, string> = {
   // H1: an unknown charge outcome is never "Visit approved" — the
   // payment may or may not have gone through.
   payment_unknown: "We couldn't confirm your payment",
+  // A waived visit is closed without a charge — never show it as
+  // "approved" or as a pending charge.
+  waived: "No charge for this visit",
   // B6: the requested/confirmed date is already past — nothing is booked
   // for that day, and the client must pick a new date or cancel.
   date_passed: "That date has passed — pick a new one",
@@ -104,6 +114,11 @@ type ReportData = {
   // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
+  // The owner's latest decision on the issue (payment_requested /
+  // reclean / waived, with its text) and the resolution record
+  // (resolved_at + reclean_date) — same payload as /report.
+  issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
+  resolution?: { resolved_at: string; reclean_date: string } | null;
   no_photo_zones?: string[];
   error?: string;
 };
@@ -135,6 +150,24 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   const [issueText, setIssueText] = useState("");
   const [issueRoom, setIssueRoom] = useState("");
   const [showIssue, setShowIssue] = useState(false);
+  const [issuePhoto, setIssuePhoto] = useState("");
+  const [issuePhotoNote, setIssuePhotoNote] = useState("");
+
+  // Photo for the issue form: same 1 MB rule as /report — a larger
+  // photo is dropped with a note, the message itself still goes through.
+  const onPhotoPick = (file: File | null) => {
+    setIssuePhoto("");
+    setIssuePhotoNote("");
+    if (!file) return;
+    if (file.size > 1_000_000) {
+      setIssuePhotoNote("That photo is large, so we'll send your message without it.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     fetch(`/api/report?bt=${encodeURIComponent(bt)}`)
@@ -157,12 +190,30 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           // RA08: pay only for the publication this tab actually
           // showed; a stale tab gets report_changed, not a charge.
           ...(payload.action === "approve" ? { seen_publication_id: rep?.publication_id ?? undefined } : {}),
+          // The issue photo travels with the complaint (Terms §7).
+          ...(payload.action === "issue" && issuePhoto ? { photo: issuePhoto } : {}),
         }),
       });
       const j = (await r.json()) as ReportData & { ok: boolean };
-      if (j && j.state && j.state !== "invalid_link") {
+      // N26 (mirrored from /report): the expired-window 409s carry no
+      // `state`, so they must be handled before the state gate below —
+      // otherwise the client only gets the generic error. The form
+      // stays open so the client can copy their text into the email.
+      if (j && j.error === "issue_window_expired") {
+        setErr("The 24-hour window for reporting an issue on this report has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
+      } else if (j && j.error === "claim_window_expired") {
+        setErr("The window for reporting an issue after this visit has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
+      } else if (j && j.state && j.state !== "invalid_link") {
         setRep(j);
         onChanged();
+        // A sent issue clears the form (including the photo).
+        if (payload.action === "issue") {
+          setShowIssue(false);
+          setIssueText("");
+          setIssueRoom("");
+          setIssuePhoto("");
+          setIssuePhotoNote("");
+        }
         // S13: several cards on file, none confirmed for this booking —
         // the server refuses to guess. Lead to the existing confirm_card
         // flow instead of leaving a dead Approve button; no charge made.
@@ -222,6 +273,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   // able to retry (the retry re-checks the payment status first).
   const canAct = rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown";
   const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown";
+  // A waived visit is closed without a charge: no card line, no
+  // "Change card", no Approve — the banner below says so plainly.
+  const isWaived = rep.state === "waived";
+  // Rooms that appear in the report, for the issue-form room picker —
+  // only real rooms, plus "Other / not listed" (shared IssueForm).
+  const reportRooms = Array.from(new Set((rep.photo_items ?? []).map((p) => p.room).filter(Boolean) as string[]));
   // H17: "before" photos may be absent (e.g. QA-era reports) — say so
   // instead of letting the client compare a "before" that isn't there.
   const hasAfterPhotos = (rep.photo_items ?? []).some((p) => p.kind === "after");
@@ -255,7 +312,7 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
               <dd className="font-semibold text-right">{cleanerName}</dd>
             </div>
           )}
-          {cardLabel && (
+          {cardLabel && !isWaived && (
             <div className="flex justify-between gap-4 text-sm">
               <dt className="text-muted-foreground">{visitState === "paid" ? "Card charged" : "Card we'll charge"}</dt>
               <dd className="font-semibold text-right">
@@ -311,13 +368,46 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           )}
         </div>
       )}
-      {rep.state === "issue_open" && (
+      {isWaived && (
+        <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
+          No charge for this visit — we&apos;ve reviewed your concern and closed this visit without charging your card. Nothing will be charged for this visit.
+          {rep.issue_decision?.resolution ? (
+            <> Our response: “{rep.issue_decision.resolution}”</>
+          ) : null}
+        </p>
+      )}
+      {rep.state === "issue_open" && !rep.issue_decision && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
           Issue reported — automatic payment is blocked for this visit.
           {rep.issue_reason && rep.issue_source === "client" ? (
             <> You told us: “{rep.issue_reason}”.</>
           ) : null}
         </p>
+      )}
+      {rep.state === "issue_open" && rep.issue_decision && (
+        <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
+          {rep.issue_decision.decision === "payment_requested" ? (
+            <p className="font-semibold mb-1">We&apos;ve reviewed your concern. Please review our response and approve the report when you&apos;re ready to pay.</p>
+          ) : rep.issue_decision.decision === "reclean" ? (
+            <p className="font-semibold mb-1">We&apos;ve reviewed your concern. We&apos;ll send you an updated report after the re-clean. Nothing will be charged unless you approve the report.</p>
+          ) : (
+            <p className="font-semibold mb-1">We&apos;ve reviewed your concern.</p>
+          )}
+          {rep.issue_decision.resolution ? (
+            <p className="mb-1">Our response: “{rep.issue_decision.resolution}”</p>
+          ) : null}
+          {rep.issue_decision.decision === "reclean" && rep.resolution?.reclean_date ? (
+            <p className="mb-2">Re-clean agreed for <strong>{fmtDateUS(rep.resolution.reclean_date)}</strong>.</p>
+          ) : null}
+          {rep.issue_reason && rep.issue_source === "client" ? (
+            <p className="mb-2">You told us: “{rep.issue_reason}”.</p>
+          ) : null}
+          <p className="mb-3">Nothing will be charged until you approve — the automatic charge stays blocked for this visit.</p>
+          <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+            {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
+        </div>
       )}
       {rep.state === "approved" && (
         <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
@@ -380,28 +470,20 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
       )}
       {canAct && showIssue && (
         <div className="mt-4">
-          <label htmlFor="v-issue" className="block text-sm font-medium mb-1.5">What&apos;s wrong?</label>
-          <textarea
-            id="v-issue"
-            value={issueText}
-            onChange={(e) => setIssueText(e.target.value)}
-            rows={3}
-            maxLength={500}
-            className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-2"
-            placeholder="Tell us what needs a second look…"
+          <IssueForm
+            rooms={reportRooms}
+            room={issueRoom}
+            onRoom={setIssueRoom}
+            text={issueText}
+            onText={setIssueText}
+            photoNote={issuePhotoNote}
+            onPhotoPick={onPhotoPick}
+            busy={busy}
+            submitLabel="Send issue — block auto-charge"
+            helper="Sending this blocks the automatic charge for this visit. We'll confirm by email and reply within one business day."
+            onSubmit={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}
+            onCancel={() => setShowIssue(false)}
           />
-          <label htmlFor="v-issue-room" className="block text-sm font-medium mb-1.5">Room (optional)</label>
-          <input
-            id="v-issue-room"
-            value={issueRoom}
-            onChange={(e) => setIssueRoom(e.target.value)}
-            maxLength={60}
-            className="w-full rounded-xl border border-border bg-background p-3 text-sm mb-3"
-            placeholder="e.g. Kitchen"
-          />
-          <Button variant="hero" disabled={busy || !issueText.trim()} onClick={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}>
-            {busy ? "Sending…" : "Send issue — block auto-charge"}
-          </Button>
         </div>
       )}
       <p className="mt-4 text-xs text-muted-foreground">
@@ -583,7 +665,7 @@ const Visit = () => {
   if (b.confirmed_date) rows.push(["Visit date (confirmed)", fmtDateUS(b.confirmed_date)]);
   else if (b.requested_date) rows.push([data?.state === "date_passed" ? "Requested date (already passed)" : "Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
   if (b.window) rows.push(["Arrival window (Atlanta time)", formatArrivalWindow(b.window)]);
-  if (b.first) rows.push(["First visit", b.first]);
+  if (b.first) rows.push(["This visit", b.first]);
   if (b.recurring) rows.push(["Then, per visit", b.recurring]);
   // Payment-method status without full details: brand + last 4 only,
   // shown once the card is confirmed for this booking. report_sent has
@@ -666,7 +748,10 @@ const Visit = () => {
             {data.state !== "cancelled" && (
               <JourneySteps
                 current={
-                  ["card_needed", "card_failed", "awaiting_confirmation", "date_passed"].includes(data.state) ? 0
+                  // A paid visit is finished — every step is done, none is
+                  // current. (current past the last index marks all done.)
+                  data.state === "paid" ? STEPS_DONE
+                  : ["card_needed", "card_failed", "awaiting_confirmation", "date_passed"].includes(data.state) ? 0
                   : data.state === "confirmed" && isCleaningDay ? 2
                   : ["confirmed", "date_declined"].includes(data.state) ? 1
                   : data.report_preparing ? 3
@@ -755,14 +840,14 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown") && (
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown" || data.state === "waived") && (
               <section id="report" className="scroll-mt-28">
                 <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
               </section>
             )}
 
 
-            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue", "payment_unknown"].includes(data.state) && (
+            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue", "payment_unknown", "waived"].includes(data.state) && (
               <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
                 <dl className="space-y-1.5">
                   {rows.map(([k, v]) => (
@@ -778,8 +863,11 @@ const Visit = () => {
 
             {data.cleaner && (data.state === "confirmed" || data.state === "awaiting_confirmation") && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 flex items-center gap-4">
-                <span className="w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0">
+                <span className="relative w-16 h-16 rounded-full bg-sage flex items-center justify-center shrink-0 overflow-hidden">
                   <User className="w-8 h-8 text-sage-foreground" aria-hidden="true" />
+                  {data.cleaner.photo && (
+                    <img src={data.cleaner.photo} alt="" className="absolute inset-0 w-16 h-16 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                  )}
                 </span>
                 <div className="text-left">
                   <p className="text-sm uppercase tracking-wide text-muted-foreground">Your cleaner</p>
@@ -804,7 +892,7 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown") && (
+            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown" && data.state !== "waived") && (
               <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
                 <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
@@ -930,10 +1018,14 @@ const Visit = () => {
                 </p>
               </div>
             )}
-            {manageable && data.state !== "confirmed" && (
+            {manageable && (data.state !== "confirmed" || !data.entry_available) && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Entry</h2>
-                <p className="text-sm text-foreground">You will arrange entry here after your visit is confirmed and your cleaner is assigned. Nothing secret is needed before then.</p>
+                {data.state === "confirmed" ? (
+                  <p className="text-sm text-foreground">You&apos;ll arrange entry here once your cleaner is assigned. Nothing secret is needed before then.</p>
+                ) : (
+                  <p className="text-sm text-foreground">You will arrange entry here after your visit is confirmed and your cleaner is assigned. Nothing secret is needed before then.</p>
+                )}
                 {data.entry_choice?.method === "decide_later" && (
                   <p className="mt-2 text-sm text-foreground">You chose to decide later — We will email you to help arrange entry before your visit.</p>
                 )}

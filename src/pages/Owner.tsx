@@ -271,6 +271,10 @@ const Owner = () => {
   // plainly instead of the neutral "Not paid yet".
   const [noStripeCustomer, setNoStripeCustomer] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
+  // "Tell the cleaner" prompt after an owner cancel or date change on a
+  // visit with an assigned cleaner — the cleaner otherwise only finds
+  // out by opening their link. Cleared when another visit is opened.
+  const [tellCleaner, setTellCleaner] = useState<{ kind: "cancelled" | "date"; date: string; altDate?: string } | null>(null);
   const [returnNote, setReturnNote] = useState("");
   const [issueReason, setIssueReason] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -474,6 +478,7 @@ const Owner = () => {
       setCardLast4("");
       setNoStripeCustomer(false);
       setActionMsg("");
+      setTellCleaner(null);
       setViewLinkOpen(false);
       setViewLinkUrl("");
       setViewLinkError("");
@@ -699,6 +704,19 @@ const Owner = () => {
   const cleanerMessage = (url: string): string => {
     if (!selected) return url;
     return cleanerJobMessage(selected, url);
+  };
+
+  // Message for the cleaner when the owner cancels or moves a visit.
+  // A cancelled date is final; a proposed alternative is not confirmed
+  // yet, so the message says so instead of promising the new date.
+  const cleanerChangeMessage = (kind: "cancelled" | "date", date: string, altDate?: string): string => {
+    const first = (selected?.cleaner_name ?? "").split(" ")[0] || "Hi";
+    const when = fmtVisitDate(date) || "the scheduled date";
+    if (kind === "cancelled") {
+      return `Hi ${first}, the Gatehouse cleaning on ${when} has been cancelled — no need to travel. Sorry for the change, and thank you.`;
+    }
+    const alt = altDate ? ` We're offering the client ${fmtVisitDate(altDate)} instead.` : "";
+    return `Hi ${first}, the Gatehouse cleaning on ${when} is being moved — please don't travel on that date.${alt} We'll confirm the new date with you.`;
   };
 
   const openShare = (kind: "wa" | "sms", text: string, phone: string | null) => {
@@ -1340,6 +1358,40 @@ const Owner = () => {
                   tap must be visible where the tap happened. */}
               {actionMsg && <p className="text-sm mb-3" role="status">{actionMsg}</p>}
 
+              {/* Tell the cleaner — a cancelled or moved visit: the
+                  cleaner only finds out by opening their link, so offer
+                  the ready message here, reusing the share buttons. */}
+              {tellCleaner && v.cleaner_name && (
+                <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mb-3" role="status">
+                  <p className="text-sm font-semibold mb-1">Tell the cleaner</p>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    {tellCleaner.kind === "cancelled"
+                      ? "The cleaner only finds out by opening their link. Send them this message so they don't travel for nothing."
+                      : "The cleaner only finds out by opening their link. Send them this message so they don't travel on the old date."}
+                  </p>
+                  <textarea readOnly rows={3} className="w-full text-sm bg-background rounded p-2 mb-2" value={cleanerChangeMessage(tellCleaner.kind, tellCleaner.date, tellCleaner.altDate)} aria-label="Message for the cleaner" />
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => openShare("wa", cleanerChangeMessage(tellCleaner.kind, tellCleaner.date, tellCleaner.altDate), phone)}>
+                      WhatsApp
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => openShare("sms", cleanerChangeMessage(tellCleaner.kind, tellCleaner.date, tellCleaner.altDate), phone)}>
+                      SMS
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={async () => {
+                      const copied = await copyText(cleanerChangeMessage(tellCleaner.kind, tellCleaner.date, tellCleaner.altDate));
+                      if (copied) setCleanerCopyStatus("Cleaner message copied.");
+                      else setManualCopy({ text: cleanerChangeMessage(tellCleaner.kind, tellCleaner.date, tellCleaner.altDate), label: "Message — copy it manually:", owner: "cleaner" });
+                    }}>
+                      Copy message
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setTellCleaner(null)}>
+                      Dismiss
+                    </Button>
+                  </div>
+                  {cleanerCopyStatus && <p className="text-sm mt-1" role="status">{cleanerCopyStatus}</p>}
+                </div>
+              )}
+
               {/* A. Summary */}
               <section id="block-summary" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h2 id="owner-detail-title" tabIndex={-1} className="font-heading text-2xl font-bold outline-none">{v.client_name ?? "—"}</h2>
@@ -1549,6 +1601,7 @@ const Owner = () => {
                           setActionMsg(fee !== null && fee > 0
                             ? `Visit cancelled. Late-cancellation fee: $${(fee / 100).toFixed(2)} — recorded on the booking.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`
                             : `Visit cancelled. No fee.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`);
+                          if (v.cleaner_name) setTellCleaner({ kind: "cancelled", date: v.visit_date ?? "" });
                         });
                       }}
                     >
@@ -1886,6 +1939,7 @@ const Owner = () => {
                           setActionMsg(j["email_sent"] === true
                             ? "Propose another time: done. The client was emailed the alternative date."
                             : "Propose another time: saved, but the email could not be sent — contact the client manually.");
+                          if (v.cleaner_name) setTellCleaner({ kind: "date", date: v.visit_date ?? "", altDate: altDate || undefined });
                         })}>
                           Propose another time
                         </Button>

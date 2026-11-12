@@ -700,6 +700,9 @@ export default async function handler(req: Req, res: Res) {
         // for a visit the owner closed without payment.
         state: issueDecision?.decision === "waived" ? "waived" as ReportState : deriveState(meta),
         booking,
+        // The cleaner who did the visit — /visit names them, /report
+        // must too, so the two pages of one report agree.
+        cleaner_name: row?.cleaner_name ?? meta["gh_cleaner_name"] ?? null,
         photos: items.map((p) => p.url),
         photo_items: items,
         // Rooms the client asked not to photograph (comma-separated in

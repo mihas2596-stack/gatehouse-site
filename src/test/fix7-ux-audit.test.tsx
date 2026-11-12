@@ -12,10 +12,11 @@ import { FAQS } from "@/config/faqs";
 import { CITIES } from "@/config/cities";
 import { earliestServiceDate } from "@/config/service-area";
 
-// Pinned past the global test-price window so regular-price assertions
+// Pinned past the global test-price window (until 2026-11-18T20:59:59Z,
+// extended 2026-11-12 by 5 days) so regular-price assertions
 // stay deterministic. earliestServiceDate() reads the real clock, so the
 // expected earliest-visit date is computed from it, not from Date.now.
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-14T00:00:00Z"));
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-19T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/measurement", () => ({ campaignAttribution: () => ({}), trackFunnel: () => true }));

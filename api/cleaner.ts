@@ -267,6 +267,35 @@ async function view(visit: VisitRow, restricted = false) {
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.report_returned&order=created_at.desc&limit=1`,
   );
+  // The owner's latest issue decision (a re-clean) and the client's
+  // original complaint — the cleaner needs both to target a re-clean.
+  // The re-clean date lives on the issue_resolved event; the decision
+  // event carries the decision + resolution text.
+  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visit.id}&event=eq.issue_decision&order=created_at.desc&limit=1`,
+  );
+  const resolvedEvents = await dbSelect<{ detail: { reclean_date?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visit.id}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
+  );
+  const issueEvents = await dbSelect<{ actor?: string | null; detail: { reason?: string; room?: string; via?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visit.id}&event=eq.issue_opened&order=created_at.desc&limit=1`,
+  );
+  const recleanDecision = decisionEvents[0]?.detail?.decision === "reclean" ? decisionEvents[0] : null;
+  const recleanDate = typeof resolvedEvents[0]?.detail?.reclean_date === "string" ? (resolvedEvents[0].detail.reclean_date as string) : "";
+  const issueEv = issueEvents[0] ?? null;
+  // C10 (mirrored from /report): only a client-filed issue (actor
+  // "client", not via the report-email auto-issue) is the client's own
+  // words; anything else is an operator note.
+  const clientIssue = issueEv?.detail?.reason
+    ? {
+        reason: issueEv.detail.reason,
+        room: typeof issueEv.detail.room === "string" ? issueEv.detail.room : "",
+        source: issueEv.actor === "client" && issueEv.detail?.via !== "report_email" ? "client" : "operator",
+      }
+    : null;
   // The customer's general comments (booking form "Notes") — kept separate
   // from access instructions so the two never merge into one dump again.
   const noteEvents = await dbSelect<{ detail: { text?: string } | null }>(
@@ -312,12 +341,26 @@ async function view(visit: VisitRow, restricted = false) {
     // A "sent" row whose client email bounced must not render as
     // "published" to the cleaner: the client never got the report.
     report_bounced: visit.report_bounced ?? false,
+    // A submitted report held for owner review (an open issue) must
+    // not look like a normal submission: the cleaner would think the
+    // job is done while the report may still come back.
+    report_held: visit.report_status === "submitted" && visit.issue_open === true,
     // C2: a client-cancelled visit must not look editable. The POST gate
     // already rejects it (409 visit_not_confirmed); the GET now uses the
     // same rule so the form and the server can never disagree.
     cancelled: visit.status === "cancelled",
     editable: EDITABLE.has(visit.report_status) && visit.status !== "cancelled",
     owner_note: events[0]?.detail?.note ?? null,
+    // A re-clean the owner agreed (date + the decision text), and the
+    // client's original complaint — the cleaner needs both to target
+    // the re-clean. Null when no re-clean was agreed / no issue filed.
+    reclean: recleanDecision
+      ? {
+          date: recleanDate,
+          note: typeof recleanDecision.detail?.resolution === "string" ? recleanDecision.detail.resolution : "",
+        }
+      : null,
+    client_issue: clientIssue,
   };
 }
 

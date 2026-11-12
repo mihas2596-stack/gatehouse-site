@@ -41,10 +41,16 @@ type CleanerView = {
   photos: Photo[];
   report_status: string;
   report_bounced?: boolean;
+  report_held?: boolean;
   editable: boolean;
   confirmed: boolean;
   cancelled?: boolean;
   owner_note: string | null;
+  // A re-clean the owner agreed (date + the decision text), and the
+  // client's original complaint (room + text + source) — null when
+  // no re-clean was agreed / no issue was filed.
+  reclean?: { date: string; note: string } | null;
+  client_issue?: { reason: string; room: string; source: string } | null;
   error?: string;
 };
 
@@ -59,9 +65,9 @@ type UploadState = {
 
 // A room is photo-complete only when it has a before photo AND an after
 // photo. A set skip_reason excuses the whole room, and so does the
-// client's do-not-photograph list for that room. The server still
-// enforces only the after-photo rule, so the client enforces the
-// before-photo half of this gate in submit() below.
+// client's do-not-photograph list for that room. The server enforces
+// the same rule (api/cleaner.ts missingRooms); the client blocks in
+// submit() too, so the cleaner sees which photo is missing.
 type RoomPhotoStatus = { beforeOk: boolean; afterOk: boolean; ready: boolean };
 const roomPhotoStatus = (room: ChecklistRoom, photos: Photo[], noPhotoHere: boolean): RoomPhotoStatus => {
   const excused = Boolean(room.skip_reason) || noPhotoHere;
@@ -85,6 +91,10 @@ const Cleaner = () => {
   const [missing, setMissing] = useState<string[]>([]);
   // K06: visible autosave status — "Saved" only after the server confirms.
   const [saveState, setSaveState] = useState<AutosaveState>("idle");
+  // Last successful refresh (Atlanta time) — the page refetches when
+  // the tab becomes visible again, so a stale entry/date never sits
+  // unnoticed.
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -117,6 +127,7 @@ const Cleaner = () => {
         return;
       }
       setData(j);
+      setLastUpdated(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }));
       // Photo uploads refresh the page data too. A response started before
       // an edit must not replace the cleaner's newer local checklist.
       if (!saver.isDirty() && saver.revision() === startedAtRevision) {
@@ -130,6 +141,17 @@ const Cleaner = () => {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // An already-open cleaner page must pick up the client's entry change
+  // or the owner's date change without a manual reload — same refetch
+  // on return as the client page. No polling, one fetch on return.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
 
   const saveChecklist = useCallback(
@@ -240,8 +262,8 @@ const Cleaner = () => {
     // before photo (or a reason / no-photo zone) AND an after photo
     // (or a reason / no-photo zone). Block here so the cleaner sees
     // which photo is missing instead of sending a report with no
-    // before/after comparison. The server still checks the after-photo
-    // rule and stays the backstop.
+    // before/after comparison. The server enforces the same rule and
+    // stays the backstop.
     const statuses = checklist.rooms.map((r) => ({
       name: r.name,
       ...roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)),
@@ -330,6 +352,13 @@ const Cleaner = () => {
   // C2: a cancelled visit is read-only even when the report state alone
   // would look editable; the server rejects POSTs the same way.
   const locked = !data.editable || data.confirmed === false || data.cancelled === true;
+  // Finish stays disabled until every room is ready — the cleaner sees
+  // the missing list in section 3 instead of tapping Finish and getting
+  // an error. submit() still checks as a backstop. (A visit with no
+  // rooms at all keeps the old behaviour: nothing blocks the submit.)
+  const allRoomsReady = checklist.rooms.length === 0 || checklist.rooms.every((r) =>
+    roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)).ready,
+  );
 
   return (
     <div className="min-h-screen bg-background page-shell">
@@ -342,10 +371,19 @@ const Cleaner = () => {
           {v.window ? <> · {({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}</> : null}
         </p>
         {v.service && <p className="text-muted-foreground">{v.service}{v.client_first_name ? <> · for {v.client_first_name}</> : null}</p>}
+        {lastUpdated && <p className="text-xs text-muted-foreground">Updated {lastUpdated} Atlanta time — reopening this page refreshes it.</p>}
         {data.cancelled === true && (
           <div className="rounded-xl border border-border bg-muted p-4 mt-4" role="status">
             <p className="font-semibold">This visit was cancelled.</p>
             <p className="text-base text-muted-foreground">The form is read-only — no changes can be sent for this visit.</p>
+          </div>
+        )}
+
+        {data.reclean && (
+          <div className="rounded-xl border border-primary/40 bg-primary/5 p-4 mt-4" role="status">
+            <p className="text-base font-semibold">Re-clean agreed{data.reclean.date ? <> for {fmtDate(data.reclean.date)}</> : null}</p>
+            {data.reclean.note && <p className="text-base text-muted-foreground">{data.reclean.note}</p>}
+            <p className="text-base text-muted-foreground">The owner will confirm the details with you — check the rooms below for what needs a second look.</p>
           </div>
         )}
 
@@ -386,6 +424,7 @@ const Cleaner = () => {
           {v.no_photo_zones && (
             <p className="text-base text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
           )}
+          <p className="text-base"><span className="font-semibold">Need help?</span> Call or text Gatehouse <a className="underline" href="tel:+17705258599">(770) 525-8599</a> — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
         </div>
 
         {!locked && saveState !== "idle" && (
@@ -418,17 +457,33 @@ const Cleaner = () => {
           </p>
         </details>
 
-        {data.report_status === "returned" && data.owner_note && (
+        {data.report_status === "returned" && (data.owner_note || data.client_issue) && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-4 mt-4">
             <p className="text-base font-semibold mb-1">The owner sent this report back:</p>
-            <p className="text-base">{data.owner_note}</p>
+            {data.owner_note && <p className="text-base">{data.owner_note}</p>}
+            {data.client_issue && (
+              <p className="text-base mt-2">
+                {data.client_issue.source === "client" ? "What the client flagged" : "Issue reported"}
+                {data.client_issue.room ? <> ({data.client_issue.room})</> : null}
+                : “{data.client_issue.reason}”
+              </p>
+            )}
           </div>
         )}
         {data.report_status === "submitted" && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4 text-center">
             <CheckCircle className="w-10 h-10 text-sage-foreground mx-auto mb-2" strokeWidth={1.5} />
-            <p className="font-semibold">Report received — the owner will share it with the client.</p>
-            <p className="text-base text-muted-foreground">You&apos;re done here — thank you!</p>
+            {data.report_held ? (
+              <>
+                <p className="font-semibold">Report received — it&apos;s waiting for the owner to review the client&apos;s issue.</p>
+                <p className="text-base text-muted-foreground">The owner will review it and let you know if anything needs a second look.</p>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold">Report received — the owner will share it with the client.</p>
+                <p className="text-base text-muted-foreground">You&apos;re done here — thank you!</p>
+              </>
+            )}
           </div>
         )}
         {data.report_status === "sent" && data.report_bounced && (
@@ -798,7 +853,7 @@ const Cleaner = () => {
                 </div>
               );
             })()}
-            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
+            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || !allRoomsReady || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-base text-muted-foreground text-center mt-2">
