@@ -49,9 +49,9 @@ describe("quote steps", () => {
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
-    // The sentence is split: the lead is semibold, the rest regular.
-    expect(screen.getByText("Today: $0")).toBeInTheDocument();
-    expect(screen.getByText(/Your card is charged automatically 24 hours after we send the report/)).toBeInTheDocument();
+    expect(screen.getByText("Due today")).toBeInTheDocument();
+    expect(screen.getByText("$0")).toBeInTheDocument();
+    expect(screen.getByText("24 hours after we send the report").parentElement).toHaveTextContent(/neither approve nor report an issue.*automatically 24 hours after we send the report/i);
     // The resend/version/cleaner clause was removed from the client view.
     expect(screen.queryByText(/does not change if we resend a message, publish a new report version, or change the date or cleaner/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
@@ -112,13 +112,13 @@ describe("quote steps", () => {
     // Defaults (3-bed M, every other week): first
     // == recurring, so the first recurring branch renders.
     goToStep3(false);
-    expect(screen.getByText("First visit $189, then $189 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("$189 per visit")).toBeInTheDocument();
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
     cleanup();
     sessionStorage.removeItem("gh_quote_draft_v1");
     // Same home + oven: both totals move by the $35 addon, still equal.
     goToStep3(true);
-    expect(screen.getByText("First visit $224, then $224 per visit, every other week")).toBeInTheDocument();
+    expect(screen.getByText("$224 per visit")).toBeInTheDocument();
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
   });
 
@@ -149,11 +149,10 @@ describe("quote steps", () => {
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
-    expect(screen.getByText("Today: $0")).toBeInTheDocument();
-    expect(screen.getByText("Review, then pay")).toBeInTheDocument();
-    expect(screen.getByText("Something missed?")).toBeInTheDocument();
-    expect(screen.getByText(/Save a card for this visit through Stripe/)).toBeInTheDocument();
-    expect(screen.getByText(/Your date is still a request/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "When you pay" })).toBeInTheDocument();
+    expect(screen.getByText(/Save your card with Stripe/)).toBeInTheDocument();
+    expect(screen.getByText(/Report an issue within those 24 hours/)).toHaveTextContent(/stop automatic payment.*approve again/i);
+    expect(screen.getByText("Pending confirmation.")).toBeInTheDocument();
     expect(screen.queryByText(/A report email that bounces blocks/)).not.toBeInTheDocument();
     expect(screen.queryByText(/After your visit we send a status update/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Saving a card is not a confirmed date/)).not.toBeInTheDocument();
@@ -208,9 +207,9 @@ describe("quote steps", () => {
     expect(document.body.textContent).toContain("December 1, 2099");
     expect(screen.getByText("Due today")).toBeInTheDocument();
     expect(screen.getByText("$0")).toBeInTheDocument();
-    expect(screen.getByText(/I’ll be home/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit details" })).toBeInTheDocument();
-    expect(screen.getByText("View all details")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("View all details"));
+    expect(screen.getByText(/I’ll be home/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
   });
 
@@ -240,7 +239,8 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("We’ll help you arrange it")).toBeInTheDocument();
-    expect(screen.getByText(/We will email you before your visit to help arrange entry/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("View all details"));
+    expect(screen.getByText(/email you before your visit to help arrange entry/)).toBeVisible();
   });
 
   it("rejects a non-Georgia state on step 2", () => {

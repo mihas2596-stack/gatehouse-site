@@ -150,6 +150,7 @@ describe("quote bathroom summary", () => {
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("View all details"));
     expect(screen.getByRole("link", { name: "See how to arrange access" })).toHaveAttribute("href", "/terms#terms-4");
   });
 });

@@ -378,6 +378,11 @@ const Quote = () => {
       : mainPrice !== null
         ? `${fmt$(mainPrice)} one-time`
         : "";
+  const reviewPrice = isLargeHome
+    ? "Custom quote before confirmation"
+    : isRecurring && breakdown && breakdown.first_total === breakdown.recurring_total
+      ? `${fmt$(breakdown.first_total)} per visit`
+      : priceSummaryText;
   const canSubmit = canProceed && !isSubmitting;
   // Full address for the booking: street, unit, city, state, ZIP.
   const fullAddress = useMemo(() => {
@@ -916,29 +921,39 @@ const Quote = () => {
 
               </>)}
               {step === 3 && (<>
-              <div className="mb-6 rounded-lg border border-border bg-background p-5 text-base">
+              <div className="mb-4 rounded-xl border border-border bg-background p-4 text-base sm:p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-lg font-bold outline-none">Your request</h2>
-                  <Button variant="link" type="button" className="min-h-[44px] px-1 text-sm font-semibold" onClick={() => setStep(2)}>Edit details</Button>
+                  <h2 id="quote-step-3-heading" tabIndex={-1} className="font-heading text-2xl font-bold text-sage-foreground outline-none">Your request</h2>
+                  <Button variant="link" type="button" className="min-h-[44px] px-1 text-base font-semibold" onClick={() => setStep(2)}>Edit details</Button>
                 </div>
-                <dl className="mt-3 space-y-2">
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Service</dt><dd className="font-semibold text-left sm:text-right">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}</dd></div>
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Current visit price</dt><dd className="font-semibold text-left sm:text-right">{priceSummaryText}</dd></div>
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Requested date</dt><dd className="font-semibold text-left sm:text-right">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd></div>
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Address</dt><dd className="font-semibold text-left sm:text-right">{fullAddress || "—"}</dd></div>
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Entry</dt><dd className="font-semibold text-left sm:text-right">{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd></div>
-                  {entryMethod === "decide_later" && (
-                    <p className="mt-1 text-sm text-foreground">We will email you before your visit to help arrange entry. You don&apos;t need to share a door code now.</p>
-                  )}
-                  <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4"><dt className="text-muted-foreground">Due today</dt><dd className="font-semibold text-left sm:text-right">$0</dd></div>
+                <dl className="mt-1 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <dt className="text-muted-foreground">Due today</dt>
+                    <dd className="text-[1.625rem] font-bold leading-tight text-sage-foreground">$0</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Cleaning price</dt>
+                    <dd className="text-[1.25rem] font-semibold leading-tight">{reviewPrice}</dd>
+                    <dd className="mt-1">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}</dd>
+                  </div>
+                  <div className="border-t border-border pt-3 sm:col-span-2">
+                    <dt className="text-muted-foreground">Requested date</dt>
+                    <dd className="font-semibold">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
+                  </div>
                 </dl>
-                <p className="mt-4 rounded-xl bg-sage/15 p-4 text-base leading-relaxed"><strong>Your date is still a request.</strong> We confirm your date, arrival window and cleaner by email within one business day.</p>
-                <details className="mt-4">
+                <p className="mt-2 text-base leading-relaxed"><strong>Pending confirmation.</strong> We&apos;ll email your date, arrival window and cleaner within one business day.</p>
+                <details className="mt-2">
                   <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
-                  <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 break-words">
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 break-words">
+                    <dt className="font-semibold">Address</dt><dd className="min-w-0">{fullAddress || "—"}</dd>
                     <dt className="font-semibold">Home</dt><dd>{bedrooms} bedrooms · {fullBaths} full bathrooms</dd>
-                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 break-all">{booking.name} · {booking.email} · {booking.phone}<br />{fullAddress}</dd>
+                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{booking.name} · {booking.email} · {booking.phone}</dd>
+                    <dt className="font-semibold">Entry</dt><dd>{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd>
                   </dl>
+                  {entryMethod === "decide_later" && (
+                    <p className="mt-2 text-base">We&apos;ll email you before your visit to help arrange entry.</p>
+                  )}
+                  <p className="mt-2 text-base"><a href="/terms#terms-4" target="_blank" rel="noopener noreferrer" className="underline text-primary">See how to arrange access</a>.</p>
                 </details>
               </div>
               </>)}
@@ -1149,18 +1164,14 @@ const Quote = () => {
               {step === 3 && (<>
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
-              <div className="mt-6"><PaymentSummary showCard /></div>
-              <section className="mt-5 text-base leading-relaxed" aria-label="Changes and home access">
-                <h3 className="font-semibold">Changes &amp; home access</h3>
-                <p className="mt-2">Cancel free at least 48 hours before your visit. Later cancellations cost $25.</p>
-                <p className="mt-2">Please arrange entry before the visit. <a href="/terms#terms-4" target="_blank" rel="noopener noreferrer" className="underline text-primary">See how to arrange access</a>.</p>
-              </section>
-              <div className="mt-5 flex items-start gap-3">
+              <PaymentSummary compact />
+              <p className="mt-4 text-base leading-relaxed">Cancel free at least 48 hours before your visit. Later cancellations cost $25.</p>
+              <div className="mt-4 flex items-start gap-3">
                 <input
                   id="b-terms" name="termsConsent" type="checkbox" required ref={refs.termsConsent}
                   checked={booking.termsConsent} onChange={handleBookingChange}
                   aria-required="true" aria-invalid={!!bookingErrors.termsConsent} aria-describedby={bookingErrors.termsConsent ? "b-terms-error" : undefined}
-                  className="mt-1 h-5 w-5 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+                  className="mt-1 h-5 w-5 rounded border-input accent-primary focus:ring-2 focus:ring-ring"
                 />
                 <label htmlFor="b-terms" className="text-sm text-foreground leading-snug">
                   I agree to the{" "}
@@ -1171,9 +1182,8 @@ const Quote = () => {
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
               <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
-              <div className="mt-6 flex flex-col sm:flex-row gap-3">
-                <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(2)}>Back to visit details</Button>
-                <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="flex-1 min-h-[48px]">
+              <div className="mt-5">
+                <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="h-auto min-h-[48px] w-full whitespace-normal py-3">
                   {isSubmitting
                     ? "Sending..."
                     : !canProceed
@@ -1181,10 +1191,6 @@ const Quote = () => {
                       : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
-              <p className="mt-3 text-center text-base">Stripe handles your card details.</p>
-              <p className="text-sm text-muted-foreground text-center mt-3">
-                Questions? Call <a href="tel:+17705258599" className="underline">(770) 525-8599</a> or email <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>.
-              </p>
               </>)}
             </form>
           </div>
