@@ -28,6 +28,7 @@ import { timingSafeEqual, createCipheriv, createHash, randomBytes } from "crypto
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce, bookingEmailContact } from "./booking-action.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbDeleteCount, dbUpdate, dbUpdateCount, logEvent, storageRemove } from "./_db.js";
 import { chargeVisit } from "./_payment_obligation.js";
+import { isFutureVisitDate } from "./_visit_date.js";
 import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { loadAccess } from "./_visit_access.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
@@ -44,6 +45,9 @@ type BookingRow = {
   report_bounced: boolean | null; report_status: string | null;
   issue_open: boolean | null; issue_ever: boolean | null;
   stripe_customer_id?: string | null;
+  // Payment-date gate (B): the scheduled visit date, hydrated into
+  // metadata as gh_visit_date (the confirmed date wins in selectDue).
+  visit_date?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
@@ -130,6 +134,10 @@ async function hydrateCustomerMeta(
     gh_booking_confirmed: confirmEv ? "1" : "",
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_confirmed_window: evStr(confirmEv, "window"),
+    // Payment-date gate (B): the scheduled visit date, so selectDue
+    // can block a future-dated report even when no confirmed date
+    // was ever set (the confirmed date wins when present).
+    gh_visit_date: row.visit_date ?? "",
     gh_cleaner_name: row.cleaner_name ?? "",
     gh_issue_open: issueOpen ? "1" : "",
     gh_issue_ever: issueEver ? "1" : "",
@@ -226,6 +234,13 @@ export function selectDue(customers: Cust[], nowMs: number): DueCharge[] {
     if ((m["gh_state"] ?? "") !== "report_sent") continue;
     if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
     if (m["gh_report_bounced"] === "1") continue;
+    // Payment-date gate (B): a visit may be charged on or after its
+    // date, never before. The effective date is the confirmed date
+    // when set, else the scheduled visit date (both hydrated into
+    // metadata). A future-dated sent report is never due — chargeVisit
+    // re-checks the same gate against the DB row at charge time.
+    const effectiveDate = m["gh_confirmed_date"] || m["gh_visit_date"] || "";
+    if (isFutureVisitDate(effectiveDate, nowMs)) continue;
     const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
     if (!Number.isFinite(sentMs)) continue;
     if (sentMs + 24 * 3600 * 1000 > nowMs) continue;

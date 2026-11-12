@@ -38,6 +38,7 @@ import { buildWorkRooms } from "./_work_scope.js";
 import { normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
+import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
@@ -860,6 +861,10 @@ async function hydrateCustomerMeta(
     gh_booking_confirmed: confirmEv && state !== "cancelled" ? "1" : "",
     gh_confirmed_date: evStr(confirmEv, "date"),
     gh_confirmed_window: evStr(confirmEv, "window"),
+    // Payment-date gate (B): the scheduled visit date, so the timer
+    // selection can block a future-dated report even when no confirmed
+    // date was ever set (the confirmed date wins when present).
+    gh_visit_date: row.visit_date ?? "",
     gh_cleaner_name: row.cleaner_name ?? "",
     gh_issue_open: issueOpen ? "1" : "",
     gh_issue_reason: issueOpen ? evStr(opened, "reason") : "",
@@ -2290,6 +2295,9 @@ export default async function handler(req: Req, res: Res) {
             issueOpenRow: row.issue_open ?? null,
             issueEverRow: row.issue_ever ?? null,
             bounced: row.report_bounced ?? null,
+            // Payment-date gate (B): the basis itself is date-aware,
+            // so a future-dated report never shows a charge basis.
+            visitDate: effectiveVisitDate(evStr(latestEvent(events, "visit_confirmed"), "date"), row.visit_date),
           },
           Date.now(),
         );
@@ -2413,6 +2421,17 @@ export default async function handler(req: Req, res: Res) {
         // agreed. Re-sends of an already-published report are exempt.
         if (visitRow.report_status === "submitted" && !(await hasVisitConfirmed(visitRow.id))) {
           return json(409, { ok: false, error: "needs_confirmation" });
+        }
+        // Payment-date gate (B): a visit may be published on or after
+        // its date, never before. The first publish starts the 24h
+        // clock, and a re-send restarts it — both are blocked for a
+        // future-dated visit, so a report can never reach "sent" (and
+        // the timer can never run) before the cleaning happened. The
+        // effective date is the confirmed date when set, else the
+        // scheduled visit date.
+        const effectiveDate = effectiveVisitDate(evStr(latestEvent(events, "visit_confirmed"), "date"), visitRow.visit_date);
+        if (isFutureVisitDate(effectiveDate)) {
+          return json(409, { ok: false, error: "report_too_early", visit_date: effectiveDate });
         }
         if (visitRow.report_status === "submitted" || visitRow.report_status === "sent") {
           // Also for an already-sent report: the photo set must be

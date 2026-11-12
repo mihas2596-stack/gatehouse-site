@@ -91,7 +91,7 @@ function dueRow(sentAt: string): Record<string, unknown> {
     report_status: "sent", amount_cents: 18900, client_email: "client@example.com",
     report_sent_at: sentAt, issue_open: false, issue_ever: false,
     report_bounced: false, payment_intent_id: null, receipt_email_id: null,
-    visit_date: "2027-01-15", window: "midday", cleaner_name: null,
+    visit_date: "2026-11-10", window: "midday", cleaner_name: null,
   };
 }
 function dueEvents(sentAt: string): Record<string, unknown>[] {

@@ -199,7 +199,7 @@ describe("owner charge matrix", () => {
                   rows = [{
                     id: ROW_ID, booking_id: BID, client_email: EMAIL, client_name: "Casey Client",
                     status, report_status: report, amount_cents: pinned,
-                    visit_date: "2027-01-15", window: "midday",
+                    visit_date: "2026-11-10", window: "midday",
                     issue_open: dispute === "rowOpen",
                     issue_ever: dispute === "rowOpen" || dispute === "rowEver",
                     report_bounced: bounce,

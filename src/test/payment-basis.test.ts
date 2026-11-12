@@ -48,7 +48,7 @@ beforeEach(() => {
     id: VISIT_ID, booking_id: BID, status: "report_sent", amount_cents: 20000,
     cleaner_name: null, client_email: "client@example.com",
     report_sent_at: hoursAgo(30), report_bounced: false, report_status: "sent",
-    visit_date: "2027-01-15", window: "midday",
+    visit_date: "2026-11-10", window: "midday",
   };
   events = [created()];
   photoRows = [{ room: "Kitchen", storage_path: "visits/x/after.jpg", note: null }];

@@ -9,6 +9,8 @@
 // Row flags are OR-ed with journal-derived state (fail-closed): the row
 // is synced on every issue transition, the journal is the audit trail.
 
+import { isFutureVisitDate } from "./_visit_date.js";
+
 export type BasisEvent = {
   event: string;
   detail: Record<string, unknown> | null;
@@ -122,6 +124,12 @@ export function paymentBasis(
     // explicit client approval is a separate basis and is unaffected:
     // a client who received the report another way can still approve.
     bounced?: boolean | null;
+    // Payment-date gate (B): the visit's effective date (confirmed
+    // date when set, else the scheduled date). A future date is never
+    // a charge basis — neither an approval nor the timer may pay for
+    // a visit that has not happened yet. Absent = no gate (legacy
+    // callers that do not know the date).
+    visitDate?: string | null;
   },
   nowMs: number,
 ): PaymentBasis {
@@ -133,6 +141,10 @@ export function paymentBasis(
       ? Date.parse(sentEv.created_at)
       : NaN;
   if (!Number.isFinite(sent)) return null;
+  // Payment-date gate (B), checked before either basis: an approval
+  // given for a future visit is not yet a basis, and the timer never
+  // runs for a visit that has not happened.
+  if (isFutureVisitDate(input.visitDate ?? null, nowMs)) return null;
   if (clientApprovedEvent(input.events)) return "client_approved";
   const { open, ever } = issueStateFrom(
     input.events,

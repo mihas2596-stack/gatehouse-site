@@ -50,7 +50,7 @@ beforeEach(() => {
     id: VISIT_ID, booking_id: BID, status: "report_sent", amount_cents: 20000,
     cleaner_name: null, client_email: "client@example.com",
     report_sent_at: hoursAgo(30), report_bounced: false, report_status: "sent",
-    visit_date: "2027-01-15", window: "midday", issue_open: false, issue_ever: false,
+    visit_date: "2026-11-10", window: "midday", issue_open: false, issue_ever: false,
     receipt_email_id: null,
   };
   // C16: the default 30h-old report carries its 20h reminder (sent at

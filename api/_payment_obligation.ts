@@ -31,6 +31,9 @@ import {
   paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision,
 } from "./_payment_basis.js";
 import {
+  confirmedDateOf, effectiveVisitDate, isFutureVisitDate,
+} from "./_visit_date.js";
+import {
   reconcileIntent, confirmIntent, confirmAttemptKey,
 } from "./_payment_intent.js";
 
@@ -46,6 +49,10 @@ export type ObligationRow = {
   issue_ever: boolean | null;
   report_bounced: boolean | null;
   payment_intent_id: string | null;
+  // Payment-date gate (B): the scheduled visit date. loadRow selects
+  // all columns, so this is present at runtime; the confirmed date
+  // comes from the journal (confirmedDateOf) and wins over it.
+  visit_date: string | null;
 };
 
 export type ObligationEvent = {
@@ -271,6 +278,18 @@ export async function chargeVisit(input: {
     row.status = "report_sent";
   }
 
+  // Payment-date gate (B): a visit may be paid on or after its date,
+  // never before — on any basis (client Approve, owner charge, 24h
+  // timer). The effective date is the confirmed date when set, else
+  // the scheduled visit date. This sits AFTER the payment_pending
+  // recovery above: money that already moved is still adopted, and a
+  // live intent's confirm re-checks the gate in confirmExisting
+  // below. A fresh charge for a future-dated visit stops here.
+  const effectiveDate = effectiveVisitDate(confirmedDateOf(events), row.visit_date);
+  if (isFutureVisitDate(effectiveDate, input.nowMs)) {
+    return { outcome: "blocked", error: "report_too_early" };
+  }
+
   // TASK 1 (fix6): a waived charge is terminal. The owner closed the
   // visit without payment, so no fresh charge may be created for it —
   // on any basis, even a client approval logged before the waive. The
@@ -295,6 +314,10 @@ export async function chargeVisit(input: {
       reportSentAt: effectiveSentMs ? new Date(effectiveSentMs).toISOString() : null,
       events, issueOpenRow: row.issue_open ?? null, issueEverRow: row.issue_ever ?? null,
       bounced,
+      // Payment-date gate (B): the basis itself is date-aware, so a
+      // future-dated report never shows a charge basis even if the
+      // explicit gate above is ever bypassed.
+      visitDate: effectiveDate,
     },
     input.nowMs,
   );
@@ -404,6 +427,14 @@ export async function chargeVisit(input: {
   }
   const preCreateEv = await loadEvents(bookingId);
   if (!preCreateEv.ok) return { outcome: "unknown", error: "db_unreadable" };
+  // Payment-date gate (B), same race as the issue/waive re-checks: a
+  // reschedule to a future date between the claim and the create must
+  // stop the payment too.
+  if (isFutureVisitDate(effectiveVisitDate(confirmedDateOf(preCreateEv.events), preRow.visit_date), input.nowMs)) {
+    await releaseClaim();
+    await logEvent(row.id, bookingId, "system", "payment_blocked_by_date", { source });
+    return { outcome: "blocked", error: "report_too_early" };
+  }
   if (issueStateFrom(preCreateEv.events, preRow.issue_open ?? null, preRow.issue_ever ?? null).open) {
     await releaseClaim();
     await logEvent(row.id, bookingId, "system", "payment_blocked_by_issue", { source });
@@ -510,6 +541,12 @@ export async function chargeVisit(input: {
       if (!fev.ok) return "db_unreadable";
       const fevents = fev.events;
       if (latestReturnedAfterSent(fevents)) return "report_not_current";
+      // Payment-date gate (B): confirming a live intent is a NEW money
+      // operation — it must not pay for a visit that has not happened
+      // yet, even if the claim was made when the date was current.
+      if (isFutureVisitDate(effectiveVisitDate(confirmedDateOf(fevents), frow.visit_date), Date.now())) {
+        return "report_too_early";
+      }
       if (issueStateFrom(fevents, frow.issue_open ?? null, frow.issue_ever ?? null).open) {
         return "issue_open";
       }
@@ -531,6 +568,8 @@ export async function chargeVisit(input: {
           reportSentAt: fsentMs ? new Date(fsentMs).toISOString() : null,
           events: fevents, issueOpenRow: frow.issue_open ?? null,
           issueEverRow: frow.issue_ever ?? null, bounced: fbounced,
+          // Payment-date gate (B): the basis itself is date-aware.
+          visitDate: effectiveVisitDate(confirmedDateOf(fevents), frow.visit_date),
         },
         Date.now(),
       );

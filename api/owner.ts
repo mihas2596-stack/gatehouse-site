@@ -10,6 +10,7 @@
 import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
+import { confirmedDateOf, effectiveVisitDate } from "./_visit_date.js";
 import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 
@@ -173,6 +174,9 @@ export default async function handler(req: Req, res: Res) {
           // P02: same bounced input as the charge action — the panel
           // must not offer a timer charge the server would refuse.
           bounced: typeof visit["report_bounced"] === "boolean" ? (visit["report_bounced"] as boolean) : null,
+          // Payment-date gate (B): the panel must not offer a charge
+          // for a visit that has not happened yet.
+          visitDate: effectiveVisitDate(confirmedDateOf(journalEvents), typeof visit["visit_date"] === "string" ? (visit["visit_date"] as string) : null),
         },
         Date.now(),
       ) !== null;

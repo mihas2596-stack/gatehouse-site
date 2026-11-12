@@ -162,7 +162,7 @@ describe("B8 send_report with resolve_issue", () => {
       visit_no: 1,
       status: "report_sent",
       report_status: "sent",
-      visit_date: "2026-11-22",
+      visit_date: "2026-11-10",
       window: "morning",
       service: "Standard cleaning",
       client_name: "Casey Client",

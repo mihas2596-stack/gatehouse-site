@@ -28,7 +28,7 @@ function makeRow(overrides: Row = {}): Row {
     report_bounced: false, report_status: "sent", issue_open: false, issue_ever: false,
     cleaner_name: null, cleaner_link_issuance: "newiss", cleaner_token_hash: "hash",
     cleaner_token_expires: new Date(Date.now() + 86400000).toISOString(),
-    cleaner_link_version: "v2", visit_date: "2027-01-15", window: "midday",
+    cleaner_link_version: "v2", visit_date: "2026-11-10", window: "midday",
     service: "Standard", client_name: "Casey Client", address: "1 Test Way",
     checklist: null, created_at: hoursAgo(50),
     ...overrides,

@@ -37,7 +37,7 @@ function makeRow(overrides: Row = {}): Row {
     visit_no: 1,
     status: "requested",
     report_status: "none",
-    visit_date: "2026-11-22",
+    visit_date: "2026-11-10",
     window: "morning",
     service: "Standard cleaning",
     client_name: "Casey Client",
