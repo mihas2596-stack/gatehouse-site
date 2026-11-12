@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { Readable } from "node:stream";
+import { createHmac, createCipheriv, createHash, randomBytes } from "node:crypto";
 import cardHandler from "../../api/card-status";
 import quoteHandler from "../../api/send-contact-email";
 import cronHandler from "../../api/auto-charge";
 import ownerActionHandler from "../../api/booking-action";
 import visitHandler from "../../api/visit";
+import stripeWebhook from "../../api/stripe-webhook";
 import ownerHandler from "../../api/owner";
 
 const SECRET = "sk_test_total_audit";
@@ -73,6 +75,40 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
  it("verified Checkout cannot claim success if the booking card event was not stored",async()=>{failEventWrites=true;const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token(),session_id:"cs_test_audit"}},r as never);expect(r.code).toBe(503);expect(r.body.verified).toBe(false);expect(emails).toHaveLength(0);});
  it("verified Checkout records the exact SetupIntent card before reporting saved",async()=>{const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token(),session_id:"cs_test_audit"}},r as never);expect(r.code).toBe(200);expect(r.body.verified).toBe(true);expect(events.some(e=>e.event==="card_confirmed"&&(e.detail as Record<string,unknown>).payment_method_id==="pm_audit")).toBe(true);});
  it("a card-saved email addresses the current booking's submitted name",async()=>{await cardPost();expect(String(emails.find(e=>String(e.subject).startsWith("Card saved"))?.text)).toContain("Hi Current");});
+ it("emails the owner once when a previously saved card is selected for the request", async () => {
+  vi.stubEnv("OWNER_NOTIFICATION_EMAIL", "owner@example.com");
+  expect((await cardPost()).code).toBe(200);
+  expect((await cardPost()).code).toBe(200);
+  const notices = emails.filter(e => JSON.stringify(e.to).includes("owner@example.com"));
+  expect(notices).toHaveLength(1);
+  expect(notices[0].text).toContain("https://www.gatehousehomecleaning.com/owner");
+  expect(notices[0].html).not.toContain("owner?ol=");
+ });
+ it("notifies both sides from Stripe even when the browser never returns", async () => {
+  vi.stubEnv("STRIPE_WEBHOOK_SECRET", "webhook-test-secret");
+  vi.stubEnv("OWNER_NOTIFICATION_EMAIL", "owner@example.com");
+  const raw = JSON.stringify({
+   id: "evt_audit_saved_card", type: "checkout.session.completed", data: { object: {
+    mode: "setup", customer: "cus_audit", setup_intent: "seti_audit", client_reference_id: BID,
+    metadata: { source: "gatehouse_save_card" },
+   } },
+  });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = createHmac("sha256", "webhook-test-secret").update(`${timestamp}.${raw}`).digest("hex");
+  const req = Object.assign(Readable.from([Buffer.from(raw)]), {
+   method: "POST", headers: { "stripe-signature": `t=${timestamp},v1=${signature}` },
+  });
+  const result = response();
+  await stripeWebhook(req, result as never);
+  expect(result.code).toBe(200);
+  expect(events.some(e => e.event === "card_confirmed")).toBe(true);
+  expect(emails).toHaveLength(2);
+  const client = emails.find(e => String(e.subject).startsWith("Card saved"));
+  expect(client?.text).toContain("No action needed right now");
+  expect(client?.text).toContain("/visit?bt=");
+  expect((await cardPost()).code).toBe(200);
+  expect(emails).toHaveLength(2);
+ });
  it("a cancelled visit with an earlier confirmation does not return active booking confirmation",async()=>{row.status="cancelled";events=[{booking_id:BID,event:"visit_confirmed",detail:{date:"2026-11-16",window:"morning"},created_at:new Date().toISOString()}];const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token()}},r as never);expect((r.body.booking as Record<string,string>)?.booking_confirmed).not.toBe("1");});
  it("a paid oven extra appears in the cleaner's persistent work checklist",async()=>{
   const r=response();await quoteHandler({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"e9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-20",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",addons:{insideOven:true}}},r as never);
@@ -99,8 +135,8 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
   await quoteHandler(quoteRequest({ ...home, price: "219", test_price_window: false }), confirmed as never);
   expect(confirmed.code).toBe(200);
   expect(inserts[0]?.amount_cents).toBe(21900);
-  expect(emails).toHaveLength(2);
-  for (const email of emails) expect(JSON.stringify(email)).toContain("$219");
+  expect(emails).toHaveLength(1);
+  expect(JSON.stringify(emails[0])).toContain("$219");
  });
  it("first deep clean is explicit in the stored service and work scope",async()=>{const r=response();await quoteHandler(quoteRequest({cleaned_recently:false}),r as never);expect(r.code).toBe(200);expect(inserts[0]?.service).toMatch(/deep/i);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside oven cleaned/);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside fridge cleaned/);});
  it("untrusted extra-area and scope text stays escaped in owner email",async()=>{const r=response();await quoteHandler(quoteRequest({extra_zones:'<img src="x" onerror="bad">',scope_review:true,scope_reasons:'<a href="x">fake</a>'}),r as never);expect(r.code).toBe(200);const html=String(emails.find(e=>String(e.subject).startsWith("New quote"))?.html);expect(html).not.toContain('<img src="x"');expect(html).not.toContain('<a href="x">');expect(html).toContain('&lt;img');});
