@@ -1,4 +1,20 @@
-export default function PaymentSummary({ showCard = false }: { showCard?: boolean }) {
+export default function PaymentSummary({ showCard = false, compact = false }: { showCard?: boolean; compact?: boolean }) {
+  if (compact) {
+    return (
+      <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-5">
+        <h2 id="quote-payment-heading" className="font-heading text-2xl font-bold text-sage-foreground">When you pay</h2>
+        <p className="mt-2 text-base leading-relaxed">
+          Save your card with Stripe. Gatehouse never sees or stores your full card number.
+        </p>
+        <ul className="mt-3 list-disc space-y-2 pl-5 text-base leading-relaxed">
+          <li>After cleaning, we send your photo report. Approve it to pay.</li>
+          <li>If you neither approve nor report an issue, we charge your card automatically <strong>24 hours after we send the report</strong>.</li>
+          <li>Report an issue within those 24 hours to stop automatic payment for this visit. You approve again to pay after the issue is resolved.</li>
+        </ul>
+      </section>
+    );
+  }
+
   return <section aria-label="How payment works" className="rounded-xl border border-border bg-card p-5 sm:p-6 text-left">
     <h3 className="font-heading text-2xl font-bold">{showCard ? "Save your card. Pay after cleaning." : "When you pay"}</h3>
     <dl className="mt-5 space-y-5 text-lg leading-relaxed">
