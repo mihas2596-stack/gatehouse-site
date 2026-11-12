@@ -37,7 +37,6 @@ const fillStep2 = () => {
 const goToStep2 = () => {
   openQuote();
   fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-  fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
   fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
   expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
 };
@@ -109,11 +108,10 @@ describe("fix8 — clarity: no jargon in client-facing copy", () => {
     }
   });
 
-  it("quote step 1 has no jargon, including the unanswered-history price box", () => {
+  it("quote step 1 has no jargon in the price box", () => {
     openQuote();
     assertNoJargon();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText(/we'll confirm the details with you before your visit\./)).toBeInTheDocument();
     expect(screen.getByText(/Your price is locked in when you send your request\./)).toBeInTheDocument();
   });
 
@@ -125,23 +123,8 @@ describe("fix8 — clarity: no jargon in client-facing copy", () => {
 });
 
 describe("fix8 — clarity: step-1 validation is never silent", () => {
-  it("Continue with the cleaning-history question unanswered shows a red error and focuses the question", () => {
-    openQuote();
-    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Please answer this — it sets your first-visit price.");
-    expect(screen.queryByRole("heading", { name: "Your visit" })).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^Yes$/ }));
-    // Answering clears the error and lets the client through.
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
-  });
-
   it("Continue with an empty ZIP shows a red error under the ZIP field", () => {
     openQuote();
-    // Deep clean has no cleaning-history question, so the ZIP error is the one that fires.
     fireEvent.click(screen.getByRole("radio", { name: /^Deep/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Enter your ZIP code to see your price.");
