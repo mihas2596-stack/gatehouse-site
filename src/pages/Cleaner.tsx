@@ -57,6 +57,19 @@ type UploadState = {
   file?: File;
 };
 
+// A room is photo-complete only when it has a before photo AND an after
+// photo. A set skip_reason excuses the whole room, and so does the
+// client's do-not-photograph list for that room. The server still
+// enforces only the after-photo rule, so the client enforces the
+// before-photo half of this gate in submit() below.
+type RoomPhotoStatus = { beforeOk: boolean; afterOk: boolean; ready: boolean };
+const roomPhotoStatus = (room: ChecklistRoom, photos: Photo[], noPhotoHere: boolean): RoomPhotoStatus => {
+  const excused = Boolean(room.skip_reason) || noPhotoHere;
+  const beforeOk = excused || photos.some((p) => p.room === room.name && p.kind === "before");
+  const afterOk = excused || photos.some((p) => p.room === room.name && p.kind === "after");
+  return { beforeOk, afterOk, ready: beforeOk && afterOk };
+};
+
 
 const Cleaner = () => {
   const [searchParams] = useSearchParams();
@@ -221,6 +234,26 @@ const Cleaner = () => {
     // published report.
     if (Object.values(uploads).some((u) => u.status === "working")) {
       setSubmitError("Photos are still uploading — please wait until they finish, then press Finish again.");
+      return;
+    }
+    // Client-side before-photo gate: a room is ready only when it has a
+    // before photo (or a reason / no-photo zone) AND an after photo
+    // (or a reason / no-photo zone). Block here so the cleaner sees
+    // which photo is missing instead of sending a report with no
+    // before/after comparison. The server still checks the after-photo
+    // rule and stays the backstop.
+    const statuses = checklist.rooms.map((r) => ({
+      name: r.name,
+      ...roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)),
+    }));
+    const notReady = statuses.filter((s) => !s.ready);
+    if (notReady.length > 0) {
+      setMissing(notReady.map((s) => s.name));
+      setSubmitError(
+        notReady.some((s) => !s.beforeOk)
+          ? "Some rooms still need a before photo (or a reason they were skipped):"
+          : "Some rooms still need an after photo (or a reason they were skipped):",
+      );
       return;
     }
     setBusy(true);
@@ -454,10 +487,9 @@ const Cleaner = () => {
         {!locked && checklist.rooms.length > 0 && (
           <div className="rounded-xl border border-border bg-card p-4 mt-4">
             {(() => {
-              const ready = checklist.rooms.filter((r) => {
-                const a = photos.filter((p) => p.room === r.name && p.kind === "after").length;
-                return a > 0 || Boolean(r.skip_reason);
-              }).length;
+              const ready = checklist.rooms.filter((r) =>
+                roomPhotoStatus(r, photos, photoBlocked(v.no_photo_zones, r.name)).ready,
+              ).length;
               return (
                 <>
                   <h2 className="font-heading text-xl font-bold mb-2">2. Clean each room</h2>
@@ -482,176 +514,232 @@ const Cleaner = () => {
         {!locked &&
           checklist.rooms.map((room, roomIdx) => {
             const roomPhotos = photos.filter((p) => p.room === room.name);
-            const afterCount = roomPhotos.filter((p) => p.kind === "after").length;
+            const beforePhotos = roomPhotos.filter((p) => p.kind === "before");
+            const afterPhotos = roomPhotos.filter((p) => p.kind === "after");
+            const beforeCount = beforePhotos.length;
+            const afterCount = afterPhotos.length;
             const noPhotoHere = photoBlocked(v.no_photo_zones, room.name);
+            const { beforeOk, afterOk, ready } = roomPhotoStatus(room, photos, noPhotoHere);
+            const beforeUploads = Object.values(uploads).filter((u) => u.room === room.name && u.kind === "before");
+            const afterUploads = Object.values(uploads).filter((u) => u.room === room.name && u.kind === "after");
+            const photoThumb = (p: Photo) => (
+              <div key={p.id} className="relative">
+                {p.url ? (
+                  <img src={p.url} alt={`${room.name} ${p.kind}`} className="rounded-lg object-cover w-full h-24" />
+                ) : (
+                  <div className="rounded-lg bg-muted w-full h-24" />
+                )}
+                <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
+                  {p.kind === "before" ? "Before" : "After"}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Remove photo"
+                  className="absolute right-1 top-1 flex min-h-[44px] min-w-[44px] items-center justify-center bg-black/60 text-white rounded p-1"
+                  onClick={() => void deletePhoto(p)}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+            const uploadError = ([tempId, u]: [string, UploadState]) => (
+              <div key={tempId} className="mb-2 flex items-start gap-2 mt-2">
+                <p className="text-base text-destructive flex-1" role="alert">{u.error}</p>
+                {u.file && (
+                  <button type="button" className="min-h-[44px] px-2 text-base underline shrink-0" onClick={() => retryUpload(tempId)}>
+                    Retry
+                  </button>
+                )}
+                <button type="button" className="min-h-[44px] px-2 text-base text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
+                  Dismiss
+                </button>
+              </div>
+            );
             return (
               <details key={room.name} open={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
                 <summary className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); setOpenRoom((openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? null : room.name); }}>
                   <span className="font-heading text-xl font-bold">{room.name}</span>
                   <span className="flex flex-wrap items-center gap-2">
-                    {afterCount > 0 ? (
-                      <span className="text-base bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">Photo ready ✓</span>
-                    ) : room.skip_reason ? (
+                    {room.skip_reason ? (
                       <span className="text-base bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Reason added</span>
+                    ) : ready ? (
+                      <span className="text-base bg-green-100 text-green-900 px-2 py-0.5 rounded font-semibold">Photo ready ✓</span>
                     ) : noPhotoHere ? (
                       <span className="text-base bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">No photos — add a reason</span>
+                    ) : !beforeOk ? (
+                      <span className="text-base bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Take before photo</span>
                     ) : (
                       <span className="text-base bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">Add after photo</span>
                     )}
                     <span className="text-base text-primary underline">{(openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? "Hide" : "Open"}</span>
                   </span>
                 </summary>
-                {noPhotoHere && afterCount === 0 && (
-                  <p className="text-base text-destructive mt-2">This room is on the client&apos;s do-not-photograph list — use the reason field below instead of a photo.</p>
-                )}
-                <div className="space-y-2 mb-3 mt-2">
-                  {room.items.map((item, idx) => (
-                    <label key={idx} className="flex min-h-[44px] items-center gap-3 text-base cursor-pointer">
+
+                {/* Step 1 — before photo (or a reason). The checklist stays locked until this step is done. */}
+                <div className="mt-3">
+                  <p className="text-base font-semibold mb-2">Step 1 — Before photo</p>
+                  {noPhotoHere && (
+                    <p className="text-base text-destructive">This room is on the client&apos;s do-not-photograph list — use the reason field below instead of a photo.</p>
+                  )}
+                  {(beforePhotos.length > 0 || beforeUploads.some((u) => u.status === "working")) && (
+                    <div className="grid grid-cols-3 gap-2 mb-3 mt-2">
+                      {beforePhotos.map(photoThumb)}
+                      {beforeUploads.filter((u) => u.status === "working").map((u, i) => (
+                        <div key={i} className="rounded-lg bg-muted w-full h-24 flex items-center justify-center">
+                          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!noPhotoHere && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
+                        <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-base font-medium cursor-pointer">
+                          <Camera className="w-4 h-4" /> Take BEFORE photo
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="sr-only"
+                          disabled={busy || noPhotoHere}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void uploadPhoto(room.name, "before", f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
+                        <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-border px-3 py-2.5 text-base cursor-pointer">Gallery (before)</span>
+                        <input type="file" accept="image/*" multiple className="sr-only" disabled={busy || noPhotoHere} onChange={(e) => { for (const file of Array.from(e.target.files ?? [])) void uploadPhoto(room.name, "before", file); e.target.value = ""; }} />
+                      </label>
+                    </div>
+                  )}
+                  {Object.entries(uploads)
+                    .filter(([, u]) => u.room === room.name && u.kind === "before" && u.status === "error")
+                    .map(uploadError)}
+                  {(beforeCount === 0 || afterCount === 0) && (
+                    <div className="mt-3">
+                      <label className="block text-base font-medium mb-1" htmlFor={`skip-${room.name}`}>
+                        No photo for this room? Tell us why
+                      </label>
                       <input
-                        type="checkbox"
-                        className="mt-0.5 h-5 w-5 accent-primary"
+                        id={`skip-${room.name}`}
+                        type="text"
+                        className="w-full border border-border rounded-lg px-3 py-2 bg-background text-base"
                         disabled={busy}
-                        checked={item.done}
+                        placeholder="e.g. Room wasn't part of this visit"
+                        value={room.skip_reason ?? ""}
                         onChange={(e) => {
                           const rooms = checklist.rooms.map((r) =>
-                            r.name === room.name
-                              ? { ...r, items: r.items.map((it, i) => (i === idx ? { ...it, done: e.target.checked } : it)) }
-                              : r,
+                            r.name === room.name ? { ...r, skip_reason: e.target.value } : r,
                           );
                           saveChecklist({ ...checklist, rooms });
                         }}
                       />
-                      <span>{item.label}</span>
-                    </label>
-                  ))}
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  {roomPhotos.map((p) => (
-                    <div key={p.id} className="relative">
-                      {p.url ? (
-                        <img src={p.url} alt={`${room.name} ${p.kind}`} className="rounded-lg object-cover w-full h-24" />
-                      ) : (
-                        <div className="rounded-lg bg-muted w-full h-24" />
-                      )}
-                      <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
-                        {p.kind === "before" ? "Before" : "After"}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label="Remove photo"
-                        className="absolute right-1 top-1 flex min-h-[44px] min-w-[44px] items-center justify-center bg-black/60 text-white rounded p-1"
-                        onClick={() => void deletePhoto(p)}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                  {Object.values(uploads)
-                    .filter((u) => u.room === room.name && u.status === "working")
-                    .map((u, i) => (
-                      <div key={i} className="rounded-lg bg-muted w-full h-24 flex items-center justify-center">
-                        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                      </div>
+                {/* Step 2 — checklist, locked until the before step is done. */}
+                <div className="mt-4">
+                  <p className="text-base font-semibold mb-2">Step 2 — Clean the room</p>
+                  {!beforeOk && (
+                    <p className="text-base text-muted-foreground mb-2">
+                      {noPhotoHere ? "Add a reason in Step 1 to unlock the checklist." : "Take a before photo in Step 1 to unlock the checklist."}
+                    </p>
+                  )}
+                  <div className="space-y-2 mb-3">
+                    {room.items.map((item, idx) => (
+                      <label key={idx} className="flex min-h-[44px] items-center gap-3 text-base cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-5 w-5 accent-primary"
+                          disabled={busy || !beforeOk}
+                          checked={item.done}
+                          onChange={(e) => {
+                            const rooms = checklist.rooms.map((r) =>
+                              r.name === room.name
+                                ? { ...r, items: r.items.map((it, i) => (i === idx ? { ...it, done: e.target.checked } : it)) }
+                                : r,
+                            );
+                            saveChecklist({ ...checklist, rooms });
+                          }}
+                        />
+                        <span>{item.label}</span>
+                      </label>
                     ))}
-                </div>
-                {Object.entries(uploads)
-                  .filter(([, u]) => u.room === room.name && u.status === "error")
-                  .map(([tempId, u]) => (
-                    <div key={tempId} className="mb-2 flex items-start gap-2">
-                      <p className="text-base text-destructive flex-1" role="alert">{u.error}</p>
-                      {u.file && (
-                        <button type="button" className="min-h-[44px] px-2 text-base underline shrink-0" onClick={() => retryUpload(tempId)}>
-                          Retry
-                        </button>
-                      )}
-                      <button type="button" className="min-h-[44px] px-2 text-base text-muted-foreground shrink-0" onClick={() => dismissUpload(tempId)}>
-                        Dismiss
-                      </button>
-                    </div>
-                  ))}
-
-                {!noPhotoHere && <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
-                      <Camera className="w-4 h-4" /> Take BEFORE photo
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="sr-only"
-                      disabled={busy || noPhotoHere}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void uploadPhoto(room.name, "before", f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-base font-medium cursor-pointer">
-                      <Camera className="w-4 h-4" /> Take AFTER photo
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="sr-only"
-                      disabled={busy || noPhotoHere}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void uploadPhoto(room.name, "after", f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <label className="col-span-2 sm:col-span-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
-                    <span className="flex min-h-[44px] items-center justify-center rounded-lg border border-border px-3 py-2.5 text-base cursor-pointer">Gallery (before)</span>
-                    <input type="file" accept="image/*" multiple className="sr-only" disabled={busy || noPhotoHere} onChange={(e) => { for (const file of Array.from(e.target.files ?? [])) void uploadPhoto(room.name, "before", file); e.target.value = ""; }} />
-                  </label>
-                  <label className="col-span-2 sm:col-span-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
-                    <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
-                      <ImagePlus className="w-4 h-4" /> Gallery (after)
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="sr-only"
-                      disabled={busy || noPhotoHere}
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? []);
-                        for (const f of files) void uploadPhoto(room.name, "after", f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                </div>}
-
-                {afterCount === 0 && (
-                  <div className="mt-3">
-                    <label className="block text-base font-medium mb-1" htmlFor={`skip-${room.name}`}>
-                      No photo for this room? Tell us why
-                    </label>
-                    <input
-                      id={`skip-${room.name}`}
-                      type="text"
-                      className="w-full border border-border rounded-lg px-3 py-2 bg-background text-base"
-                      disabled={busy}
-                      placeholder="e.g. Room wasn't part of this visit"
-                      value={room.skip_reason ?? ""}
-                      onChange={(e) => {
-                        const rooms = checklist.rooms.map((r) =>
-                          r.name === room.name ? { ...r, skip_reason: e.target.value } : r,
-                        );
-                        saveChecklist({ ...checklist, rooms });
-                      }}
-                    />
                   </div>
-                )}
+                </div>
+
+                {/* Step 3 — after photo. */}
+                <div className="mt-4">
+                  <p className="text-base font-semibold mb-2">Step 3 — After photo</p>
+                  {(afterPhotos.length > 0 || afterUploads.some((u) => u.status === "working")) && (
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {afterPhotos.map(photoThumb)}
+                      {afterUploads.filter((u) => u.status === "working").map((u, i) => (
+                        <div key={i} className="rounded-lg bg-muted w-full h-24 flex items-center justify-center">
+                          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!noPhotoHere && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
+                        <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-3 py-2.5 text-base font-medium cursor-pointer">
+                          <Camera className="w-4 h-4" /> Take AFTER photo
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="sr-only"
+                          disabled={busy || noPhotoHere}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void uploadPhoto(room.name, "after", f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      <label className="flex-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
+                        <span className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-base font-medium cursor-pointer">
+                          <ImagePlus className="w-4 h-4" /> Gallery (after)
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="sr-only"
+                          disabled={busy || noPhotoHere}
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files ?? []);
+                            for (const f of files) void uploadPhoto(room.name, "after", f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {Object.entries(uploads)
+                    .filter(([, u]) => u.room === room.name && u.kind === "after" && u.status === "error")
+                    .map(uploadError)}
+                  {afterCount === 0 && !room.skip_reason && (
+                    <p className="text-base text-muted-foreground mt-2">No after photo yet — take one above, or add a reason in Step 1.</p>
+                  )}
+                </div>
+
                 {missing.includes(room.name) && (
-                  <p className="text-base text-destructive mt-2" role="alert">This room still needs a photo or a reason.</p>
+                  <p className="text-base text-destructive mt-2" role="alert">
+                    {!beforeOk
+                      ? "This room still needs a before photo (or a reason)."
+                      : !afterOk
+                        ? "This room still needs an after photo (or a reason)."
+                        : "This room still needs a photo or a reason."}
+                  </p>
                 )}
               </details>
             );
@@ -691,16 +779,20 @@ const Cleaner = () => {
               </p>
             )}
             {(() => {
-              const missingRooms = checklist.rooms.filter((r) => {
-                const a = photos.filter((p) => p.room === r.name && p.kind === "after").length;
-                return a === 0 && !r.skip_reason;
-              }).map((r) => r.name);
+              const statuses = checklist.rooms.map((r) => ({
+                name: r.name,
+                ...roomPhotoStatus(r, photos, photoBlocked(v.no_photo_zones, r.name)),
+              }));
+              const missingRooms = statuses.filter((s) => !s.ready).map((s) => s.name);
+              const missingBefore = statuses.filter((s) => !s.beforeOk).map((s) => s.name);
+              const missingAfter = statuses.filter((s) => s.beforeOk && !s.afterOk).map((s) => s.name);
               const uploading = Object.values(uploads).filter((u) => u.status === "working").length;
               return (
                 <div className="rounded-xl border border-border bg-card p-4 mt-4 text-base" role="status">
                   <h2 className="font-heading text-xl font-bold mb-2">3. Finish your job</h2>
                   <p>Rooms ready: {checklist.rooms.length - missingRooms.length} of {checklist.rooms.length}</p>
-                  {missingRooms.length > 0 && <p className="text-destructive">Still need a photo or a reason: {missingRooms.join(", ")}</p>}
+                  {missingBefore.length > 0 && <p className="text-destructive">Still need a before photo (or a reason): {missingBefore.join(", ")}</p>}
+                  {missingAfter.length > 0 && <p className="text-destructive">Still need an after photo (or a reason): {missingAfter.join(", ")}</p>}
                   {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
                   {missingRooms.length === 0 && uploading === 0 && <p>Everything is ready — Finish will send the report.</p>}
                 </div>

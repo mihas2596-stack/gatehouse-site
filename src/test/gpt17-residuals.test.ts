@@ -293,7 +293,9 @@ function baseCustomer(over: Partial<Record<string, string>> = {}): Cust {
 
 function basePhotos(): Row[] {
   return [
+    { id: "ph0", visit_id: ROW_ID, room: "Kitchen", kind: "before", storage_path: "r/kitchen-before.jpg" },
     { id: "ph1", visit_id: ROW_ID, room: "Kitchen", kind: "after", storage_path: "r/kitchen-after.jpg" },
+    { id: "ph3", visit_id: ROW_ID, room: "Bathrooms", kind: "before", storage_path: "r/bath-before.jpg" },
     { id: "ph2", visit_id: ROW_ID, room: "Bathrooms", kind: "after", storage_path: "r/bath-after.jpg" },
   ];
 }

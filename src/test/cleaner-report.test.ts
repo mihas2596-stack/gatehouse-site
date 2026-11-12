@@ -1,7 +1,9 @@
 // @vitest-environment node
-// Cleaner report rules: a room is complete only with an AFTER photo or a
-// documented exception (skip reason). A before photo alone never completes
-// a room, and the checklist the cleaner sends is sanitized server-side.
+// Cleaner report rules: a room is complete only with a BEFORE photo AND an
+// AFTER photo, or a documented exception (skip reason) or the room being on
+// the client's do-not-photograph list. A before photo alone never completes
+// a room, and neither does an after photo alone. The checklist the cleaner
+// sends is sanitized server-side.
 import { describe, it, expect } from "vitest";
 import { missingRooms, sanitizeChecklist } from "../../api/cleaner";
 
@@ -14,20 +16,37 @@ const checklist = {
 };
 
 describe("missingRooms", () => {
-  it("requires an after photo — a before photo alone does not complete a room", () => {
+  it("requires both a before and an after photo", () => {
     const missing = missingRooms(checklist, [
       { room: "Kitchen", kind: "before" },
+      { room: "Kitchen", kind: "after" },
+      { room: "Bathrooms", kind: "after" },
+    ]);
+    expect(missing).toEqual(["Bathrooms"]);
+  });
+
+  it("a before photo alone does not complete a room", () => {
+    const missing = missingRooms(checklist, [
+      { room: "Kitchen", kind: "before" },
+      { room: "Bathrooms", kind: "before" },
       { room: "Bathrooms", kind: "after" },
     ]);
     expect(missing).toEqual(["Kitchen"]);
   });
 
-  it("accepts a documented exception instead of a photo", () => {
+  it("accepts a documented exception instead of photos", () => {
     const missing = missingRooms(checklist, [
+      { room: "Kitchen", kind: "before" },
       { room: "Kitchen", kind: "after" },
+      { room: "Bathrooms", kind: "before" },
       { room: "Bathrooms", kind: "after" },
     ]);
     expect(missing).toEqual([]);
+  });
+
+  it("excuses rooms on the do-not-photograph list", () => {
+    const missing = missingRooms(checklist, [], "Kitchen");
+    expect(missing).toEqual(["Bathrooms"]);
   });
 
   it("blocks every room with neither photo nor reason", () => {

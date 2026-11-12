@@ -41,7 +41,7 @@ describe("checklist sanitizing (server never trusts the cleaner payload)", () =>
   });
 });
 
-describe("submit gate: every room needs an after-photo or a skip reason", () => {
+describe("submit gate: every room needs a before and an after photo, or a skip reason", () => {
   const checklist = {
     rooms: [
       { name: "Kitchen", items: [] },
@@ -50,15 +50,20 @@ describe("submit gate: every room needs an after-photo or a skip reason", () => 
     ],
   };
   it("blocks rooms with neither photo nor reason", () => {
-    expect(missingRooms(checklist, [{ room: "Kitchen", kind: "after" }])).toEqual(["Bedroom"]);
+    expect(missingRooms(checklist, [{ room: "Kitchen", kind: "after" }])).toEqual(["Kitchen", "Bedroom"]);
   });
   it("a before-photo alone does not satisfy a room", () => {
     expect(missingRooms(checklist, [{ room: "Kitchen", kind: "before" }])).toEqual(["Kitchen", "Bedroom"]);
   });
+  it("an after-photo alone does not satisfy a room", () => {
+    expect(missingRooms(checklist, [{ room: "Kitchen", kind: "after" }])).toEqual(["Kitchen", "Bedroom"]);
+  });
   it("passes when all rooms are covered", () => {
     expect(
       missingRooms(checklist, [
+        { room: "Kitchen", kind: "before" },
         { room: "Kitchen", kind: "after" },
+        { room: "Bedroom", kind: "before" },
         { room: "Bedroom", kind: "after" },
       ]),
     ).toEqual([]);

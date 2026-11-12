@@ -77,6 +77,9 @@ describe("owner login and visit switching", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
     fireEvent.click(screen.getByRole("button", { name: /Casey Alpha/ }));
+    // The copy control lives in the card-level "More actions"
+    // (the first one; the Payment section has its own below).
+    fireEvent.click(screen.getAllByText("More actions")[0]);
     fireEvent.click(await screen.findByRole("button", { name: "Copy client link (visit + payment)" }));
     fireEvent.click(screen.getByRole("button", { name: "← Back to visits" }));
     fireEvent.click(screen.getByRole("button", { name: /Casey Beta/ }));
@@ -102,9 +105,12 @@ describe("owner login and visit switching", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
     fireEvent.click(await screen.findByRole("button", { name: /Casey Alpha/ }));
+    // The issue control lives in the card-level "More actions".
+    fireEvent.click(screen.getAllByText("More actions")[0]);
     fireEvent.change(await screen.findByLabelText("Issue reported by email"), { target: { value: "Alpha's complaint" } });
     fireEvent.click(screen.getByRole("button", { name: "← Back to visits" }));
     fireEvent.click(screen.getByRole("button", { name: /Casey Beta/ }));
+    fireEvent.click(screen.getAllByText("More actions")[0]);
     expect(await screen.findByLabelText("Issue reported by email")).toHaveValue("");
   });
 

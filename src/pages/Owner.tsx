@@ -793,7 +793,10 @@ const Owner = () => {
       const copied = await copyText(url);
       if (!isCurrentVisit(visitId, epoch)) return;
       if (copied) {
-        setClientCopyStatus("Client link copied.");
+        // No persistent success notice: the copy control lives
+        // in More actions, and the tap itself is the
+        // confirmation. Failures still surface below.
+        setClientCopyStatus("");
       } else {
         setManualCopy({ text: url, label: "Client link — copy it manually:", owner: "client" });
         setClientCopyStatus("Copy failed — copy the link manually below.");
@@ -1300,6 +1303,13 @@ const Owner = () => {
             const delta = noon - Date.now();
             return delta > 0 && delta < 48 * 3600 * 1000;
           })();
+          // Cancel gating — mirrors the server owner_cancel rule
+          // exactly: the server refuses with 409 when the visit
+          // is already cancelled/paid, or when the report was
+          // already sent (report_status === "sent" or
+          // report_sent_at set). A submitted (not yet sent)
+          // report does NOT block a cancel.
+          const canCancel = v.status !== "cancelled" && v.status !== "paid" && v.report_status !== "sent" && !v.report_sent_at;
 
           // Load the current link, then run fn with it; failures surface
           // in the cleaner status line (never a false "Copied").
@@ -1354,44 +1364,21 @@ const Owner = () => {
                     <li>Cleaner: {v.cleaner_name ?? "not assigned"}</li>
                     <li>Visit confirmed: {v.visit_confirmed ? "yes" : "not yet"}</li>
                     <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : stripeState === "card_ready" ? "saved" : stripeState ? stripeLabel(stripeState) : "not saved yet"}</li>
-                    <li>Entry: {v.entry_agreed ? "settled" : "not arranged yet"}</li>
+                    <li>
+                      Entry: {entryStatusText(v)}
+                      {v.entry_agreed ? " · settled" : ""}
+                      {v.entry?.has_secret ? " · private entry details saved" : ""}
+                    </li>
+                    {(v.entry_choice?.notes ?? v.entry_notes) && (
+                      <li>Parking/building notes: {v.entry_choice?.notes ?? v.entry_notes}</li>
+                    )}
+                    {v.entry?.reminder_sent && <li>Entry reminder sent.</li>}
                     <li>Client phone: {v.client_phone ?? "missing"}</li>
                   </ul>
+                  {entryNeedsAttention(v) && (
+                    <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3 mt-2" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
+                  )}
                 </div>
-                {/* N7: also before any report is sent — a client who
-                    emails "don't come" while the visit is still
-                    requested/confirmed needs a recorded issue too, or
-                    the future automatic charge has nothing blocking it. */}
-                {!v.issue_open && v.status !== "paid" && v.status !== "cancelled" && (v.report_status === "sent" || v.report_status === "submitted" || v.status === "requested" || v.status === "confirmed") && (
-                  <div className="mt-3">
-                    <div className="flex flex-wrap gap-2">
-                      <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What did the client report by email? (optional)" value={issueReason} onChange={(e) => setIssueReason(e.target.value)} aria-label="Issue reported by email" />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={acting !== ""}
-                        onClick={() => {
-                          if (!window.confirm((v.report_status === "sent" || v.report_status === "submitted")
-                            ? "Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email."
-                            : "Open an issue for this visit? It blocks any future automatic charge for this visit — including after the report is sent — and never resumes on its own, and the client gets a confirmation email.")) return;
-                          void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
-                            setIssueReason("");
-                            setActionMsg(j["already_open"] === true
-                              ? "Issue was already open — nothing changed, no second email sent."
-                              : j["email_sent"] === true
-                                ? "Issue opened — automatic charging is blocked for this visit. The confirmation email was accepted for sending; delivery is not yet confirmed."
-                                : "Issue opened — automatic charging is blocked for this visit, but the confirmation email could not be sent — contact the client manually.");
-                          });
-                        }}
-                      >
-                        Open issue from email
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">{(v.report_status === "sent" || v.report_status === "submitted")
-                      ? "Use this when the client reported a problem by email instead of the report page. It blocks automatic charging at once — an email sitting in the inbox alone does not."
-                      : "Use this when the client reported a problem by email before the report is sent. It blocks any future automatic charge for this visit — an email sitting in the inbox alone does not."}</p>
-                  </div>
-                )}
                 {v.issue_open && (
                   <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
                     {openIssue && (
@@ -1466,11 +1453,8 @@ const Owner = () => {
                 )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <a className="text-base underline break-all" href={`mailto:${v.client_email ?? ""}`}>{v.client_email ?? ""}</a>
-                  <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
-                    Copy client link (visit + payment)
-                  </Button>
                 </div>
-                <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} /></div>
+                <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} compact /></div>
                 <details className="mt-3" key={`contact:${v.id}:${v.client_phone ?? ""}`}>
                   <summary className="min-h-[44px] cursor-pointer text-base underline">{v.client_phone ? "Update client phone" : "Add client phone"}</summary>
                   <form className="flex flex-wrap gap-2 mt-2" onSubmit={(e) => {
@@ -1482,14 +1466,6 @@ const Owner = () => {
                     <Button type="submit" variant="outline" disabled={acting !== ""}>Save phone</Button>
                   </form>
                 </details>
-                <p className="text-xs text-muted-foreground mt-1">For the client — dates, report, payment. Never send this to the cleaner.</p>
-                {clientCopyStatus && <p className="text-sm mt-1" role="status">{clientCopyStatus}</p>}
-                {manualCopy?.owner === "client" && (
-                  <div className="mt-1">
-                    <p className="text-xs text-muted-foreground">{manualCopy.label}</p>
-                    <input readOnly className="w-full text-xs bg-muted rounded p-2 mt-1" value={manualCopy.text} onFocus={(e) => e.target.select()} aria-label="Client link (select and copy if the button does not work)" />
-                  </div>
-                )}
                 {v.status === "requested" && !v.request_approved && (
                   <div className="mt-3">
                     <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Approve request", { action: "approve_request", booking_id: v.booking_id })}>
@@ -1501,9 +1477,64 @@ const Owner = () => {
                 {v.request_approved && v.status === "requested" && (
                   <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
                 )}
+                {/* Card-level More actions — the rarely-used
+                    controls live here so the card leads with the
+                    next step: copy the client link, open an issue
+                    from email, cancel, and delete the visit. The
+                    Payment section's own "More actions" below is
+                    unchanged. */}
+                <details className="mt-3">
+                  <summary className="text-sm underline text-muted-foreground cursor-pointer">More actions</summary>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <Button variant="outline" size="sm" onClick={() => void copyClientLink()}>
+                        Copy client link (visit + payment)
+                      </Button>
+                      {clientCopyStatus && <p className="text-sm mt-1" role="status">{clientCopyStatus}</p>}
+                      {manualCopy?.owner === "client" && (
+                        <div className="mt-1">
+                          <p className="text-xs text-muted-foreground">{manualCopy.label}</p>
+                          <input readOnly className="w-full text-xs bg-muted rounded p-2 mt-1" value={manualCopy.text} onFocus={(e) => e.target.select()} aria-label="Client link (select and copy if the button does not work)" />
+                        </div>
+                      )}
+                    </div>
+                {/* N7: also before any report is sent — a client who
+                    emails "don't come" while the visit is still
+                    requested/confirmed needs a recorded issue too, or
+                    the future automatic charge has nothing blocking it. */}
+                {!v.issue_open && v.status !== "paid" && v.status !== "cancelled" && (v.report_status === "sent" || v.report_status === "submitted" || v.status === "requested" || v.status === "confirmed") && (
+                  <div className="mt-3">
+                    <div className="flex flex-wrap gap-2">
+                      <input type="text" className="border border-border rounded-lg px-3 py-2 bg-background text-sm flex-1 min-w-52" placeholder="What did the client report by email? (optional)" value={issueReason} onChange={(e) => setIssueReason(e.target.value)} aria-label="Issue reported by email" />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acting !== ""}
+                        onClick={() => {
+                          if (!window.confirm((v.report_status === "sent" || v.report_status === "submitted")
+                            ? "Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email."
+                            : "Open an issue for this visit? It blocks any future automatic charge for this visit — including after the report is sent — and never resumes on its own, and the client gets a confirmation email.")) return;
+                          void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
+                            setIssueReason("");
+                            setActionMsg(j["already_open"] === true
+                              ? "Issue was already open — nothing changed, no second email sent."
+                              : j["email_sent"] === true
+                                ? "Issue opened — automatic charging is blocked for this visit. The confirmation email was accepted for sending; delivery is not yet confirmed."
+                                : "Issue opened — automatic charging is blocked for this visit, but the confirmation email could not be sent — contact the client manually.");
+                          });
+                        }}
+                      >
+                        Open issue from email
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{(v.report_status === "sent" || v.report_status === "submitted")
+                      ? "Use this when the client reported a problem by email instead of the report page. It blocks automatic charging at once — an email sitting in the inbox alone does not."
+                      : "Use this when the client reported a problem by email before the report is sent. It blocks any future automatic charge for this visit — an email sitting in the inbox alone does not."}</p>
+                  </div>
+                )}
                 {/* C5: owner cancel — the server refuses it once the
                     report is sent, and computes the $25 late fee. */}
-                {v.status !== "cancelled" && v.status !== "paid" && (
+                {canCancel && (
                   <div className="mt-3">
                     <Button
                       variant="outline"
@@ -1523,7 +1554,6 @@ const Owner = () => {
                     >
                       Cancel visit
                     </Button>
-                    <p className="text-xs text-muted-foreground mt-1">Cancelling is not possible after the report is sent — the server refuses it.</p>
                   </div>
                 )}
                 {/* Delete — every visit, any status: the server removes
@@ -1540,9 +1570,15 @@ const Owner = () => {
                   </Button>
                   <p className="text-xs text-muted-foreground mt-1">Deletes the visit, its activity record, report photos and entry arrangement. Payments and Stripe records stay as they are. This cannot be undone.</p>
                 </div>
+                  </div>
+                </details>
               </section>
 
-              {/* B. Cleaner — assignment and link in one block */}
+              {/* B. Cleaner — assignment and link in one block. Hidden
+                  when no cleaner is assigned yet: the Schedule block
+                  below already shows the cleaner state and the
+                  dropdown, so there is nothing to show here. */}
+              {(isTerminal || assigned || cleanerChanging) && (
               <section id="block-cleaner" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Cleaner</h3>
                 {isTerminal ? (
@@ -1601,13 +1637,6 @@ const Owner = () => {
                         </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">Changing the cleaner replaces the access link — the old link stops working. The client is emailed about the change.</p>
-                    </div>
-                  ) : !assigned ? (
-                    <div className="space-y-2">
-                      <p className="text-sm text-muted-foreground">No cleaner assigned yet. Choose one in the Schedule block below, then Assign &amp; confirm the visit.</p>
-                      <Button variant="outline" onClick={() => document.getElementById("block-schedule")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-                        Go to Schedule
-                      </Button>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1750,6 +1779,7 @@ const Owner = () => {
                 </>
                 )}
               </section>
+              )}
 
               {/* C. Schedule — confirming the visit is the owner's explicit action */}
               <section id="block-schedule" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
@@ -1866,27 +1896,6 @@ const Owner = () => {
                       <Button variant="outline" size="sm" onClick={() => void previewClientView()}>Preview client view (view only)</Button>
                     </div>
                   </div>
-                )}
-              </section>
-
-              {/* Entry — quote-time choice, saved arrangement, action needed */}
-              <section id="block-entry" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
-                <h3 className="font-semibold mb-3">Entry</h3>
-                <p className="text-sm mb-2">Booking choice: {entryStatusText(v)}</p>
-                {(v.entry_choice?.notes ?? v.entry_notes) && (
-                  <p className="text-sm mb-2">Parking/building notes: {v.entry_choice?.notes ?? v.entry_notes}</p>
-                )}
-                {v.entry?.method && (
-                  <p className="text-sm mb-2">Saved arrangement: {v.entry.method === "home" ? "Client will be home" : v.entry.method === "someone" ? "Someone else will meet the cleaner" : "Arrange entry before the visit"}{v.entry.has_secret ? " · private entry details saved" : " · no private details yet"}</p>
-                )}
-                {v.entry?.reminder_sent && (
-                  <p className="text-sm text-muted-foreground mb-2">Entry reminder sent.</p>
-                )}
-                {entryNeedsAttention(v) && (
-                  <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
-                )}
-                {v.entry_agreed && (
-                  <p className="text-sm text-muted-foreground">Entry settled.</p>
                 )}
               </section>
 

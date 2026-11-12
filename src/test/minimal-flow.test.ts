@@ -246,7 +246,9 @@ describe("minimal flow", () => {
 
   const completePhotos = () => {
     photos = [
+      { id: "p0", visit_id: VISIT_ID, room: "Kitchen", kind: "before", storage_path: "visits/x/kitchen/b.jpg" },
       { id: "p1", visit_id: VISIT_ID, room: "Kitchen", kind: "after", storage_path: "visits/x/kitchen/a.jpg" },
+      { id: "p3", visit_id: VISIT_ID, room: "Bathrooms", kind: "before", storage_path: "visits/x/bath/b.jpg" },
       { id: "p2", visit_id: VISIT_ID, room: "Bathrooms", kind: "after", storage_path: "visits/x/bath/a.jpg" },
     ];
     rows[0]["report_status"] = "draft";

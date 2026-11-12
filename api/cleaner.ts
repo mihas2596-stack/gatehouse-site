@@ -180,15 +180,20 @@ async function resolveVisit(
   return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" };
 }
 
-/** Rooms that still block submission: no after-photo and no skip reason. */
+/** Rooms that still block submission: a room needs a before photo AND an after
+ * photo, unless it has a skip reason or is on the client's do-not-photograph
+ * list. Mirrors the cleaner UI's per-room step rule. */
 export function missingRooms(
   checklist: Checklist,
   photos: { room: string; kind: string }[],
+  noPhotoZones: string | null = null,
 ): string[] {
   const missing: string[] = [];
   for (const room of checklist.rooms ?? []) {
-    const hasPhoto = photos.some((ph) => ph.room === room.name && ph.kind === "after");
-    if (!hasPhoto && !room.skip_reason) missing.push(room.name);
+    if (room.skip_reason || photoBlocked(noPhotoZones, room.name)) continue;
+    const hasBefore = photos.some((ph) => ph.room === room.name && ph.kind === "before");
+    const hasAfter = photos.some((ph) => ph.room === room.name && ph.kind === "after");
+    if (!hasBefore || !hasAfter) missing.push(room.name);
   }
   return missing;
 }
@@ -701,7 +706,7 @@ export default async function handler(req: Req, res: Res) {
       }
       const checklist = sanitizeChecklist(body["checklist"]) ?? visit.checklist;
       const photos = await photosOf(visit.id);
-      const missing = missingRooms(checklist, photos);
+      const missing = missingRooms(checklist, photos, visit.no_photo_zones);
       if (missing.length > 0) {
         return json(400, { ok: false, error: "rooms_incomplete", missing });
       }

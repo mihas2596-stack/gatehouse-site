@@ -13,7 +13,10 @@ const view = () => ({
     { name: "Kitchen", items: [{ label: "Counters wiped", done: false }] },
     { name: "Bedrooms", items: [{ label: "Bed made", done: false }], skip_reason: "Client requested no photos" },
   ] },
-  photos: [{ id: "photo-1", room: "Kitchen", kind: "after", url: "/fixture.jpg", note: null, created_at: "2026-11-03" }],
+  photos: [
+    { id: "photo-0", room: "Kitchen", kind: "before", url: "/fixture.jpg", note: null, created_at: "2026-11-03" },
+    { id: "photo-1", room: "Kitchen", kind: "after", url: "/fixture.jpg", note: null, created_at: "2026-11-03" },
+  ],
 });
 let posts: Record<string, unknown>[];
 let holdSave: ((ok: boolean) => void) | null;
