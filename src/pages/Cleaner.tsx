@@ -98,6 +98,9 @@ const Cleaner = () => {
   // the tab becomes visible again, so a stale entry/date never sits
   // unnoticed.
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  // Whether a load has ever succeeded. A refetch that fails on the
+  // network must not wipe a loaded page (see load()).
+  const dataLoaded = useRef(false);
 
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -126,9 +129,19 @@ const Cleaner = () => {
       const r = await fetch(`/api/cleaner?${qs}`);
       const j = (await r.json()) as CleanerView;
       if (!j.ok) {
-        setError(j.error ?? "load_failed");
+        const err = j.error ?? "load_failed";
+        // A refetch that fails must not wipe a loaded page: the cleaner
+        // keeps working on the data they have (the "Updated …" stamp
+        // shows it is stale). Only a dead link or a broken setup
+        // replaces the form with the error page — and only those, never
+        // a transient load failure, which used to show the misleading
+        // "This link doesn't work" for a mere network hiccup.
+        if (!dataLoaded.current || err === "link_expired" || err === "invalid_link" || err === "db_not_configured") {
+          setError(err);
+        }
         return;
       }
+      dataLoaded.current = true;
       setData(j);
       setLastUpdated(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }));
       // Photo uploads refresh the page data too. A response started before
@@ -136,9 +149,14 @@ const Cleaner = () => {
       if (!saver.isDirty() && saver.revision() === startedAtRevision) {
         setChecklist(j.checklist ?? { rooms: [] });
       }
+      // The server list replaces any optimistically shown photo (same id,
+      // signed URL) — free its local preview URL now.
+      for (const u of optimisticBlobUrls.current) URL.revokeObjectURL(u);
+      optimisticBlobUrls.current.clear();
       setPhotos(j.photos ?? []);
     } catch {
-      setError("load_failed");
+      // Same as above: a failed refetch never wipes a loaded page.
+      if (!dataLoaded.current) setError("load_failed");
     }
   }, [ct, searchParams, saver]);
 
@@ -168,6 +186,10 @@ const Cleaner = () => {
   const retrySave = () => { void saver.flush(); };
 
   const seenFiles = useRef<Set<string>>(new Set());
+  // Blob URLs of optimistically shown photos (a photo whose register
+  // succeeded but whose refetch has not landed yet). Revoked as soon as
+  // the server list replaces them, so they never leak past the session.
+  const optimisticBlobUrls = useRef<Set<string>>(new Set());
 
   const uploadPhoto = async (room: string, kind: "after" | "before", file: File) => {
     if (photoBlocked(data?.visit.no_photo_zones, room)) return;
@@ -211,6 +233,29 @@ const Cleaner = () => {
         throw new Error("The photo uploaded but couldn't be saved. Please retry.");
       }
       seenFiles.current.add(signature);
+      // Optimistic: show the photo at once, with the real id from the
+      // register response, so the room reads as photo-complete even if
+      // the refetch below fails (flaky connection). Without this, a
+      // successful upload followed by a failed refetch leaves the page
+      // showing "no photo" while a re-upload hits the duplicate guard —
+      // a dead end for the cleaner. The refetch replaces this entry
+      // with the server row (same id, signed URL) when it lands.
+      const photoId = typeof reg["photo_id"] === "string" ? (reg["photo_id"] as string) : null;
+      if (photoId) {
+        // createObjectURL is universal in browsers; guard it so a
+        // non-browser runtime (tests) never turns a saved photo into
+        // an error — the refetch below is the fallback there.
+        try {
+          const previewUrl = URL.createObjectURL(blob);
+          optimisticBlobUrls.current.add(previewUrl);
+          setPhotos((prev) => {
+            if (prev.some((p) => p.id === photoId)) return prev;
+            return [...prev, { id: photoId, room, kind, note: null, created_at: new Date().toISOString(), url: previewUrl }];
+          });
+        } catch {
+          // No local preview available; the refetch below still shows it.
+        }
+      }
       await load();
     } catch (err) {
       setUploads((u) => ({
@@ -250,7 +295,13 @@ const Cleaner = () => {
 
   const deletePhoto = async (photo: Photo) => {
     const r = await post({ action: "photo_delete", photo_id: photo.id });
-    if (r.ok) setPhotos((list) => list.filter((p) => p.id !== photo.id));
+    if (r.ok) {
+      if (photo.url && photo.url.startsWith("blob:")) {
+        URL.revokeObjectURL(photo.url);
+        optimisticBlobUrls.current.delete(photo.url);
+      }
+      setPhotos((list) => list.filter((p) => p.id !== photo.id));
+    }
   };
 
   const submit = async () => {

@@ -25,16 +25,22 @@ const makeView = (overrides: {
 
 let fixture = makeView();
 let posts: Record<string, unknown>[];
+// Once true, the refetch GET fails — simulates a flaky connection after
+// an upload, so a test can prove the photo still shows optimistically.
+let refetchShouldFail = false;
 
 beforeEach(() => {
   posts = [];
   fixture = makeView();
+  refetchShouldFail = false;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).startsWith("/api/cleaner?") && !init?.method) {
+      if (refetchShouldFail) return { ok: true, json: async () => ({ ok: false, error: "load_failed" }) };
       return { ok: true, json: async () => fixture };
     }
     if (String(url) === "https://upload.example.com/fixture") return { ok: true };
     const body = JSON.parse(String(init?.body ?? "{}")); posts.push(body);
+    if (body.action === "photo_register") { refetchShouldFail = true; return { ok: true, json: async () => ({ ok: true, photo_id: "photo-new" }) }; }
     return { ok: true, json: async () => ({ ok: true, upload_url: "https://upload.example.com/fixture", storage_path: "visits/test/kitchen/fixture.jpg" }) };
   }));
 });
@@ -119,5 +125,38 @@ describe("cleaner before-photo flow", () => {
     expect(screen.getByText("Photo ready ✓")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
     await waitFor(() => expect(posts.filter((p) => p.action === "submit")).toHaveLength(1));
+  });
+
+  it("an uploaded before photo shows immediately and unlocks the checklist even when the refetch fails", async () => {
+    // jsdom has no createObjectURL; stub it so the optimistic path runs.
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", { value: () => "blob:test-kitchen-before", configurable: true });
+    Object.defineProperty(URL, "revokeObjectURL", { value: () => {}, configurable: true });
+    try {
+      const { container } = open();
+      const checkbox = await screen.findByRole("checkbox", { name: "Counters wiped" });
+      expect(checkbox).toBeDisabled();
+      // Upload via the "Take BEFORE photo" (camera) input.
+      const input = container.querySelector('input[capture="environment"]') as HTMLInputElement;
+      expect(input).not.toBeNull();
+      const file = new File(["fixture"], "photo.jpg", { type: "image/jpeg" });
+      fireEvent.change(input, { target: { files: [file] } });
+      // The register succeeded but the refetch fails (refetchShouldFail
+      // is set by the register mock) — the photo must still show, from
+      // the optimistic entry, and the checklist must unlock.
+      await waitFor(() => expect(screen.getByAltText("Kitchen before")).toBeInTheDocument());
+      expect(checkbox).toBeEnabled();
+      // The room badge moved on from "Take before photo" to the after
+      // step — the before step reads as done from the optimistic photo.
+      expect(screen.getByText("Add after photo")).toBeInTheDocument();
+      expect(screen.queryByText("Take before photo")).not.toBeInTheDocument();
+      expect(posts.filter((p) => p.action === "photo_register")).toHaveLength(1);
+      // No duplicate-guard error for the photo that just saved.
+      expect(screen.queryByText(/same photo you already added/)).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(URL, "createObjectURL", { value: origCreate, configurable: true });
+      Object.defineProperty(URL, "revokeObjectURL", { value: origRevoke, configurable: true });
+    }
   });
 });
