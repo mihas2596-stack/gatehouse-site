@@ -23,7 +23,7 @@ import { emailDocument } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
-import { issueStateFrom, latestIssueDecision, timerBlockReason } from "./_payment_basis.js";
+import { issueStateFrom, everWaivedDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
@@ -42,6 +42,10 @@ type BookingRow = {
   access_notes: string | null; no_photo_zones: string | null;
   report_status?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
+  // Waive durability (fix round 2): the `charge_waived` column
+  // (migration 20261112_charge_waived). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "not waived".
+  charge_waived?: boolean | null;
   visit_date?: string | null; window?: string | null;
   entry_method?: string | null; entry_detail?: string | null; entry_notes?: string | null;
   cleaner_id?: string | null;
@@ -246,7 +250,10 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
     // the latest issue decision lives in the journal, and the waive
     // mirror writes gh_state "approved" into shared metadata, so the
     // flag has to come from the journal, not from gh_state.
-    gh_charge_waived: latestIssueDecision(events)?.decision === "waived" ? "1" : "",
+    // Ever-waived (fix round 2), not latest-decision, plus the
+    // durable row flag: a waive followed by a new complaint and a
+    // request for payment must still read as waived.
+    gh_charge_waived: everWaivedDecision(events) || row.charge_waived === true ? "1" : "",
   };
 }
 // Write this booking's DB/journal state into the shared customer's
@@ -475,7 +482,7 @@ async function findCustomerByBooking(
 export type VisitState =
   | "card_needed" | "card_failed" | "awaiting_confirmation" | "confirmed"
   | "date_declined" | "report_sent" | "issue_open" | "approved" | "paid"
-  | "payment_issue" | "payment_unknown" | "cancelled" | "date_passed" | "waived";
+  | "payment_issue" | "payment_unknown" | "cancelled" | "date_passed" | "waived" | "refunded";
 
 // B6: a visit whose date is already past is its own state. Without it a
 // stale requested/confirmed booking kept asking the client to save a card
@@ -492,6 +499,10 @@ export function deriveVisitState(meta: Record<string, string>, requestedDate = "
   const state = meta["gh_state"] ?? "";
   if (state === "cancelled") return "cancelled";
   if (state === "paid") return "paid";
+  // Fix round 2: a refunded visit is its own state — it must never
+  // fall through to "report_sent" (which would show "Card we'll
+  // charge" for a visit whose payment was returned).
+  if (state === "refunded") return "refunded";
   // A waived visit is closed without a charge — it must never surface
   // as "approved" (the waive mirror writes gh_state "approved") or as
   // "report_sent" (which would show "Card we'll charge"). Checked

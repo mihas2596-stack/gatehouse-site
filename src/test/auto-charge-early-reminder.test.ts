@@ -232,3 +232,53 @@ describe("early reminder (4h after report)", () => {
     expect(resendCalls).toHaveLength(0);
   });
 });
+
+describe("fix round 2: reminder date gate (no reminder before the visit date)", () => {
+  it("no early reminder when the visit date is in the future", async () => {
+    store = [cust({ gh_visit_date: "2027-01-15" })];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(res.body["reminded"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+    expect(dbEvents.some((e) => e["event"] === "early_reminder_sent")).toBe(false);
+  });
+
+  it("early reminder fires when the visit date is in the past (control)", async () => {
+    store = [cust({ gh_visit_date: "2026-11-10" })];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(1);
+    expect(subjects()).toEqual(["Your cleaning report is ready — a quick look"]);
+  });
+
+  it("a future confirmed date blocks the reminder even when the scheduled date is past", async () => {
+    store = [cust({ gh_visit_date: "2026-11-10", gh_confirmed_date: "2027-01-15" })];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+  });
+
+  it("no 20h reminder when the visit date is in the future", async () => {
+    store = [cust({ gh_report_sent_at: hoursAgo(25), gh_visit_date: "2027-01-15" })];
+    dbRows = [visitRow(hoursAgo(25))];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(res.body["reminded"]).toBe(0);
+    expect(res.body["charged"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+  });
+
+  it("20h reminder fires when the visit date is in the past (control)", async () => {
+    store = [cust({ gh_report_sent_at: hoursAgo(25), gh_visit_date: "2026-11-10" })];
+    dbRows = [visitRow(hoursAgo(25))];
+    const res = response();
+    await (autoChargeHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(cronReq(), res);
+    expect(res.body["early_reminded"]).toBe(0);
+    expect(res.body["reminded"]).toBe(1);
+    expect(res.body["charged"]).toBe(0);
+    expect(subjects()).toEqual(["Reminder: your cleaning report is waiting"]);
+  });
+});

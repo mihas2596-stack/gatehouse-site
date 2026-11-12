@@ -159,7 +159,10 @@ describe("P04: the payment version comes from the journal, never the request", (
     const r = await call({ action: "charge", amount_cents: 20000, report_version: 999 });
     expect(r.code).toBe(200);
     expect(piCalls).toHaveLength(1);
-    expect(piCalls[0].idem).toBe(`charge_${BID}_v2`);
+    // Fix round 2: the create key is bound to the payment method, so
+    // it is `charge_<booking>_v<version>_<12 hex>` — the version is
+    // still v2 from the journal (not the caller-supplied 999).
+    expect(piCalls[0].idem).toMatch(new RegExp(`^charge_${BID}_v2_[0-9a-f]{12}$`));
     expect(piCalls[0].amount).toBe("20000");
   });
 

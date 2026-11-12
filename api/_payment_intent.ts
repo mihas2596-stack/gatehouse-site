@@ -269,6 +269,26 @@ export async function confirmIntent(
   return { ok: res.ok, status: res.status, data };
 }
 
+// Create-attempt key (fix round 2): the PaymentIntent CREATE key is
+// bound to the payment method, like confirmAttemptKey below.
+//
+// Key = charge_<booking>_v<version>_<method-hash>:
+//   - same card + same report version → the SAME key forever, so
+//     retrying an unknown outcome replays Stripe's original result
+//     instead of minting a second intent;
+//   - a new card → a different key, so a card change is a real new
+//     attempt. The old key (booking + version only) made a retry with
+//     a different card hit Stripe's idempotency guard — the create
+//     replayed the cancelled intent (or errored), and the client
+//     could not pay without a new report version.
+//   - the report version stays in the key: a republication is a new
+//     consent, so it mints a new intent rather than replaying the
+//     old publication's one.
+export function createChargeKey(bookingId: string, version: number, paymentMethod: string): string {
+  const methodHash = createHash("sha256").update(paymentMethod).digest("hex").slice(0, 12);
+  return `charge_${bookingId}_v${version}_${methodHash}`;
+}
+
 // RA13 (rewritten, N06): confirm-attempt keys are bound to the
 // payment method, not to a position in the journal and not to the
 // report version — the obligation is per visit, and a republication

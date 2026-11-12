@@ -268,7 +268,9 @@ describe("auto-charge timer", () => {
     expect(res.code).toBe(200);
     expect(res.body["charged"]).toBe(1);
     expect(piCalls).toHaveLength(1);
-    expect(piCalls[0].idem).toBe("charge_bid-due_v1");
+    // Fix round 2: the create key is bound to the payment method, so
+    // it is `charge_<booking>_v<version>_<12 hex>`.
+    expect(piCalls[0].idem).toMatch(/^charge_bid-due_v1_[0-9a-f]{12}$/);
     expect(piCalls[0].body.get("amount")).toBe("18900");
     expect(store[0].metadata["gh_state"]).toBe("paid");
 
@@ -545,5 +547,35 @@ describe("client truth states", () => {
     await reportHandler({ method: "GET", headers: {}, query: { bt: btFor("bid-due") } } as any, res2 as any);
     expect(res2.body["state"]).toBe("not_ready");
     expect(res2.body["delivery_failed"]).toBe(true);
+  });
+});
+
+// Fix round 2 — PaymentIntent create idempotency key is bound to the
+// payment method, so changing the card allows a fresh charge attempt
+// (the old key `charge_<booking>_v<version>` replayed the cancelled
+// intent or raised an idempotency error on retry).
+import { createChargeKey } from "../../api/_payment_intent";
+
+describe("createChargeKey is bound to the payment method", () => {
+  it("same booking + version + card gives the same key (idempotent retry)", () => {
+    expect(createChargeKey("bid-1", 1, "pm_aaa")).toBe(createChargeKey("bid-1", 1, "pm_aaa"));
+  });
+
+  it("changing the card gives a different key, so a retry after a card change is a fresh attempt", () => {
+    expect(createChargeKey("bid-1", 1, "pm_aaa")).not.toBe(createChargeKey("bid-1", 1, "pm_bbb"));
+  });
+
+  it("a new report version gives a different key", () => {
+    expect(createChargeKey("bid-1", 1, "pm_aaa")).not.toBe(createChargeKey("bid-1", 2, "pm_aaa"));
+  });
+
+  it("a different booking gives a different key", () => {
+    expect(createChargeKey("bid-1", 1, "pm_aaa")).not.toBe(createChargeKey("bid-2", 1, "pm_aaa"));
+  });
+
+  it("the key does not leak the full payment-method id", () => {
+    const key = createChargeKey("bid-1", 1, "pm_aaa_secret");
+    expect(key).not.toContain("pm_aaa_secret");
+    expect(key).toContain("bid-1");
   });
 });

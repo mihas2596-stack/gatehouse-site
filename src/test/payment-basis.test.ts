@@ -273,3 +273,68 @@ describe("O4: payment_failed retry passes on the saved basis", () => {
     expect(piCalls).toHaveLength(1);
   });
 });
+
+// Fix round 2 — paymentBasis: waive sticky, waive durable (row flag),
+// and refunded status all remove the basis, on any path.
+import { paymentBasis, everWaivedDecision } from "../../api/_payment_basis";
+
+describe("fix round 2: waive sticky / durable / refunded remove the basis", () => {
+  const SENT_AT = "2026-11-01T10:00:00.000Z";
+  const NOW = Date.parse("2026-11-04T11:00:00.000Z"); // 73h after the report
+  const baseEvents = [
+    { event: "report_sent", detail: { email_sent: true, version: 1 }, created_at: SENT_AT },
+  ];
+
+  it("no basis when ANY waive decision exists, even after a later request_payment + fresh client approval", () => {
+    const events = [
+      ...baseEvents,
+      { event: "issue_opened", detail: { reason: "Streaks" }, created_at: "2026-11-01T11:00:00.000Z" },
+      { event: "issue_decision", detail: { decision: "waived", resolution: "On us", decided_at: "2026-11-02T10:00:00.000Z" }, created_at: "2026-11-02T10:00:00.000Z" },
+      { event: "issue_resolved", detail: { via: "owner_waive_charge" }, created_at: "2026-11-02T10:00:01.000Z" },
+      { event: "issue_opened", detail: { reason: "Still streaks" }, created_at: "2026-11-03T09:00:00.000Z" },
+      { event: "issue_decision", detail: { decision: "payment_requested", resolution: "Please pay", decided_at: "2026-11-03T10:00:00.000Z" }, created_at: "2026-11-03T10:00:00.000Z" },
+      { event: "report_approved", detail: {}, created_at: "2026-11-03T11:00:00.000Z" },
+      { event: "issue_resolved", detail: { via: "owner_request_payment" }, created_at: "2026-11-03T11:30:00.000Z" },
+    ];
+    expect(everWaivedDecision(events)).toBe(true);
+    expect(paymentBasis(
+      { reportSentAt: SENT_AT, events, issueOpenRow: false, issueEverRow: true, bounced: false },
+      NOW,
+    )).toBeNull();
+  });
+
+  it("no basis when the durable row flag charge_waived is true, even with no waive decision in the journal", () => {
+    const events = [
+      ...baseEvents,
+      { event: "issue_opened", detail: { reason: "Streaks" }, created_at: "2026-11-01T11:00:00.000Z" },
+      { event: "issue_resolved", detail: { via: "owner_waive_charge" }, created_at: "2026-11-02T10:00:01.000Z" },
+    ];
+    expect(everWaivedDecision(events)).toBe(false);
+    expect(paymentBasis(
+      { reportSentAt: SENT_AT, events, issueOpenRow: false, issueEverRow: true, bounced: false, chargeWaivedRow: true },
+      NOW,
+    )).toBeNull();
+  });
+
+  it("no basis when the visit status is refunded, even with a client approval", () => {
+    const events = [
+      ...baseEvents,
+      { event: "report_approved", detail: {}, created_at: "2026-11-01T12:00:00.000Z" },
+    ];
+    expect(paymentBasis(
+      { reportSentAt: SENT_AT, events, issueOpenRow: false, issueEverRow: false, bounced: false, status: "refunded" },
+      NOW,
+    )).toBeNull();
+  });
+
+  it("client approval is still a basis when the visit is not waived or refunded", () => {
+    const events = [
+      ...baseEvents,
+      { event: "report_approved", detail: {}, created_at: "2026-11-01T12:00:00.000Z" },
+    ];
+    expect(paymentBasis(
+      { reportSentAt: SENT_AT, events, issueOpenRow: false, issueEverRow: false, bounced: false, status: "report_sent" },
+      NOW,
+    )).toBe("client_approved");
+  });
+});

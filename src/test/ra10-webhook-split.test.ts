@@ -170,6 +170,13 @@ describe("RA10 webhook obligation split", () => {
     // N08: the webhook pre-verifies against the row's PINNED amount —
     // a row without one is not a verified cleaning obligation.
     row["amount_cents"] = 20000;
+    // Fix round 2: the webhook verifies the payment basis before
+    // marking paid, so the setup needs a real sent report — a
+    // report_sent_at and a client approval in the journal.
+    row["report_sent_at"] = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+    row["visit_date"] = "2026-11-10";
+    events.push({ event: "report_sent", detail: { email_sent: true, version: 1 } });
+    events.push({ event: "report_approved", detail: {} });
     const res = response();
     await handler(signedReq(cleaningEvent("evt_clean_1")) as never, res as never);
     expect(res.code).toBe(200);

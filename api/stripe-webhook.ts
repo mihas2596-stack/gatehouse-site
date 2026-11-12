@@ -8,7 +8,12 @@
 //    customer (gh_state=card_ready, gh_payment_method=<pm_id>)
 //  - setup_intent.succeeded / setup_intent.setup_failed → update card state
 //  - payment_intent.succeeded / payment_intent.payment_failed → update
-//    payment state for the booking
+//    payment state for the booking (succeeded verifies the payment
+//    basis first — waived / issue / future date never marks paid)
+//  - charge.refunded → journal the refund; a full refund moves the
+//    visit from Paid to Refunded (fix round 2)
+//  - charge.dispute.created → journal the dispute and open an issue on
+//    the visit, blocking further auto-charge (fix round 2)
 //
 // State lives in Stripe Customer metadata (no database in this project).
 // Event handling is idempotent: repeated deliveries of the same event id
@@ -27,6 +32,8 @@ import { sendReceiptEmailOnce, sendFeeReceiptEmailOnce } from "./booking-action.
 import { recordCheckoutCardForOwner } from "./card-status.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { webhookEventSeen, recordWebhookEvent } from "./_webhook_dedup.js";
+import { paymentBasis, issueStateFrom, everWaivedDecision } from "./_payment_basis.js";
+import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -338,9 +345,21 @@ export default async function handler(req: Req, res: Res) {
         // idempotent, so the retry heals the mirror).
         let cleanMirrorFailed = false;
         let cleanVerified = true;
-        let cleanRow: { id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null } | null = null;
+        let cleanRow: {
+          id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null;
+          // Basis check (fix round 2): the visit date, issue flags,
+          // report state and durable waive flag — a succeeded intent
+          // must not mark the visit paid when the payment basis is
+          // invalid.
+          visit_date: string | null; issue_open: boolean | null; issue_ever: boolean | null;
+          report_sent_at: string | null; report_bounced: boolean | null; charge_waived?: boolean | null;
+        } | null = null;
         if (dbConfigured()) {
-          const vrows = await dbSelectStrict<{ id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null }>(
+          const vrows = await dbSelectStrict<{
+            id: string; status: string | null; payment_intent_id: string | null; amount_cents: number | null;
+            visit_date: string | null; issue_open: boolean | null; issue_ever: boolean | null;
+            report_sent_at: string | null; report_bounced: boolean | null; charge_waived?: boolean | null;
+          }>(
             "gh_visits",
             `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
           );
@@ -361,6 +380,50 @@ export default async function handler(req: Req, res: Res) {
             }
           }
         }
+        // Basis check (fix round 2): a succeeded intent must not mark
+        // the visit paid when the payment basis is invalid — waived,
+        // open/ever issue, or a future visit date. The money already
+        // moved in Stripe; the anomaly is journaled below for manual
+        // review instead of a paid visit. A retry would fail
+        // identically while the basis stays invalid, so the event is
+        // acked (200), not retried — the paid state can still be
+        // recovered through chargeVisit's reconcile if the basis
+        // later becomes valid.
+        let basisBlockedReason: string | null = null;
+        if (eventType === "payment_intent.succeeded" && cleanRow && cleanVerified && !cleanMirrorFailed) {
+          const evRows = await dbSelect<{ event: string; detail: Record<string, unknown> | null; created_at: string }>(
+            "gh_events",
+            `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
+          );
+          const effDate = effectiveVisitDate(confirmedDateOf(evRows), cleanRow.visit_date ?? null);
+          const basis = paymentBasis(
+            {
+              reportSentAt: cleanRow.report_sent_at ?? null,
+              events: evRows,
+              issueOpenRow: cleanRow.issue_open ?? null,
+              issueEverRow: cleanRow.issue_ever ?? null,
+              bounced: cleanRow.report_bounced ?? null,
+              visitDate: effDate,
+              chargeWaivedRow: cleanRow.charge_waived ?? null,
+              // Fix round 2: a refunded visit has no basis — a new
+              // succeeded intent for it must not re-mark it paid.
+              status: cleanRow.status ?? null,
+            },
+            Date.now(),
+          );
+          if (basis === null) {
+            const issue = issueStateFrom(evRows, cleanRow.issue_open ?? null, cleanRow.issue_ever ?? null);
+            if (everWaivedDecision(evRows) || cleanRow.charge_waived === true) basisBlockedReason = "charge_waived";
+            else if (cleanRow.status === "refunded") basisBlockedReason = "refunded";
+            else if (issue.open) basisBlockedReason = "issue_open";
+            else if (issue.ever) basisBlockedReason = "issue_ever";
+            else if (isFutureVisitDate(effDate, Date.now())) basisBlockedReason = "report_too_early";
+            else if (cleanRow.report_bounced === true) basisBlockedReason = "bounced";
+            else if (!cleanRow.report_sent_at && !evRows.some((e) => e.event === "report_sent")) basisBlockedReason = "payment_basis_missing";
+            else basisBlockedReason = "no_basis";
+            log("payment", { state: "basis_invalid_skip", booking: bookingId, pi: piId, reason: basisBlockedReason });
+          }
+        }
         // Guard against out-of-order events: never regress a "paid" booking
         // back to an earlier state. Read current state first.
         const cur = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
@@ -369,6 +432,12 @@ export default async function handler(req: Req, res: Res) {
         const newState = eventType === "payment_intent.succeeded" ? "paid" : "payment_failed";
         if (!cleanVerified) {
           // Ack without writing: a retry would mismatch identically.
+        } else if (basisBlockedReason) {
+          // Basis invalid (fix round 2): do NOT mark paid — neither
+          // the metadata nor the row (the anomaly is journaled below
+          // for manual review). The event is acked: a retry would
+          // fail identically while the basis stays invalid.
+          log("payment", { state: "basis_invalid", booking: bookingId, pi: piId, reason: basisBlockedReason });
         } else if (cleanMirrorFailed) {
           // DB unreadable: fall through to the 500 below.
         } else if (curState === "paid" && newState !== "paid") {
@@ -385,7 +454,36 @@ export default async function handler(req: Req, res: Res) {
           log("payment", { state: eventType, booking: bookingId });
         }
         // §13: mirror into the booking's DB row + journal, idempotently.
-        if (cleanVerified && !cleanMirrorFailed && dbConfigured()) {
+        // Basis invalid (fix round 2): the money moved in Stripe, but
+        // the visit must not be marked paid. Journal the anomaly (with
+        // the reason) so the owner sees it in Activity and can review
+        // it manually — a refund or a manual paid-mark, not an
+        // automatic one. Deduped on the payment intent, like the
+        // payment_failed journal below, so a retry never writes it twice.
+        if (basisBlockedReason && cleanRow && dbConfigured()) {
+          try {
+            const prior = await dbSelect<{ detail: Record<string, unknown> | null }>(
+              "gh_events",
+              `visit_id=eq.${cleanRow.id}&event=eq.payment_succeeded_no_basis&order=created_at.desc&limit=10`,
+            );
+            const alreadyJournaled = prior.some((e) => {
+              const d = e.detail ?? {};
+              return d["payment_intent"] === piId || d["payment_intent_id"] === piId;
+            });
+            if (alreadyJournaled) {
+              log("payment", { state: "already_journaled_no_basis", booking: bookingId, pi: piId });
+            } else {
+              const journaled = await logEventStrict(cleanRow.id, bookingId, "system", "payment_succeeded_no_basis", {
+                via: "stripe_webhook", payment_intent: piId, amount_cents: feeCents, reason: basisBlockedReason,
+              });
+              if (!journaled) cleanMirrorFailed = true;
+            }
+          } catch (err) {
+            logErr("db_mirror", err);
+            cleanMirrorFailed = true;
+          }
+        }
+        if (cleanVerified && !cleanMirrorFailed && !basisBlockedReason && dbConfigured()) {
           try {
             const vrow = cleanRow;
             if (vrow) {
@@ -436,11 +534,14 @@ export default async function handler(req: Req, res: Res) {
           res.status(500).json({ ok: false, error: "mirror_failed" });
           return;
         }
-        if (cleanVerified && newState === "paid") {
+        if (cleanVerified && !basisBlockedReason && newState === "paid") {
           // Receipt email (idempotent — the helper no-ops when the
           // receipt marker is already stored). A failure here never
           // fails the webhook: the cron retries the EMAIL later. The
           // amount comes from the visit's pinned amount, not metadata.
+          // No receipt for a basis-blocked payment (fix round 2): the
+          // charge should not have happened, and the owner reviews it
+          // manually first.
           try {
             await sendReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, {
               ...curMeta,
@@ -448,6 +549,142 @@ export default async function handler(req: Req, res: Res) {
                 ? { gh_report_amount_cents: String(cleanRow.amount_cents) } : {}),
             }, bookingId);
           } catch { /* best-effort */ }
+        }
+      }
+    } else if (eventType === "charge.refunded" || eventType === "charge.dispute.created") {
+      // Fix round 2: refunds and disputes were ignored entirely — a
+      // refunded visit stayed Paid forever, and a dispute never
+      // blocked anything. Both are recorded in the journal and made
+      // visible to the owner; a full refund moves the visit out of
+      // Paid, and a dispute opens an issue (blocking auto-charge).
+      // No new charges and no refunds are ever issued from the
+      // webhook — these handlers only record what Stripe already did.
+      const isRefund = eventType === "charge.refunded";
+      const piRaw = obj["payment_intent"];
+      let piId = typeof piRaw === "string" ? piRaw : (piRaw as { id?: string } | undefined)?.id ?? "";
+      if (!piId && !isRefund) {
+        // Dispute without a payment_intent: resolve it through the
+        // charge it belongs to.
+        const chargeId = typeof obj["charge"] === "string" ? (obj["charge"] as string) : "";
+        if (chargeId) {
+          const ch = await stripeGet(STRIPE_SECRET_KEY, `/charges/${encodeURIComponent(chargeId)}`);
+          const chPi = ch.ok ? ch.data["payment_intent"] : undefined;
+          if (typeof chPi === "string") piId = chPi;
+        }
+      }
+      if (!piId) {
+        log("ignored", { type: eventType, reason: "no_payment_intent" });
+      } else if (!dbConfigured()) {
+        // No DB: nothing to record the refund/dispute against.
+        log("ignored", { type: eventType, reason: "no_db" });
+      } else {
+        // A fee intent (cancellation fee) lives in fee_intent_id,
+        // not payment_intent_id — a refund/dispute on a fee is not
+        // a cleaning refund/dispute and is ignored here.
+        const vrows = await dbSelectStrict<{ id: string; booking_id: string; status: string | null; payment_intent_id: string | null; stripe_customer_id: string | null }>(
+          "gh_visits",
+          `payment_intent_id=eq.${encodeURIComponent(piId)}&limit=1`,
+        );
+        if (!vrows.ok) {
+          res.status(500).json({ ok: false, error: "mirror_failed" });
+          return;
+        }
+        const vrow = vrows.rows[0] ?? null;
+        if (!vrow) {
+          log("ignored", { type: eventType, pi: piId, reason: "no_visit_for_pi" });
+        } else {
+          const amount = typeof obj["amount"] === "number" ? (obj["amount"] as number) : NaN;
+          const disputeId = typeof obj["id"] === "string" ? (obj["id"] as string) : "";
+          const chargeId = typeof obj["id"] === "string" ? (obj["id"] as string) : "";
+          let mirrorFailed = false;
+          if (isRefund) {
+            const amountRefunded = typeof obj["amount_refunded"] === "number" ? (obj["amount_refunded"] as number) : NaN;
+            const fullyRefunded = obj["refunded"] === true
+              || (Number.isFinite(amountRefunded) && Number.isFinite(amount) && amountRefunded >= amount);
+            // Dedupe on (charge, cumulative refunded amount): a
+            // redelivery repeats the same pair, while a second
+            // partial refund raises amount_refunded and is a new
+            // record.
+            const prior = await dbSelect<{ detail: Record<string, unknown> | null }>(
+              "gh_events",
+              `visit_id=eq.${vrow.id}&event=eq.payment_refunded&order=created_at.desc&limit=10`,
+            );
+            const alreadyJournaled = prior.some((e) => {
+              const d = e.detail ?? {};
+              return d["charge"] === chargeId && d["amount_cents"] === amountRefunded;
+            });
+            if (alreadyJournaled) {
+              log("refund", { state: "already_journaled", pi: piId, charge: chargeId });
+            } else {
+              const journaled = await logEventStrict(vrow.id, vrow.booking_id, "system", "payment_refunded", {
+                charge: chargeId, payment_intent: piId,
+                amount_cents: Number.isFinite(amountRefunded) ? amountRefunded : null,
+                refunded: fullyRefunded,
+              });
+              if (!journaled) mirrorFailed = true;
+            }
+            if (!mirrorFailed && fullyRefunded) {
+              // Full refund: the visit is no longer Paid. Only
+              // transition from "paid" — a visit that was never
+              // marked paid keeps its state (the journal above is
+              // the record). 0 is fine (already refunded); -1 is a
+              // DB error and retries.
+              const moved = await dbUpdateCount(
+                "gh_visits",
+                `id=eq.${vrow.id}&status=eq.paid`,
+                { status: "refunded" },
+              );
+              if (moved < 0) mirrorFailed = true;
+              else if (moved === 1 && vrow.stripe_customer_id) {
+                // Best-effort metadata mirror so the client pages
+                // stop showing "Paid" (deriveState handles
+                // gh_state "refunded"). A failed mirror never fails
+                // the refund record itself.
+                try {
+                  await stripePost(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(vrow.stripe_customer_id)}`, {
+                    "metadata[gh_state]": "refunded",
+                  });
+                } catch { /* durable state is in the DB */ }
+              }
+            }
+          } else {
+            const reason = typeof obj["reason"] === "string" ? (obj["reason"] as string) : "";
+            const prior = await dbSelect<{ detail: Record<string, unknown> | null }>(
+              "gh_events",
+              `visit_id=eq.${vrow.id}&event=eq.payment_disputed&order=created_at.desc&limit=10`,
+            );
+            const alreadyJournaled = prior.some((e) => {
+              const d = e.detail ?? {};
+              return d["dispute"] === disputeId;
+            });
+            if (alreadyJournaled) {
+              log("dispute", { state: "already_journaled", pi: piId, dispute: disputeId });
+            } else {
+              const journaled = await logEventStrict(vrow.id, vrow.booking_id, "system", "payment_disputed", {
+                dispute: disputeId, payment_intent: piId,
+                amount_cents: Number.isFinite(amount) ? amount : null, reason,
+              });
+              if (!journaled) mirrorFailed = true;
+            }
+            if (!mirrorFailed && vrow.status === "paid") {
+              // A dispute on a paid visit opens an issue: the owner
+              // sees it in the Open issues block, and the issue
+              // flags block any further auto-charge for this visit.
+              // The money is still held (not refunded yet), so the
+              // payment state stays "paid" — only the issue flags move.
+              const flagged = await dbUpdateCount(
+                "gh_visits",
+                `id=eq.${vrow.id}&status=eq.paid`,
+                { issue_open: true, issue_ever: true },
+              );
+              if (flagged < 0) mirrorFailed = true;
+            }
+          }
+          if (mirrorFailed) {
+            res.status(500).json({ ok: false, error: "mirror_failed" });
+            return;
+          }
+          log(isRefund ? "refund" : "dispute", { state: eventType, pi: piId });
         }
       }
     } else {

@@ -225,4 +225,58 @@ describe("chargeVisit with a waived visit", () => {
     expect(piCreates).toBe(1);
     expect(rows[0]["status"]).toBe("paid");
   });
+
+  // Fix round 2 — waive STICKY: a waive followed by a new complaint, a
+  // request for payment, a FRESH client approval and a resolve must
+  // still refuse. The old latest-decision rule let this charge.
+  it("waive is sticky: new complaint + request_payment + fresh approve + resolve still cannot charge", async () => {
+    rows = [{ ...baseRow(), issue_open: false, issue_ever: true }];
+    events = [
+      ...baseEvents(),
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_decision", detail: { decision: "waived", resolution: "On us", decided_at: "2026-11-02T10:00:00.000Z" }, created_at: "2026-11-02T10:00:00.000Z" },
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_resolved", detail: { via: "owner_waive_charge" }, created_at: "2026-11-02T10:00:01.000Z" },
+      // New complaint after the waive, owner asks for payment, the
+      // client approves the report, owner resolves — the waive must
+      // still win.
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_opened", detail: { reason: "Still streaks" }, created_at: "2026-11-03T09:00:00.000Z" },
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_decision", detail: { decision: "payment_requested", resolution: "Please pay", decided_at: "2026-11-03T10:00:00.000Z" }, created_at: "2026-11-03T10:00:00.000Z" },
+      { visit_id: VISIT_ID, booking_id: BID, event: "report_approved", detail: {}, created_at: "2026-11-03T11:00:00.000Z" },
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_resolved", detail: { via: "owner_request_payment" }, created_at: "2026-11-03T11:30:00.000Z" },
+    ];
+    const outcome = await chargeVisit({
+      secretKey: "sk_test_x",
+      bookingId: BID,
+      customerId: "cus_test",
+      customerEmail: "client@example.com",
+      paymentMethod: "pm_test_1",
+      source: "client_approve",
+      allowedBases: ["client_approved"],
+      nowMs: Date.parse("2026-11-04T11:00:00.000Z"),
+      deps: {
+        setCustomerMeta: async () => {},
+        sendReceipt: async () => true,
+        sendPaymentFailedEmail: async () => {},
+      },
+    });
+    expect(outcome).toEqual({ outcome: "blocked", error: "charge_waived" });
+    expect(stripeCalls.length).toBe(0);
+    expect(piCreates).toBe(0);
+    expect(rows[0]["status"]).toBe("report_sent");
+  });
+
+  // Fix round 2 — waive DURABLE: the waive fell out of the newest-60
+  // journal window (no waive decision in the events), but the durable
+  // row flag charge_waived is still true — the visit must refuse.
+  it("waive is durable: row charge_waived=true blocks even with no waive decision in the journal", async () => {
+    rows = [{ ...baseRow(), issue_open: false, issue_ever: true, charge_waived: true }];
+    events = [
+      ...baseEvents(),
+      { visit_id: VISIT_ID, booking_id: BID, event: "issue_resolved", detail: { via: "owner_waive_charge" }, created_at: "2026-11-02T10:00:01.000Z" },
+    ];
+    const outcome = await charge();
+    expect(outcome).toEqual({ outcome: "blocked", error: "charge_waived" });
+    expect(stripeCalls.length).toBe(0);
+    expect(piCreates).toBe(0);
+    expect(rows[0]["status"]).toBe("report_sent");
+  });
 });

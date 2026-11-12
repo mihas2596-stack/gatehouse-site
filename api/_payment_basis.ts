@@ -99,6 +99,19 @@ export function latestIssueDecision(events: BasisEvent[]): IssueDecision | null 
   };
 }
 
+// Waive stickiness (fix round 2): unlike latestIssueDecision — which
+// returns only the NEWEST decision (for display and dedup) — this
+// answers "was this visit EVER waived?" A waive is terminal, so ANY
+// waive decision in the journal waives the visit forever, whatever
+// later decisions say. The old code asked only the latest decision,
+// so waive -> new complaint -> request_payment -> approve -> resolve
+// revived the charge on a visit the owner had closed without payment.
+export function everWaivedDecision(events: BasisEvent[]): boolean {
+  return events.some(
+    (e) => e.event === "issue_decision" && e.detail?.["decision"] === "waived",
+  );
+}
+
 // Shared timer-eligibility display predicate (U02): the client pages and
 // the cron must agree. A resolved dispute still blocks the timer forever
 // (issue_ever), as does a bounced report — the countdown must never run
@@ -130,6 +143,18 @@ export function paymentBasis(
     // a visit that has not happened yet. Absent = no gate (legacy
     // callers that do not know the date).
     visitDate?: string | null;
+    // Waive durability (fix round 2): the durable `charge_waived`
+    // column on gh_visits (migration 20261112_charge_waived). The
+    // journal is capped at 60 events, so a waive can fall out of the
+    // window on a busy visit; the column is the same fact in durable
+    // form. Absent (column not yet migrated) = fall back to the
+    // journal alone.
+    chargeWaivedRow?: boolean | null;
+    // Fix round 2: a refunded visit has NO basis — the payment was
+    // returned, so neither a fresh approval nor the timer may charge
+    // it again. Absent = no check (legacy callers that do not know
+    // the visit status).
+    status?: string | null;
   },
   nowMs: number,
 ): PaymentBasis {
@@ -145,6 +170,15 @@ export function paymentBasis(
   // given for a future visit is not yet a basis, and the timer never
   // runs for a visit that has not happened.
   if (isFutureVisitDate(input.visitDate ?? null, nowMs)) return null;
+  // Waive stickiness (fix round 2): a waived visit has NO basis on
+  // any path — neither a fresh approval nor the timer may pay for a
+  // visit the owner closed without payment, whatever happened after
+  // the waive (new complaint, request for payment, resolve).
+  if (everWaivedDecision(input.events) || input.chargeWaivedRow === true) return null;
+  // Fix round 2: a refunded visit has NO basis — the payment was
+  // returned, so neither a fresh approval nor the timer may charge it
+  // again (re-charging a refunded visit is a new charge, not a retry).
+  if (input.status === "refunded") return null;
   if (clientApprovedEvent(input.events)) return "client_approved";
   const { open, ever } = issueStateFrom(
     input.events,

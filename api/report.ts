@@ -22,7 +22,7 @@
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
-import { clientApprovedEvent, issueStateFrom, latestIssueDecision } from "./_payment_basis.js";
+import { clientApprovedEvent, issueStateFrom, latestIssueDecision, everWaivedDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 
 import { chargeVisit } from "./_payment_obligation.js";
@@ -42,6 +42,10 @@ type BookingRow = {
   report_bounced: boolean | null; cleaner_name: string | null;
   visit_date?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
+  // Waive durability (fix round 2): the `charge_waived` column
+  // (migration 20261112_charge_waived). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "not waived".
+  charge_waived?: boolean | null;
   checklist?: Checklist | null;
   stripe_customer_id?: string | null;
   cleaner_profile?: unknown;
@@ -457,11 +461,15 @@ async function reconcilePaymentMethod(
   return { pm, ambiguous: false };
 }
 
-type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown" | "waived";
+type ReportState = "not_ready" | "awaiting" | "approved" | "issue_open" | "paid" | "payment_issue" | "payment_unknown" | "waived" | "refunded";
 
 function deriveState(meta: Record<string, string>): ReportState {
   const state = meta["gh_state"] ?? "";
   if (state === "paid") return "paid";
+  // Fix round 2: a refunded visit is its own state — it must never
+  // fall through to "awaiting" (which would offer an Approve button
+  // for a visit whose payment was returned).
+  if (state === "refunded") return "refunded";
   if (state === "payment_failed") return "payment_issue";
   if (meta["gh_issue_open"] === "1" || state === "issue_open") return "issue_open";
   // H1: an unknown charge outcome is its own state — it must never
@@ -731,8 +739,11 @@ export default async function handler(req: Req, res: Res) {
         ok: true,
         // TASK 1 (fix6): a waived visit shows its own state — the
         // derived "awaiting" would wrongly offer an Approve button
-        // for a visit the owner closed without payment.
-        state: issueDecision?.decision === "waived" ? "waived" as ReportState : deriveState(meta),
+        // for a visit the owner closed without payment. Ever-waived
+        // (fix round 2), not latest-decision: a waive followed by a
+        // new complaint and a request for payment must still show
+        // "waived", never an Approve button.
+        state: everWaivedDecision(events) ? "waived" as ReportState : deriveState(meta),
         booking,
         // The cleaner who did the visit — /visit names them, /report
         // must too, so the two pages of one report agree.
@@ -965,8 +976,9 @@ export default async function handler(req: Req, res: Res) {
       // closed without payment, so no approval may arm a charge for
       // it, not even from a stale tab or an approval logged before
       // the waive. chargeVisit enforces the same gate; this returns
-      // the honest error before logging any approval.
-      if (latestIssueDecision(events)?.decision === "waived") {
+      // the honest error before logging any approval. Ever-waived
+      // (fix round 2), not latest-decision, plus the durable row flag.
+      if (everWaivedDecision(events) || row?.charge_waived === true) {
         res.status(409).json({ ...view(), error: "charge_waived" });
         return;
       }

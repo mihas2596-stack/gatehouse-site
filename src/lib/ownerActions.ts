@@ -50,6 +50,10 @@ export const visitLabel = (s: string): string => {
     case "report_submitted": return "Report ready for review";
     case "approved": return "Approved";
     case "paid": return "Paid";
+    // Fix round 2: a refunded visit is its own status — the payment
+    // was returned, so it must not read as Paid (or as an upcoming
+    // visit) anywhere in the panel.
+    case "refunded": return "Refunded";
     case "cancelled": return "Cancelled";
     case "issue_open": return "Issue open";
     default: return s || "—";

@@ -28,13 +28,13 @@ import {
   dbSelectStrict, dbUpdateCount, logEvent,
 } from "./_db.js";
 import {
-  paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision,
+  paymentBasis, issueStateFrom, clientApprovedEvent, everWaivedDecision,
 } from "./_payment_basis.js";
 import {
   confirmedDateOf, effectiveVisitDate, isFutureVisitDate,
 } from "./_visit_date.js";
 import {
-  reconcileIntent, confirmIntent, confirmAttemptKey,
+  reconcileIntent, confirmIntent, confirmAttemptKey, createChargeKey,
 } from "./_payment_intent.js";
 
 export type ObligationRow = {
@@ -53,6 +53,11 @@ export type ObligationRow = {
   // all columns, so this is present at runtime; the confirmed date
   // comes from the journal (confirmedDateOf) and wins over it.
   visit_date: string | null;
+  // Waive durability (fix round 2): the `charge_waived` column
+  // (migration 20261112_charge_waived). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "not waived" — the journal
+  // check below is the authority until the column exists.
+  charge_waived?: boolean | null;
 };
 
 export type ObligationEvent = {
@@ -296,7 +301,12 @@ export async function chargeVisit(input: {
   // check sits AFTER the payment_pending recovery above: money that
   // already moved (an in-flight intent that succeeded) is still
   // adopted honestly, but a waived visit never starts a new charge.
-  if (latestIssueDecision(events)?.decision === "waived") {
+  // Waive stickiness (fix round 2): the check is EVER-waived, not
+  // latest-decision — a waive followed by a new complaint, a request
+  // for payment, an approval and a resolve must still refuse. The
+  // durable row flag (charge_waived) is the same fact for visits
+  // whose waive fell out of the newest-60 journal window.
+  if (everWaivedDecision(events) || row.charge_waived === true) {
     return { outcome: "blocked", error: "charge_waived" };
   }
 
@@ -318,6 +328,11 @@ export async function chargeVisit(input: {
       // future-dated report never shows a charge basis even if the
       // explicit gate above is ever bypassed.
       visitDate: effectiveDate,
+      // Waive durability (fix round 2): the row flag is the durable
+      // waive fact; paymentBasis ORs it with the journal.
+      chargeWaivedRow: row.charge_waived ?? null,
+      // Fix round 2: a refunded visit has no basis.
+      status: row.status ?? null,
     },
     input.nowMs,
   );
@@ -442,14 +457,19 @@ export async function chargeVisit(input: {
   }
   // TASK 1 (fix6): same race, waived variant — a waive landing
   // between the claim and the create must stop the payment too.
-  if (latestIssueDecision(preCreateEv.events)?.decision === "waived") {
+  // Ever-waived (fix round 2), not latest-decision.
+  if (everWaivedDecision(preCreateEv.events) || preRow.charge_waived === true) {
     await releaseClaim();
     await logEvent(row.id, bookingId, "system", "payment_blocked_by_waive", { source });
     return { outcome: "blocked", error: "charge_waived" };
   }
 
-  // --- Create (one obligation, one idempotency key). ---
-  const idemKey = `charge_${bookingId}_v${version}`;
+  // --- Create (one obligation, one idempotency key). The key is
+  // bound to the payment method (fix round 2, createChargeKey): a
+  // card change is a real new attempt, while retrying the same card
+  // replays Stripe's original result instead of minting a second
+  // intent.
+  const idemKey = createChargeKey(bookingId, version, paymentMethod);
   let pi: { ok: boolean; status: number; data: Record<string, unknown> };
   try {
     pi = await stripePost(secretKey, "/payment_intents", {
@@ -552,7 +572,8 @@ export async function chargeVisit(input: {
       }
       // TASK 1 (fix6): confirming a live intent after a waive would
       // charge a visit the owner closed without payment — never.
-      if (latestIssueDecision(fevents)?.decision === "waived") {
+      // Ever-waived (fix round 2), not latest-decision.
+      if (everWaivedDecision(fevents) || frow.charge_waived === true) {
         return "charge_waived";
       }
       const fbounced = frow.report_bounced === true;
@@ -570,6 +591,11 @@ export async function chargeVisit(input: {
           issueEverRow: frow.issue_ever ?? null, bounced: fbounced,
           // Payment-date gate (B): the basis itself is date-aware.
           visitDate: effectiveVisitDate(confirmedDateOf(fevents), frow.visit_date),
+          // Waive durability (fix round 2): the row flag is the
+          // durable waive fact; paymentBasis ORs it with the journal.
+          chargeWaivedRow: frow.charge_waived ?? null,
+          // Fix round 2: a refunded visit has no basis.
+          status: frow.status ?? null,
         },
         Date.now(),
       );

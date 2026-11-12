@@ -177,6 +177,14 @@ export default async function handler(req: Req, res: Res) {
           // Payment-date gate (B): the panel must not offer a charge
           // for a visit that has not happened yet.
           visitDate: effectiveVisitDate(confirmedDateOf(journalEvents), typeof visit["visit_date"] === "string" ? (visit["visit_date"] as string) : null),
+          // Waive durability (fix round 2): the panel must not offer
+          // a charge for a waived visit, even one whose waive fell
+          // out of the journal window.
+          chargeWaivedRow: typeof visit["charge_waived"] === "boolean" ? (visit["charge_waived"] as boolean) : null,
+          // Fix round 2: a refunded visit has no basis — the panel
+          // must not offer a charge for a visit whose payment was
+          // returned.
+          status: typeof visit["status"] === "string" ? (visit["status"] as string) : null,
         },
         Date.now(),
       ) !== null;

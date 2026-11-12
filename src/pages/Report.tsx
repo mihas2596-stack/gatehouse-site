@@ -17,7 +17,8 @@ type ReportStateName =
   | "paid"
   | "payment_issue"
   | "payment_unknown"
-  | "waived";
+  | "waived"
+  | "refunded";
 
 type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
 
@@ -786,6 +787,40 @@ const Report = () => {
               </div>
             )}
             {/* C: no "Back to Home" — a client page does not need it. */}
+          </div>
+        )}
+        {!loading && data?.state === "refunded" && (
+          <div className="text-center">
+            <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Refunded</h1>
+            <p className="text-lg text-foreground mb-6">
+              This visit was refunded — no charge stands for it. If you have any questions, reply to your receipt email or contact us.
+            </p>
+            {summary}
+            {(data.photo_items && data.photo_items.length > 0) || (data.checklist && data.checklist.rooms.length > 0) ? (
+              <div className="mb-6 text-left">
+                <ReportContent
+                  photoItems={data.photo_items ?? []}
+                  checklist={data.checklist}
+                  excludedRooms={data.no_photo_zones ?? []}
+                  renderPhoto={(p) => (
+                    <figure>
+                      <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
+                        <img
+                          src={p.url}
+                          alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                          loading="lazy"
+                          className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
+                        />
+                      </ZoomablePhoto>
+                      <figcaption className="text-xs text-muted-foreground mt-1">
+                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                        {p.note ? <> — {p.note}</> : null}
+                      </figcaption>
+                    </figure>
+                  )}
+                />
+              </div>
+            ) : null}
           </div>
         )}
       </div>

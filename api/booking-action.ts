@@ -765,6 +765,10 @@ type BookingRow = {
   // resend, client approval); PostgREST returns them even though the
   // lite type used to omit them.
   issue_open?: boolean | null; issue_ever?: boolean | null;
+  // Waive durability (fix round 2): the `charge_waived` column
+  // (migration 20261112_charge_waived). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "not waived".
+  charge_waived?: boolean | null;
   stripe_customer_id?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
@@ -842,6 +846,7 @@ async function hydrateCustomerMeta(
   const proposal = latestEvent(events, "date_proposed");
   const declined = Boolean(proposal && typeof proposal.detail?.["alt_dates"] === "string" && (!confirmEv || proposal.created_at > confirmEv.created_at));
   const state = row.status === "paid" ? "paid"
+    : row.status === "refunded" ? "refunded"
     : row.status === "cancelled" || cancelledEv ? "cancelled"
     : issueOpen ? "issue_open"
     : approvedEv ? "approved"
@@ -1208,6 +1213,7 @@ export default async function handler(req: Req, res: Res) {
       const rowStatus = visit.status ?? "";
       if (rowStatus === "cancelled") return json(409, { ok: false, error: "already_cancelled" });
       if (rowStatus === "paid") return json(409, { ok: false, error: "already_paid" });
+      if (rowStatus === "refunded") return json(409, { ok: false, error: "already_refunded" });
       if (visit.report_status === "sent" || visit.report_sent_at) {
         return json(409, { ok: false, error: "report_already_sent" });
       }
@@ -1405,6 +1411,7 @@ export default async function handler(req: Req, res: Res) {
       if (action === "status") {
         const rowState = row.status === "cancelled" ? "cancelled"
           : row.status === "paid" ? "paid"
+          : row.status === "refunded" ? "refunded"
           : row.report_status === "sent" ? "report_sent"
           : row.status ?? "requested";
         return json(200, {
@@ -1579,7 +1586,7 @@ export default async function handler(req: Req, res: Res) {
       // confirmation (the "Needs review" case). Cancelled/paid visits
       // never come back through confirm.
       const rowStatus = row?.status ?? "";
-      if (rowStatus === "cancelled" || rowStatus === "paid") {
+      if (rowStatus === "cancelled" || rowStatus === "paid" || rowStatus === "refunded") {
         return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
       }
       const wasConfirmed = row
@@ -1706,7 +1713,7 @@ export default async function handler(req: Req, res: Res) {
       if (!roster.active) return json(409, { ok: false, error: "cleaner_inactive" });
       const name = roster.name;
       const rowStatus = row.status ?? "";
-      if (rowStatus === "cancelled" || rowStatus === "paid") {
+      if (rowStatus === "cancelled" || rowStatus === "paid" || rowStatus === "refunded") {
         return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
       }
       const wasConfirmed = await hasVisitConfirmed(row.id);
@@ -1916,7 +1923,7 @@ export default async function handler(req: Req, res: Res) {
       // the visit is settled.
       if (!row) return json(404, { ok: false, error: "visit_not_found" });
       const rowStatus = row.status ?? "";
-      if (rowStatus === "cancelled" || rowStatus === "paid") {
+      if (rowStatus === "cancelled" || rowStatus === "paid" || rowStatus === "refunded") {
         return json(409, { ok: false, error: "invalid_transition", status: rowStatus });
       }
       if (await hasRequestApproved(row.id)) {
@@ -2081,9 +2088,9 @@ export default async function handler(req: Req, res: Res) {
       // or a double-click never sends a second email for the same
       // decision text.
       if (!row) return json(404, { ok: false, error: "visit_not_found" });
-      if (row.status === "paid") {
-        logErr("issue_decision", "blocked: already paid, needs refund flow");
-        return json(409, { ok: false, error: "already_paid" });
+      if (row.status === "paid" || row.status === "refunded") {
+        logErr("issue_decision", "blocked: already paid or refunded, needs refund flow");
+        return json(409, { ok: false, error: row.status === "refunded" ? "already_refunded" : "already_paid" });
       }
       const decisionOf = (a: string): "payment_requested" | "reclean" | "waived" =>
         a === "issue_arrange_reclean" ? "reclean" : a === "issue_waive_charge" ? "waived" : "payment_requested";
@@ -2222,6 +2229,15 @@ export default async function handler(req: Req, res: Res) {
         }
         const closed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&issue_open=eq.true`, { issue_open: false });
         if (closed < 0) return json(502, { ok: false, error: "db_error", decision_recorded: true });
+        // Waive durability (fix round 2): the journal is capped at 60
+        // events, so a busy visit can push the waive out of the
+        // window. The row flag is the durable truth. Best-effort and
+        // AFTER the close above: the column does not exist until
+        // migration 20261112_charge_waived is applied, and a failed
+        // write must never fail the waive itself — the journal event
+        // above is the authority until then.
+        const waivedFlagged = await dbUpdate("gh_visits", `id=eq.${row.id}`, { charge_waived: true });
+        if (!waivedFlagged) log("issue_waive_charge", "charge_waived column not set (migration 20261112 pending?)");
         // Best-effort Stripe mirror: the client/owner pages read the
         // DB, not shared metadata; a failed mirror never fails the
         // close itself.
@@ -2270,6 +2286,10 @@ export default async function handler(req: Req, res: Res) {
           logErr("charge", "blocked: already paid");
           return json(409, { ok: false, error: "already_paid" });
         }
+        if (row.status === "refunded") {
+          logErr("charge", "blocked: refunded");
+          return json(409, { ok: false, error: "already_refunded" });
+        }
         if (row.status === "cancelled") {
           logErr("charge", "blocked: already cancelled");
           return json(409, { ok: false, error: "already_cancelled" });
@@ -2298,6 +2318,11 @@ export default async function handler(req: Req, res: Res) {
             // Payment-date gate (B): the basis itself is date-aware,
             // so a future-dated report never shows a charge basis.
             visitDate: effectiveVisitDate(evStr(latestEvent(events, "visit_confirmed"), "date"), row.visit_date),
+            // Waive durability (fix round 2): the row flag is the
+            // durable waive fact; paymentBasis ORs it with the journal.
+            chargeWaivedRow: row.charge_waived ?? null,
+            // Fix round 2: a refunded visit has no basis.
+            status: row.status ?? null,
           },
           Date.now(),
         );

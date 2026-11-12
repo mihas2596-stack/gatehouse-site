@@ -26,6 +26,7 @@ type VisitStateName =
   | "payment_issue"
   | "payment_unknown"
   | "waived"
+  | "refunded"
   | "date_passed"
   | "cancelled";
 
@@ -448,6 +449,11 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       {rep.state === "paid" && (
         <p className="mb-3 rounded-lg bg-sage/20 border border-sage/40 p-3 text-sm font-semibold">
           Paid — thank you. {rep.receipt_sent ? "A receipt was emailed to you." : "Your receipt is on its way to your email."}
+        </p>
+      )}
+      {rep.state === "refunded" && (
+        <p className="mb-3 rounded-lg bg-muted border border-border p-3 text-sm font-semibold">
+          Refunded — no charge stands for this visit. If you have any questions, reply to your receipt email or contact us.
         </p>
       )}
       <ReportContent
@@ -884,14 +890,14 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown" || data.state === "waived") && (
+            {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown" || data.state === "waived" || data.state === "refunded") && (
               <section id="report" className="scroll-mt-28">
                 <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} cleanerPhoto={data.cleaner?.photo ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
               </section>
             )}
 
 
-            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue", "payment_unknown", "waived"].includes(data.state) && (
+            {rows.length > 0 && !["report_sent", "issue_open", "approved", "paid", "payment_issue", "payment_unknown", "waived", "refunded"].includes(data.state) && (
               <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
                 <dl className="space-y-1.5">
                   {rows.map(([k, v]) => (
@@ -936,7 +942,7 @@ const Visit = () => {
               </div>
             )}
 
-            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown" && data.state !== "waived") && (
+            {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown" && data.state !== "waived" && data.state !== "refunded") && (
               <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
                 <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>

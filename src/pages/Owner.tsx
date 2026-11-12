@@ -204,6 +204,11 @@ const EVENT_LABELS: Record<string, string> = {
   issue_resolved: "Issue resolved",
   payment_failed: "Payment failed",
   payment_succeeded: "Payment succeeded",
+  // Fix round 2: refund / dispute / basis-blocked payment events from
+  // the Stripe webhook — the owner must see them in Activity.
+  payment_refunded: "Payment refunded",
+  payment_disputed: "Payment disputed in Stripe",
+  payment_succeeded_no_basis: "Payment succeeded but not recorded — needs review",
   client_link_issued: "Client link created",
   date_proposed: "Another date proposed",
   client_note: "Customer note",

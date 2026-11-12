@@ -118,6 +118,10 @@ async function hydrateCustomerMeta(
   const earlyRemindedEv = latestEvent(events, "early_reminder_sent");
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
+    // Fix round 2: a refunded visit is its own state — it must never
+    // fall through to "report_sent" (which would make selectDue
+    // consider it for auto-charge).
+    : row.status === "refunded" ? "refunded"
     : cancelledEv ? "cancelled"
     : issueOpen ? "issue_open"
     : approvedEv ? "approved"
@@ -500,6 +504,11 @@ export default async function handler(req: Req, res: Res) {
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
         if (!Number.isFinite(sentMs)) continue;
         if (m["gh_state"] === "paid") continue;
+        // Fix round 2: a future-dated sent report gets no reminder —
+        // the client must not be told "you'll be charged in 24h"
+        // before the visit has happened. Same effective date as
+        // selectDue (confirmed date wins, else scheduled date).
+        if (isFutureVisitDate(m["gh_confirmed_date"] || m["gh_visit_date"] || "", now)) continue;
         if (sentMs + 4 * 3600 * 1000 > now) continue;
         if (sentMs + 20 * 3600 * 1000 <= now) continue;
         if (!c.email) continue;
@@ -584,6 +593,11 @@ export default async function handler(req: Req, res: Res) {
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
         if (!Number.isFinite(sentMs)) continue;
         if (m["gh_state"] === "paid") continue;
+        // Fix round 2: a future-dated sent report gets no reminder —
+        // the client must not be told "you'll be charged in 24h"
+        // before the visit has happened. Same effective date as
+        // selectDue (confirmed date wins, else scheduled date).
+        if (isFutureVisitDate(m["gh_confirmed_date"] || m["gh_visit_date"] || "", now)) continue;
         if (sentMs + 20 * 3600 * 1000 > now) continue;
         if (!c.email) continue;
         try {

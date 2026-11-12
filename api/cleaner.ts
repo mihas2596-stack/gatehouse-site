@@ -166,7 +166,7 @@ async function resolveVisit(
     // token still resolves (the owner preview and the cleaner's own
     // history keep working), but the view is a summary only: no
     // address, no entry, no phone, no photos (see view()).
-    return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" };
+    return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" || visit.status === "refunded" };
   }
   const rows = await dbSelect<VisitRow>(
     "gh_visits",
@@ -177,7 +177,7 @@ async function resolveVisit(
   if (visit.cleaner_token_expires && Date.parse(visit.cleaner_token_expires) < Date.now()) {
     return { error: "link_expired", status: 410 };
   }
-  return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" };
+  return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" || visit.status === "refunded" };
 }
 
 /** Rooms that still block submission: a room needs a before photo AND an after
