@@ -31,7 +31,6 @@ describe("quote steps", () => {
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Bedrooms")).not.toBeInTheDocument();
@@ -46,7 +45,6 @@ describe("quote steps", () => {
   it("step 3 shows the exact payment text, the fixed-price rule and no entry secrets field", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
@@ -71,26 +69,20 @@ describe("quote steps", () => {
     expect((screen.getByLabelText(/Inside cabinets/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Pets/) as HTMLInputElement).checked).toBe(false);
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Inside oven/));
     expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
   });
 
-  it("step 1 follows the simplified spec: estimate until answered, deep-clean line only on No", () => {
+  it("step 1 prices Standard immediately after an eligible ZIP", () => {
     openQuote();
     expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
     expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
     expect(screen.queryByText("Your cleaning cost")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     expect(screen.getByText("Your cleaning cost")).toBeInTheDocument();
-    expect(screen.getByText("Professionally cleaned in the last 3 months? *")).toBeInTheDocument();
-    // Unanswered cleaning history: the price is an estimate, not confirmed.
-    expect(screen.getByText(/Estimated regular visits:/)).toBeInTheDocument();
-    expect(screen.queryByText("First visit will be a deep clean.")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /^No$/ }));
-    expect(screen.getByText("First visit will be a deep clean.")).toBeInTheDocument();
-    expect(screen.getByText("First visit (Deep clean): $329")).toBeInTheDocument();
+    expect(screen.queryByText(/professionally cleaned in the last/i)).not.toBeInTheDocument();
+    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
     expect(screen.getByText("Future visits (Standard): $189 every other week")).toBeInTheDocument();
     expect(screen.getByText("Due today: $0")).toBeInTheDocument();
     // The room-by-room link lives on step 2 now, not in the step-1 flow.
@@ -101,10 +93,9 @@ describe("quote steps", () => {
   });
 
   it("step 3 Price row shows real recurring values, never a literal fmt$ placeholder", () => {
-    const goToStep3 = (history: "Yes" | "No", oven: boolean) => {
+    const goToStep3 = (oven: boolean) => {
       openQuote();
       fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-      fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${history}$`) }));
       if (oven) {
         // Extras start collapsed.
         fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
@@ -118,24 +109,16 @@ describe("quote steps", () => {
       fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
       expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     };
-    // Defaults (3-bed M, cleaned recently, every other week): first
+    // Defaults (3-bed M, every other week): first
     // == recurring, so the first recurring branch renders.
-    goToStep3("Yes", false);
+    goToStep3(false);
     expect(screen.getByText("First visit $189, then $189 per visit, every other week")).toBeInTheDocument();
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
     cleanup();
     sessionStorage.removeItem("gh_quote_draft_v1");
     // Same home + oven: both totals move by the $35 addon, still equal.
-    goToStep3("Yes", true);
+    goToStep3(true);
     expect(screen.getByText("First visit $224, then $224 per visit, every other week")).toBeInTheDocument();
-    expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
-    cleanup();
-    sessionStorage.removeItem("gh_quote_draft_v1");
-    // Not cleaned recently: first visit is a deep clean, then the
-    // recurring price — the second recurring branch renders. The
-    // line is split across JSX fragments, so assert on page text.
-    goToStep3("No", false);
-    expect(document.body.textContent).toContain("First visit $329 (deep clean), then $189 per visit, every other week");
     expect(screen.queryByText(/fmt\$/)).not.toBeInTheDocument();
   });
 
@@ -144,7 +127,6 @@ describe("quote steps", () => {
     expect(screen.queryByText("More about your home (optional)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Approximate home size — if you know it")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
     // jsdom has no real scrolling, so focus on the new heading is
@@ -163,7 +145,6 @@ describe("quote steps", () => {
   it("step 3 payment block answers why the card, without the wall of text", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
@@ -189,7 +170,6 @@ describe("quote steps", () => {
   it("step 2 asks how to arrange entry, with no preselection and no codes", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByText("How will your cleaner get in? *")).toBeInTheDocument();
     expect(screen.getByText("Choose an option. No keys or entry codes needed now.")).toBeInTheDocument();
@@ -208,7 +188,6 @@ describe("quote steps", () => {
   it("review is blocked without an entry choice", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -222,7 +201,6 @@ describe("quote steps", () => {
   it("step 3 shows one summary with requested date, entry, and Due today $0", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
@@ -239,7 +217,6 @@ describe("quote steps", () => {
   it("city is required on step 2", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -254,7 +231,6 @@ describe("quote steps", () => {
   it("decide-later shows arrange-it help on step 2 and in review", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "GA"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -270,7 +246,6 @@ describe("quote steps", () => {
   it("rejects a non-Georgia state on step 2", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    fireEvent.click(screen.getByRole("radio", { name: /^Yes$/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     for (const [label, value] of [["Your name *", "Test Person"], ["Email *", "test@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Test Street"], ["City *", "Sugar Hill"], ["State *", "NY"], ["Preferred date *", "2099-12-01"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
