@@ -38,7 +38,7 @@ export const CITIES: City[] = [
     sections: [
       { heading: "Homes in Buford", text: "Buford spans parts of Gwinnett and Hall counties and mixes long-established streets near the historic downtown with newer construction further north. Home styles vary widely here, from compact ranch houses to large builds with multiple living areas, so your price is based on bedrooms, full bathrooms and your cleaning selections." },
       { heading: "How the every-other-week rhythm works", text: "The every-other-week rhythm suits Buford households that want a clean house on a set weekday. Because the house never accumulates weeks of dust and soap scum, each visit takes less time than a one-off clean, and that lower effort is reflected in a lower price per visit." },
-      { heading: "First visit: standard or deep", text: "If a professional cleaned your Buford home in the last 3 months, your first visit is a standard clean. If not, your first visit is a deep clean. You'll see both prices before you book, so you see the first visit and the ongoing every-other-week rate side by side." },
+      { heading: "First visit: standard or deep", text: "Choose Standard for regular upkeep or Deep for a more detailed clean. You can see the price for your selected service before booking." },
     ],
   },
   {
@@ -82,7 +82,7 @@ export const CITIES: City[] = [
     sections: [
       { heading: "Homes in Roswell", text: "Roswell homes come in many shapes, from townhomes near the historic district to single-family homes across the neighborhoods around Holcomb Bridge Road. Gatehouse Home Cleaning offers a room-by-room standard clean every other week, with each day and arrival window confirmed with you. Enter your bedrooms and bathrooms in the quote to see the visit price before you share your contact details. For homes with 6+ bedrooms or 6+ full bathrooms, email us for a custom quote." },
       { heading: "What a visit covers", text: "A standard visit covers kitchen counters, sinks and appliance exteriors; bathroom fixtures, mirrors and floors; and dusting, vacuuming and mopping in bedrooms and living areas. You can check the full room-by-room list before requesting a booking. Inside the oven, inside the fridge, inside cabinets and interior windows are available as add-ons, with their prices shown in the quote. Your cleaner brings the supplies and equipment needed for the clean." },
-      { heading: "Booking and payment", text: "When requesting a Roswell visit, share your ZIP, street address, preferred date and arrival window. We confirm requests within one business day. If a professional cleaner has cleaned your home in the past three months, the first visit is a standard clean. Otherwise, the first visit starts with a deep clean; the quote shows the first-visit and every-other-week prices. After the clean, you receive a photo report and your card is charged when you approve it — or automatically 24 hours after we send the report if you haven't reported an issue." },
+      { heading: "Booking and payment", text: "When requesting a Roswell visit, share your ZIP, street address, preferred date and arrival window. We confirm requests within one business day. Choose Standard or Deep to see the price of your selected service before sending a request. After the clean, you receive a photo report and your card is charged when you approve it — or automatically 24 hours after we send the report if you haven't reported an issue." },
     ],
   },
 ];
