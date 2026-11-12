@@ -18,7 +18,7 @@ const makeView = (overrides: {
   photos?: PhotoFixture[];
 } = {}) => ({
   ok: true, confirmed: true, editable: true, report_status: "draft", owner_note: null,
-  visit: { service: "Standard", date: "2027-01-15", window: "morning", address: "1 Test Street", client_first_name: "Casey", no_photo_zones: overrides.no_photo_zones ?? null },
+  visit: { service: "Standard", date: "2026-11-10", window: "morning", address: "1 Test Street", client_first_name: "Casey", no_photo_zones: overrides.no_photo_zones ?? null },
   checklist: { rooms: overrides.rooms ?? [{ name: "Kitchen", items: [{ label: "Counters wiped", done: false }] }] },
   photos: overrides.photos ?? [],
 });

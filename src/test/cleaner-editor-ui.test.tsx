@@ -8,7 +8,7 @@ import Cleaner from "@/pages/Cleaner";
 vi.mock("@/lib/imageConvert", () => ({ convertToJpeg: async () => new Blob(["fixture"], { type: "image/jpeg" }) }));
 const view = () => ({
   ok: true, confirmed: true, editable: true, report_status: "draft", owner_note: null,
-  visit: { service: "Standard", date: "2027-01-15", window: "morning", address: "1 Test Street", client_first_name: "Casey", no_photo_zones: "Bedrooms" },
+  visit: { service: "Standard", date: "2026-11-10", window: "morning", address: "1 Test Street", client_first_name: "Casey", no_photo_zones: "Bedrooms" },
   checklist: { rooms: [
     { name: "Kitchen", items: [{ label: "Counters wiped", done: false }] },
     { name: "Bedrooms", items: [{ label: "Bed made", done: false }], skip_reason: "Client requested no photos" },

@@ -37,7 +37,7 @@ function makeRow(overrides: Row = {}): Row {
     visit_no: 1,
     status: "requested",
     report_status: "none",
-    visit_date: "2026-11-22",
+    visit_date: "2026-11-10",
     window: "morning",
     service: "Standard cleaning",
     client_name: "Casey Client",
@@ -318,11 +318,11 @@ describe("minimal flow", () => {
 
   describe("assign_confirm", () => {
     it("requires a roster id, an existing active cleaner", async () => {
-      expect((await call({ action: "assign_confirm", booking_id: BID, confirmed_date: "2026-11-22", confirmed_window: "morning" })).body["error"]).toBe("cleaner_id_required");
-      expect((await call({ action: "assign_confirm", booking_id: BID, cleaner_id: "nope", confirmed_date: "2026-11-22", confirmed_window: "morning" })).code).toBe(404);
+      expect((await call({ action: "assign_confirm", booking_id: BID, confirmed_date: "2026-11-10", confirmed_window: "morning" })).body["error"]).toBe("cleaner_id_required");
+      expect((await call({ action: "assign_confirm", booking_id: BID, cleaner_id: "nope", confirmed_date: "2026-11-10", confirmed_window: "morning" })).code).toBe(404);
       const id = await addCleaner();
       await call({ action: "roster_update", cleaner_id: id, active: false });
-      const r = await call({ action: "assign_confirm", booking_id: BID, cleaner_id: id, confirmed_date: "2026-11-22", confirmed_window: "morning" });
+      const r = await call({ action: "assign_confirm", booking_id: BID, cleaner_id: id, confirmed_date: "2026-11-10", confirmed_window: "morning" });
       expect(r.code).toBe(409);
       expect(r.body["error"]).toBe("cleaner_inactive");
     });
@@ -331,7 +331,7 @@ describe("minimal flow", () => {
       const id = await addCleaner();
       const r = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-22", confirmed_window: "morning",
+        confirmed_date: "2026-11-10", confirmed_window: "morning",
       });
       expect(r.body["ok"]).toBe(true);
       expect(r.body["email_sent"]).toBe(true);
@@ -349,12 +349,12 @@ describe("minimal flow", () => {
       const id = await addCleaner();
       const first = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-22", confirmed_window: "morning",
+        confirmed_date: "2026-11-10", confirmed_window: "morning",
       });
       expect(first.body["ok"]).toBe(true);
       const second = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-22", confirmed_window: "morning",
+        confirmed_date: "2026-11-10", confirmed_window: "morning",
       });
       expect(second.body["already_confirmed"]).toBe(true);
       expect(second.body["email_sent"]).toBe(false);
@@ -367,13 +367,13 @@ describe("minimal flow", () => {
       rows[0]["status"] = "report_submitted";
       const blocked = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-22", confirmed_window: "morning",
+        confirmed_date: "2026-11-10", confirmed_window: "morning",
       });
       expect(blocked.code).toBe(409);
       expect(blocked.body["error"]).toBe("needs_review");
       const repaired = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-22", confirmed_window: "morning", repair: true,
+        confirmed_date: "2026-11-10", confirmed_window: "morning", repair: true,
       });
       expect(repaired.body["ok"]).toBe(true);
       expect(rows[0]["report_status"]).toBe("submitted");

@@ -139,7 +139,7 @@ const fmtDeadline = (iso: string): string => {
 
 // §11: the report lives INSIDE the client cabinet — same booking, same
 // page, anchored at #report (the report email links straight here).
-function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, cardLabel, onChanged }: { bt: string; visitState: string; cleanerName?: string | null; visitDate?: string | null; visitWindow?: string | null; cardLabel?: string | null; onChanged: () => void }) {
+function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, visitWindow, cardLabel, onChanged }: { bt: string; visitState: string; cleanerName?: string | null; cleanerPhoto?: string | null; visitDate?: string | null; visitWindow?: string | null; cardLabel?: string | null; onChanged: () => void }) {
   const [rep, setRep] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -272,6 +272,17 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
   // H1: an unknown charge outcome is actionable — the client must be
   // able to retry (the retry re-checks the payment status first).
   const canAct = rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown";
+  // B (payment-date gate): the visit has not happened yet — a report
+  // that exists for a future date cannot be approved or paid. "Today"
+  // is the Atlanta calendar date (America/New_York), compared as
+  // YYYY-MM-DD strings, mirroring the server gate in api/report.ts.
+  // The server enforces the same gate, so this is display, not security.
+  const isFutureVisit = (() => {
+    const d = visitDate;
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return d > today;
+  })();
   const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown";
   // A waived visit is closed without a charge: no card line, no
   // "Change card", no Approve — the banner below says so plainly.
@@ -309,7 +320,18 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           {cleanerName && (
             <div className="flex justify-between gap-4 text-sm">
               <dt className="text-muted-foreground">Cleaned by</dt>
-              <dd className="font-semibold text-right">{cleanerName}</dd>
+              {/* A5: the cleaner's photo next to the name — a generic
+                  User icon when the roster has no photo (Danielle
+                  Littles has none stored), so the client always sees
+                  who cleaned, with or without a picture. */}
+              <dd className="font-semibold text-right flex items-center gap-2">
+                {cleanerPhoto ? (
+                  <img src={cleanerPhoto} alt="" className="w-6 h-6 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                ) : (
+                  <span className="w-6 h-6 rounded-full bg-muted flex items-center justify-center" aria-hidden="true"><User className="w-4 h-4 text-muted-foreground" /></span>
+                )}
+                {cleanerName}
+              </dd>
             </div>
           )}
           {cardLabel && !isWaived && (
@@ -338,9 +360,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                 Your cleaning is done — only the payment is outstanding. Try the same card again, or change it.
               </p>
               <div className="flex flex-wrap gap-2">
+                {/* B: no retry charge for a future visit. */}
+                {!isFutureVisit && (
                 <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
                   {busy ? "Processing payment…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
                 </Button>
+                )}
                 <Button variant="outline" asChild>
                   <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Change card</Link>
                 </Button>
@@ -357,9 +382,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
                 this as paid or approved. Trying again first checks the payment status; you won&apos;t be charged twice.
               </p>
               <div className="flex flex-wrap gap-2">
+                {/* B: no retry charge for a future visit. */}
+                {!isFutureVisit && (
                 <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
                   {busy ? "Checking payment…" : rep.amount ? `Try charging ${rep.amount} again` : "Try the charge again"}
                 </Button>
+                )}
                 <Button variant="outline" asChild>
                   <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`}>Change card</Link>
                 </Button>
@@ -403,9 +431,12 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
             <p className="mb-2">You told us: “{rep.issue_reason}”.</p>
           ) : null}
           <p className="mb-3">Nothing will be charged until you approve — the automatic charge stays blocked for this visit.</p>
+          {/* B: no Approve for a future visit (see the note above). */}
+          {!isFutureVisit && (
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
             {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
           </Button>
+          )}
           <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
         </div>
       )}
@@ -452,11 +483,24 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
         </p>
       )}
+      {/* B: the visit has not happened yet — a report that exists for a
+          future date cannot be approved or paid. The server rejects an
+          early Approve; this explains why the button is gone. */}
+      {isFutureVisit && canAct && (
+        <p className="mb-3 rounded-lg border border-border bg-muted p-3 text-sm font-medium" role="status">
+          This visit is on {visitDate ? fmtDateUS(visitDate) : "a future date"} — you can approve the report after the visit.
+        </p>
+      )}
       {canAct && rep.state === "awaiting" && (
         <div className="flex flex-wrap gap-2">
+          {/* B: the Approve button is gone for a future visit (see the
+              note above); "Report an issue" stays — the client can
+              still flag a problem with the report. */}
+          {!isFutureVisit && (
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
             {busy ? "Processing payment…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
           </Button>
+          )}
           <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
             Report an issue
           </Button>
@@ -486,9 +530,9 @@ function ReportSection({ bt, visitState, cleanerName, visitDate, visitWindow, ca
           />
         </div>
       )}
-      <p className="mt-4 text-xs text-muted-foreground">
-        Prefer the standalone page? <Link to={`/report?bt=${encodeURIComponent(bt)}`} className="underline">Open the full report page</Link>.
-      </p>
+      {/* C: the "Prefer the standalone page?" line is gone — the report
+          already lives on this page; the standalone /report link is one
+          tap away in the header-free cabinet, not a footer line. */}
     </div>
   );
 }
@@ -842,7 +886,7 @@ const Visit = () => {
 
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown" || data.state === "waived") && (
               <section id="report" className="scroll-mt-28">
-                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
+                <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} cleanerPhoto={data.cleaner?.photo ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
               </section>
             )}
 
@@ -1147,11 +1191,9 @@ const Visit = () => {
 
             {error && <p className="text-sm text-destructive mb-4 text-center" role="alert">{error}</p>}
 
-            <p className="text-sm text-muted-foreground text-center">
-              Questions about your visit? Email{" "}
-              <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>{" "}
-              — we reply within one business day.
-            </p>
+            {/* C: the "Questions about your visit? Email hello@…" line
+                is gone — the same address already sits in the page
+                footer, so it duplicated it. */}
             {data.state === "confirmed" && (
               <p className="text-center mt-4">
                 <CheckCircle className="inline w-4 h-4 text-sage-foreground mr-1" aria-hidden="true" />

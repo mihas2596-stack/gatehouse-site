@@ -43,7 +43,7 @@ beforeEach(() => {
     return { ok: true, json: async () => ({
       ok: true, state: visitStateOverride ?? (hasCard ? "awaiting_confirmation" : "card_needed"),
       has_card: hasCard, card_confirmed: confirmed, card_brand: "visa", card_last4: "4242",
-      booking: { service: "Standard", requested_date: "2027-01-15", first: "$1.50" },
+      booking: { service: "Standard", requested_date: "2026-11-10", first: "$1.50" },
       confirm_by: "tomorrow", entry_available: false,
     }) };
   }));

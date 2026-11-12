@@ -19,7 +19,7 @@ const BID = "bid-scenario-1";
 const EMAIL = "client@example.com";
 const ROW_ID = "11111111-1111-4111-8111-111111111111";
 const CLEANER_ID = "roster-ana-1";
-const VISIT_DATE = "2027-01-15";
+const VISIT_DATE = "2026-11-10";
 const AUTH = "Bearer " + "adm-" + "secret";
 
 type Row = Record<string, unknown>;

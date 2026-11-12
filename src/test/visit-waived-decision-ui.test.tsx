@@ -22,7 +22,7 @@ const baseVisit = () => ({
   card_confirmed: true,
   card_brand: "visa",
   card_last4: "4242",
-  booking: { service: "Standard", confirmed_date: "2026-11-15", window: "morning", first: "$1.50" },
+  booking: { service: "Standard", confirmed_date: "2026-11-10", window: "morning", first: "$1.50" },
   confirm_by: "tomorrow",
   entry_available: false,
 });

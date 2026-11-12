@@ -34,6 +34,9 @@ type CleanerView = {
     entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
     client_notes?: string | null;
     no_photo_zones: string | null;
+    // A4: the full client name — the header must show the whole name,
+    // not just the first word. client_first_name stays for compat.
+    client_name?: string | null;
     client_first_name: string;
     client_phone?: string | null;
   };
@@ -352,6 +355,17 @@ const Cleaner = () => {
   // C2: a cancelled visit is read-only even when the report state alone
   // would look editable; the server rejects POSTs the same way.
   const locked = !data.editable || data.confirmed === false || data.cancelled === true;
+  // B (payment-date gate): the visit has not happened yet — the report
+  // may be sent only on or after the visit date, never before. "Today"
+  // is the Atlanta calendar date (America/New_York), compared as
+  // YYYY-MM-DD strings, mirroring the server gate in api/cleaner.ts.
+  // The server enforces the same gate, so this is display, not security.
+  const isFutureVisit = (() => {
+    const d = v.date;
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return d > today;
+  })();
   // Finish stays disabled until every room is ready — the cleaner sees
   // the missing list in section 3 instead of tapping Finish and getting
   // an error. submit() still checks as a backstop. (A visit with no
@@ -370,7 +384,15 @@ const Cleaner = () => {
           {fmtDate(v.date)}
           {v.window ? <> · {({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}</> : null}
         </p>
-        {v.service && <p className="text-muted-foreground">{v.service}{v.client_first_name ? <> · for {v.client_first_name}</> : null}</p>}
+        {v.service && <p className="text-muted-foreground break-words">{v.service}{(v.client_name ?? v.client_first_name) ? <> · for {v.client_name ?? v.client_first_name}</> : null}</p>}
+        {/* B: the visit has not happened yet — the report can be sent
+            only after the visit. The server rejects an early submit;
+            this notice explains why Finish stays disabled. */}
+        {isFutureVisit && (
+          <p className="text-base font-medium rounded-lg border border-border bg-muted p-3 mt-3" role="status">
+            This visit is on {fmtDate(v.date)} — you can send the report after the visit.
+          </p>
+        )}
         {lastUpdated && <p className="text-xs text-muted-foreground">Updated {lastUpdated} Atlanta time — reopening this page refreshes it.</p>}
         {data.cancelled === true && (
           <div className="rounded-xl border border-border bg-muted p-4 mt-4" role="status">
@@ -394,6 +416,12 @@ const Cleaner = () => {
           </div>
         )}
 
+        {/* C: address/entry live here only while the job is in
+            progress. Once the report is submitted, the job is done —
+            the address and entry are no longer needed, so the block
+            hides. (Gated on report_status, not `locked`: an
+            unconfirmed visit still needs its address/entry.) */}
+        {data.report_status !== "submitted" && data.report_status !== "sent" && (
         <div className="rounded-xl border border-border bg-card p-5 mt-4 space-y-4">
           <h2 className="font-heading text-xl font-bold">1. Before you go</h2>
           {v.address && (
@@ -424,8 +452,11 @@ const Cleaner = () => {
           {v.no_photo_zones && (
             <p className="text-base text-destructive"><span className="font-semibold">Do not photograph:</span> {v.no_photo_zones}</p>
           )}
-          <p className="text-base"><span className="font-semibold">Need help?</span> Call or text Gatehouse <a className="underline" href="tel:+17705258599">(770) 525-8599</a> — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
         </div>
+        )}
+        {/* C: the help line lives outside "Before you go" so it stays
+            visible after the report is submitted too. */}
+        <p className="text-sm text-muted-foreground mt-4"><span className="font-semibold">Need help?</span> Call or text Gatehouse <a className="underline" href="tel:+17705258599">(770) 525-8599</a> — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
 
         {!locked && saveState !== "idle" && (
           <p className="text-base text-muted-foreground mt-4" role="status">
@@ -442,14 +473,16 @@ const Cleaner = () => {
           </div>
         )}
 
-        <details className="rounded-xl border border-border bg-card p-4 mt-4">
-          <summary className="text-base font-semibold cursor-pointer">How photos work</summary>
-          <p className="text-base text-foreground mt-2">
+        {/* C: "How photos work" is a quiet collapsed note, not a card —
+            the room steps already explain the photos. */}
+        <details className="mt-4">
+          <summary className="text-sm text-muted-foreground cursor-pointer">How photos work</summary>
+          <p className="text-sm text-muted-foreground mt-2">
             Please don&apos;t photograph people, documents, bank cards, alarm codes or other
             personal items. Photos go only into the client&apos;s report for this visit — they are
             never used for marketing without separate consent.
           </p>
-          <p className="text-base text-foreground mt-2">
+          <p className="text-sm text-muted-foreground mt-2">
             Take a “before” photo of each area before you start, and an “after” photo when
             you finish — from a similar angle, so the client can compare. Add a close-up only
             where it helps (inside the oven, a stain you couldn&apos;t remove, damage you found).
@@ -849,11 +882,12 @@ const Cleaner = () => {
                   {missingBefore.length > 0 && <p className="text-destructive">Still need a before photo (or a reason): {missingBefore.join(", ")}</p>}
                   {missingAfter.length > 0 && <p className="text-destructive">Still need an after photo (or a reason): {missingAfter.join(", ")}</p>}
                   {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
-                  {missingRooms.length === 0 && uploading === 0 && <p>Everything is ready — Finish will send the report.</p>}
+                  {missingRooms.length === 0 && uploading === 0 && !isFutureVisit && <p>Everything is ready — Finish will send the report.</p>}
+                  {isFutureVisit && <p>This visit is on {fmtDate(v.date)} — Finish unlocks after the visit.</p>}
                 </div>
               );
             })()}
-            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || !allRoomsReady || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
+            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || isFutureVisit || !allRoomsReady || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
               {busy ? "Sending…" : "Finish & send report"}
             </Button>
             <p className="text-base text-muted-foreground text-center mt-2">

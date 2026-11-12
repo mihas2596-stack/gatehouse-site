@@ -67,7 +67,10 @@ const Header = () => {
   // Checkout-stage pages — and /quote itself — get a minimal header:
   // logo + help only. No nav, no "See My Price" — nothing that pulls a
   // client who is one step from finishing back into browsing.
-  const minimalHeader = location.pathname === "/cleaner" || location.pathname === "/thank-you" || location.pathname === "/save-card" || location.pathname === "/quote";
+  // (C: /visit and /report join the minimal set — a client viewing
+  // their own visit/report needs no site nav. /cleaner was already
+  // minimal. /owner keeps the full header — it is the owner's desk.)
+  const minimalHeader = location.pathname === "/cleaner" || location.pathname === "/thank-you" || location.pathname === "/save-card" || location.pathname === "/quote" || location.pathname === "/visit" || location.pathname === "/report";
   if (minimalHeader) {
     return (
       <header

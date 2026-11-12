@@ -40,7 +40,7 @@ function makeRow(overrides: Row = {}): Row {
     visit_no: 1,
     status: "requested",
     report_status: "none",
-    visit_date: "2026-11-20",
+    visit_date: "2026-11-10",
     window: "midday",
     service: "Standard cleaning",
     client_name: "Casey Client",
@@ -180,7 +180,7 @@ describe("visit confirmation flow", () => {
 
   const confirmVisit = () => call({
     action: "confirm", booking_id: BID,
-    confirmed_date: "2026-11-20", confirmed_window: "midday",
+    confirmed_date: "2026-11-10", confirmed_window: "midday",
   });
 
   const assignCleaner = async () => {
@@ -193,7 +193,7 @@ describe("visit confirmation flow", () => {
     await assignCleaner();
     const r = await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-20", confirmed_window: "midday",
+      confirmed_date: "2026-11-10", confirmed_window: "midday",
     }, "Bearer wrong");
     expect(r.code).toBe(401);
     expect(rows[0]["status"]).toBe("requested");
@@ -212,7 +212,7 @@ describe("visit confirmation flow", () => {
     expect(r.body["ok"]).toBe(true);
     expect(r.body["email_sent"]).toBe(true);
     expect(rows[0]["status"]).toBe("confirmed");
-    expect(rows[0]["visit_date"]).toBe("2026-11-20");
+    expect(rows[0]["visit_date"]).toBe("2026-11-10");
     expect(rows[0]["window"]).toBe("midday");
     expect(events.some((e) => e.event === "visit_confirmed")).toBe(true);
     expect(events.some((e) => e.event === "confirmation_email_sent")).toBe(true);
@@ -246,7 +246,7 @@ describe("visit confirmation flow", () => {
     expect(rows[0]["status"]).toBe("report_submitted");
     const repaired = await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-20", confirmed_window: "midday", repair: true,
+      confirmed_date: "2026-11-10", confirmed_window: "midday", repair: true,
     });
     expect(repaired.body["ok"]).toBe(true);
     expect(rows[0]["status"]).toBe("confirmed");
@@ -327,7 +327,7 @@ describe("visit confirmation flow", () => {
     expect(blocked.body["error"]).toBe("needs_confirmation");
     await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-20", confirmed_window: "midday", repair: true,
+      confirmed_date: "2026-11-10", confirmed_window: "midday", repair: true,
     });
     const noPhotos = await call({ action: "send_report", booking_id: BID });
     expect(noPhotos.code).toBe(409);

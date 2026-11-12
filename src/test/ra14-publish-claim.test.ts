@@ -190,7 +190,7 @@ function baseRow(over: Partial<Row> = {}): Row {
   return {
     id: ROW_ID, booking_id: BID, client_email: EMAIL, client_name: "Casey Client",
     status: "confirmed", report_status: "none", amount_cents: 20000,
-    visit_date: "2027-02-10", window: "midday", cleaner_name: "Ana Torres", cleaner_id: CLEANER_ID,
+    visit_date: "2026-11-10", window: "midday", cleaner_name: "Ana Torres", cleaner_id: CLEANER_ID,
     issue_open: false, issue_ever: false, report_bounced: false, report_sent_at: null,
     checklist: null, ...over,
   };

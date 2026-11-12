@@ -217,6 +217,23 @@ async function visitConfirmed(visitId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+// Payment-date gate (B): a visit may be reported on or after its date,
+// never before. "Today" is the Atlanta calendar date (America/New_York),
+// compared as YYYY-MM-DD strings — the same pattern as
+// earliestServiceDate / todayInNewYork in api/visit.ts. A future
+// visit_date means the cleaning has not happened yet, so no report and
+// no payment may exist for it.
+function todayInNewYork(nowMs: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(nowMs));
+}
+
+export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
+  if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
+  return visitDate > todayInNewYork(nowMs);
+}
+
 async function view(visit: VisitRow, restricted = false) {
   const firstName = (visit.client_name ?? "").trim().split(/\s+/)[0] ?? "";
   if (restricted) {
@@ -239,6 +256,7 @@ async function view(visit: VisitRow, restricted = false) {
         entry: null,
         client_notes: null,
         no_photo_zones: null,
+        client_name: visit.client_name,
         client_first_name: firstName,
         client_phone: null,
       },
@@ -329,6 +347,9 @@ async function view(visit: VisitRow, restricted = false) {
       }, await visitConfirmed(visit.id), revokeEvents),
       client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,
+      // A4: the full client name — the header must show the whole name,
+      // not just the first word (client_first_name truncates it).
+      client_name: visit.client_name,
       client_first_name: firstName,
       // The existing signed cleaner-link gate scopes this contact to one job.
       client_phone: visit.status !== "cancelled" && visit.status !== "paid"
@@ -743,6 +764,12 @@ export default async function handler(req: Req, res: Res) {
     if (action === "submit") {
       if (visit.report_status === "submitted") {
         return json(200, { ok: true, already: true });
+      }
+      // Payment-date gate (B): the visit has not happened yet — no
+      // report may be submitted for a future date. The cleaner can
+      // send the report on or after the visit date, never before.
+      if (isFutureVisitDate(visit.visit_date)) {
+        return json(400, { ok: false, error: "report_too_early", visit_date: visit.visit_date });
       }
       if (!EDITABLE.has(visit.report_status)) {
         return json(409, { ok: false, error: "report_locked", report_status: visit.report_status });

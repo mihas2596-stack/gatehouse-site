@@ -262,6 +262,12 @@ const Owner = () => {
   // shown to the client as "Our response".
   const [decisionResolution, setDecisionResolution] = useState("");
   const [stripeState, setStripeState] = useState("");
+  // A2: the status action returns the live card state as
+  // payment_method ("saved" / "none") — the "Card:" line in the
+  // readiness checklist must read THIS, not the payment lifecycle
+  // state (stripeState), which says "Requested"/"Paid" while a card
+  // is already saved. "" means the status has not loaded yet.
+  const [cardMethod, setCardMethod] = useState("");
   // C9: the status action returns the saved card's brand + last4 —
   // shown in the Payment block as "Visa •••• 4242" when both are known.
   const [cardBrand, setCardBrand] = useState("");
@@ -399,6 +405,40 @@ const Owner = () => {
     setLoading(false);
   }, [token, headers]);
 
+  // A3: re-read ONLY the open visit's detail (status, report, photos,
+  // events) — deliberately NOT openVisit: that resets the cleaner-edit
+  // form (setCleanerEditing / setFormPhone / setFormPhoto), which would
+  // clobber an edit in progress. A visibility refresh must be silent.
+  const refreshSelected = useCallback(async () => {
+    const visitId = selectedIdRef.current;
+    if (!visitId || !token) return;
+    const visitEpoch = visitEpochRef.current;
+    try {
+      const r = await fetch(`/api/owner?view=detail&visit_id=${visitId}`, { headers: headers() });
+      const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
+      if (!isCurrentVisit(visitId, visitEpoch)) return;
+      if (j.ok && j.visit) {
+        setSelected(j.visit);
+        setPhotos(j.photos ?? []);
+        setEvents(j.events ?? []);
+      }
+    } catch { /* silent: the Refresh button is still there */ }
+  }, [token, headers]);
+
+  // A3: same pattern as the cleaner cabinet — when the owner returns
+  // to the tab, re-read the list and (when a card is open) its detail,
+  // so a report the cleaner just submitted no longer needs a manual
+  // Refresh. No polling: the refetch fires only on tab return.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadList();
+      void refreshSelected();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadList, refreshSelected]);
+
   const loadMore = async () => {
     if (nextOffset === null || loadingMore || !token) return;
     setLoadingMore(true);
@@ -474,6 +514,7 @@ const Owner = () => {
       setPhotos([]);
       setEvents([]);
       setStripeState("");
+      setCardMethod("");
       setCardBrand("");
       setCardLast4("");
       setNoStripeCustomer(false);
@@ -521,10 +562,12 @@ const Owner = () => {
       // O2: the status action returns state at the ROOT, not under ops
       // (ops carries the detail fields). Reading ops.state always yielded
       // undefined, so the Stripe line never updated.
-      const sj = (await sr.json()) as { ok: boolean; state?: string; error?: string; no_stripe_customer?: boolean; card_brand?: string; card_last4?: string };
+      const sj = (await sr.json()) as { ok: boolean; state?: string; error?: string; no_stripe_customer?: boolean; payment_method?: string; card_brand?: string; card_last4?: string };
       if (!isCurrentVisit(v.id, visitEpoch)) return;
       if (sj.ok && sj.state) {
         setStripeState(sj.state);
+        // A2: the live card state rides on the same status response.
+        setCardMethod(typeof sj.payment_method === "string" ? sj.payment_method : "");
         // C9: brand + last4 ride on the same status response; either
         // may be "" (no card / journal fallback) — the Payment block
         // shows the card line only when both are non-empty.
@@ -537,6 +580,7 @@ const Owner = () => {
         // so reaching this branch means the row itself is gone; keep
         // the honest "no customer" line rather than stale state.
         setStripeState("");
+        setCardMethod("");
         setCardBrand("");
         setCardLast4("");
         setNoStripeCustomer(true);
@@ -1415,7 +1459,15 @@ const Owner = () => {
                   <ul className="text-sm space-y-0.5">
                     <li>Cleaner: {v.cleaner_name ?? "not assigned"}</li>
                     <li>Visit confirmed: {v.visit_confirmed ? "yes" : "not yet"}</li>
-                    <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : stripeState === "card_ready" ? "saved" : stripeState ? stripeLabel(stripeState) : "not saved yet"}</li>
+                    {/* A2: the "Card:" line reads the CARD state, not the
+                        payment lifecycle. The live state (cardMethod)
+                        comes from the status action ("saved"/"none");
+                        while it has not loaded, fall back to the
+                        journal signal v.card_confirmed, which the list
+                        view already uses for its "Card ready" chip.
+                        The payment lifecycle ("Requested"/"Paid") lives
+                        in the "Payment:" line above, not here. */}
+                    <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : cardMethod === "saved" ? (cardBrand && cardLast4 ? `${cardBrand} •••• ${cardLast4}` : "Card ready") : cardMethod === "none" ? "not saved yet" : v.card_confirmed ? "Card ready" : "not saved yet"}</li>
                     <li>
                       Entry: {entryStatusText(v)}
                       {v.entry_agreed ? " · settled" : ""}
@@ -1425,7 +1477,11 @@ const Owner = () => {
                       <li>Parking/building notes: {v.entry_choice?.notes ?? v.entry_notes}</li>
                     )}
                     {v.entry?.reminder_sent && <li>Entry reminder sent.</li>}
-                    <li>Client phone: {v.client_phone ?? "missing"}</li>
+                    {/* A1: the client phone lives ONLY in the compact
+                        ClientContact line below (formatted, with Call /
+                        Text / Copy) — the raw "+17705258599" line here
+                        duplicated it. When there is no phone, the
+                        compact line says so ("not available"). */}
                   </ul>
                   {entryNeedsAttention(v) && (
                     <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3 mt-2" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
@@ -1507,17 +1563,8 @@ const Owner = () => {
                   <a className="text-base underline break-all" href={`mailto:${v.client_email ?? ""}`}>{v.client_email ?? ""}</a>
                 </div>
                 <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} compact /></div>
-                <details className="mt-3" key={`contact:${v.id}:${v.client_phone ?? ""}`}>
-                  <summary className="min-h-[44px] cursor-pointer text-base underline">{v.client_phone ? "Update client phone" : "Add client phone"}</summary>
-                  <form className="flex flex-wrap gap-2 mt-2" onSubmit={(e) => {
-                    e.preventDefault();
-                    const phone = new FormData(e.currentTarget).get("client_phone");
-                    void runAction("Save client phone", { action: "set_client_phone", booking_id: v.booking_id, client_phone: String(phone ?? "") });
-                  }}>
-                    <input name="client_phone" type="tel" required maxLength={50} aria-label="Client phone" defaultValue={v.client_phone ?? ""} placeholder="10-digit US phone number" className="min-h-[44px] rounded-lg border border-border bg-background px-3 text-base" />
-                    <Button type="submit" variant="outline" disabled={acting !== ""}>Save phone</Button>
-                  </form>
-                </details>
+                {/* C: "Update client phone" lives in "More actions"
+                    below, not as a standalone disclosure on the card. */}
                 {v.status === "requested" && !v.request_approved && (
                   <div className="mt-3">
                     <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Approve request", { action: "approve_request", booking_id: v.booking_id })}>
@@ -1623,6 +1670,33 @@ const Owner = () => {
                   </Button>
                   <p className="text-xs text-muted-foreground mt-1">Deletes the visit, its activity record, report photos and entry arrangement. Payments and Stripe records stay as they are. This cannot be undone.</p>
                 </div>
+                {/* C: client phone — moved here from its own standalone
+                    disclosure on the card, so the card leads with the
+                    next step and this rarely-used edit stays quiet. */}
+                <details className="mt-3" key={`contact:${v.id}:${v.client_phone ?? ""}`}>
+                  <summary className="text-sm underline text-muted-foreground cursor-pointer">{v.client_phone ? "Update client phone" : "Add client phone"}</summary>
+                  <form className="flex flex-wrap gap-2 mt-2" onSubmit={(e) => {
+                    e.preventDefault();
+                    const phone = new FormData(e.currentTarget).get("client_phone");
+                    void runAction("Save client phone", { action: "set_client_phone", booking_id: v.booking_id, client_phone: String(phone ?? "") });
+                  }}>
+                    <input name="client_phone" type="tel" required maxLength={50} aria-label="Client phone" defaultValue={v.client_phone ?? ""} placeholder="10-digit US phone number" className="min-h-[44px] rounded-lg border border-border bg-background px-3 text-base" />
+                    <Button type="submit" variant="outline" disabled={acting !== ""}>Save phone</Button>
+                  </form>
+                </details>
+                {/* C: next-visit invitation — moved here from its own
+                    prominent block on the paid card. The visit data
+                    carries no frequency, so the panel cannot tell a
+                    one-time visit from a recurring one; the invitation
+                    stays available here for the owner to send when a
+                    next visit is actually wanted, instead of sitting
+                    on every paid card. */}
+                {v.status === "paid" && (
+                  <div className="mt-3">
+                    <Button variant="outline" size="sm" disabled={!!acting} onClick={() => void runAction("Invite next visit", { action: "invite_next_visit", booking_id: v.booking_id })}>Email next-visit invitation</Button>
+                    <p className="text-xs text-muted-foreground mt-1">Invites the client to review the current price and request their next date.</p>
+                  </div>
+                )}
                   </div>
                 </details>
               </section>
@@ -1745,13 +1819,11 @@ const Owner = () => {
                           <Button variant="hero" onClick={() => void copyCleanerLink()}>
                             Copy cleaner link (job + photos)
                           </Button>
-                          <Button variant="outline" onClick={() => void withLink((url) => openShare("wa", cleanerMessage(url), phone))}>
-                            WhatsApp
-                          </Button>
-                          <Button variant="outline" onClick={() => void withLink((url) => openShare("sms", cleanerMessage(url), phone))}>
-                            SMS
-                          </Button>
                         </div>
+                        {/* C: one set of WhatsApp/SMS only — next to the
+                            message field inside "View link & message"
+                            below. The second set that sat here next to
+                            the copy button duplicated it. */}
                         <p className="text-xs text-muted-foreground mb-2">For the cleaner — address, rooms, checklist, photos. Never send this to the client.</p>
                         <p className="text-sm">
                           {v.cleaner_link_opened_at ? <>Opened {fmtDateTimeET(v.cleaner_link_opened_at)}</> : "Not opened yet"}
@@ -2218,12 +2290,14 @@ const Owner = () => {
                 </details>
               </section>
 
-              {v.status !== "cancelled" && v.status !== "paid" && <p className="mb-4 text-base text-muted-foreground">Before dispatch: confirm the cleaner accepted the job, has the needed supplies, and understands the entry arrangement. An opened link alone does not confirm acceptance.</p>}
-              {v.status === "paid" && <section className="rounded-xl border border-border bg-card p-5 mb-4">
-                <h2 className="font-heading text-xl font-bold mb-2">Next visit</h2>
-                <p className="text-base mb-4">Invite this customer to review the current price and request their next date. They choose the card and terms; sending this invitation creates no booking or charge.</p>
-                <Button variant="outline" disabled={!!acting} onClick={() => void runAction("Invite next visit", { action: "invite_next_visit", booking_id: v.booking_id })}>Email next-visit invitation</Button>
-              </section>}
+              {/* C: the "Before dispatch" hint is gone as a separate
+                  line — its content already sits in the cleaner-link
+                  section ("Opens WhatsApp or SMS … Opening the link
+                  doesn't mean the cleaner accepted the job."). */}
+              {/* C: the "Next visit" block is gone from the paid card —
+                  it now lives in "More actions" above, so the invitation
+                  is still one tap away when a next visit is actually
+                  wanted, instead of sitting on every paid card. */}
               {/* F. Activity — collapsed by default */}
               <details className="rounded-xl border border-border bg-card p-4 mb-4">
                 <summary className="font-semibold cursor-pointer">Activity</summary>

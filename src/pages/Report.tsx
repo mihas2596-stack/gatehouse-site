@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle, Camera, AlertTriangle, Loader2 } from "lucide-react";
+import { CheckCircle, Camera, AlertTriangle, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
@@ -26,6 +26,9 @@ type ReportData = {
   state: ReportStateName;
   booking?: { first?: string; service?: string; date?: string };
   cleaner_name?: string | null;
+  // A5: the cleaner's roster photo ("" when the roster has none —
+  // the page then renders the generic fallback icon).
+  cleaner_photo?: string | null;
   photos?: string[];
   photo_items?: PhotoItem[];
   amount?: string | null;
@@ -249,10 +252,22 @@ const Report = () => {
   };
 
   const booking = data?.booking ?? {};
-  const summaryRows: Array<[string, string]> = [];
+  const summaryRows: Array<[string, React.ReactNode]> = [];
   if (booking.service) summaryRows.push(["Service", booking.service]);
   if (booking.date) summaryRows.push(["Visit date", fmtDateUS(booking.date)]);
-  if (data?.cleaner_name) summaryRows.push(["Cleaned by", data.cleaner_name]);
+  if (data?.cleaner_name) summaryRows.push(["Cleaned by", (
+    <span className="flex items-center gap-2 justify-end">
+      {/* A5: the cleaner's photo next to the name — a generic User icon
+          when the roster has no photo (Danielle Littles has none
+          stored), so the client always sees who cleaned. */}
+      {data.cleaner_photo ? (
+        <img src={data.cleaner_photo} alt="" className="w-6 h-6 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+      ) : (
+        <span className="w-6 h-6 rounded-full bg-muted flex items-center justify-center" aria-hidden="true"><User className="w-4 h-4 text-muted-foreground" /></span>
+      )}
+      {data.cleaner_name}
+    </span>
+  )]);
   if (data?.amount) summaryRows.push(["This visit", data.amount]);
   else if (booking.first) summaryRows.push(["This visit", booking.first]);
 
@@ -265,6 +280,17 @@ const Report = () => {
   // instead of letting the client compare a "before" that isn't there.
   const hasAfterPhotos = (data?.photo_items ?? []).some((p) => p.kind === "after");
   const hasBeforePhotos = (data?.photo_items ?? []).some((p) => p.kind === "before");
+  // B (payment-date gate): the visit has not happened yet — a report
+  // that exists for a future date cannot be approved or paid. "Today"
+  // is the Atlanta calendar date (America/New_York), compared as
+  // YYYY-MM-DD strings, mirroring the server gate in api/report.ts.
+  // The server enforces the same gate, so this is display, not security.
+  const isFutureVisit = (() => {
+    const d = booking.date;
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return d > today;
+  })();
 
   const summary = summaryRows.length > 0 && (
     <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
@@ -443,15 +469,25 @@ const Report = () => {
             )}
             {!issueOpen ? (
               <>
+              {/* B: the visit has not happened yet — no Approve for a
+                  future visit. The server rejects an early Approve;
+                  this explains why the button is gone. */}
+              {isFutureVisit && (
+                <p className="mb-4 rounded-lg border border-border bg-muted p-3 text-sm font-medium text-center" role="status">
+                  This visit is on {booking.date ? fmtDateUS(booking.date) : "a future date"} — you can approve the report after the visit.
+                </p>
+              )}
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                {!isFutureVisit && (
                 <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                   {busy ? "Processing payment…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
                 </Button>
+                )}
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
                   Report an issue
                 </Button>
               </div>
-              <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>
+              {!isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
               </>
             ) : (
               <IssueForm
@@ -506,9 +542,7 @@ const Report = () => {
                 If anything is still off, email hello@gatehousehomecleaning.com.
               </p>
             )}
-            <Button variant="hero" size="lg" asChild>
-              <Link to="/">Back to Home</Link>
-            </Button>
+            {/* C: no "Back to Home" — a client page does not need it. */}
           </div>
         )}
 
@@ -712,16 +746,18 @@ const Report = () => {
               </p>
             ) : !paidIssueOpen ? (
               <>
+                {/* C: after payment the issue link is a small quiet line,
+                    not a button — a paid client must still be able to
+                    report an issue (the dispute flow), but it must not
+                    sit as a prominent action. The explanation lives
+                    inside the opened form, not under the link. */}
                 <button
                   type="button"
-                  className="text-sm underline text-muted-foreground"
+                  className="text-xs underline text-muted-foreground/70"
                   onClick={() => setPaidIssueOpen(true)}
                 >
                   Something wasn&apos;t right? Report an issue with this visit
                 </button>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  After payment, reporting an issue starts a review — we&apos;ll email you what happens next.
-                </p>
               </>
             ) : (
               <div className="text-left max-w-md mx-auto">
@@ -749,11 +785,7 @@ const Report = () => {
                 />
               </div>
             )}
-            <div className="mt-6">
-              <Button variant="hero" size="lg" asChild>
-                <Link to="/">Back to Home</Link>
-              </Button>
-            </div>
+            {/* C: no "Back to Home" — a client page does not need it. */}
           </div>
         )}
       </div>

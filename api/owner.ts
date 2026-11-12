@@ -236,6 +236,10 @@ export default async function handler(req: Req, res: Res) {
           payment_failed: paymentFailed,
           can_charge: canCharge,
           visit_confirmed: visitConfirmed,
+          // A2: the journal card signal (same as the list view) — the
+          // detail "Card:" line must read the card state, not the
+          // payment lifecycle state.
+          card_confirmed: journalEvents.some((e) => e.event === "card_confirmed"),
           proposed_date: proposedDate,
           proposed_pending: proposedPending,
           request_approved: requestApproved,

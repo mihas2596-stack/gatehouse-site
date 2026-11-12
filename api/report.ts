@@ -44,7 +44,28 @@ type BookingRow = {
   issue_open?: boolean | null; issue_ever?: boolean | null;
   checklist?: Checklist | null;
   stripe_customer_id?: string | null;
+  cleaner_profile?: unknown;
 };
+// Cleaner photo from the per-visit profile (v2): the row is the truth,
+// mirroring rowCleanerPhoto in api/visit.ts. The report page shows the
+// cleaner's photo (or the generic fallback icon) next to "Cleaned by".
+function rowCleanerPhoto(row: BookingRow | null): string {
+  const raw = row?.cleaner_profile;
+  if (raw && typeof raw === "object") {
+    const photo = (raw as Record<string, unknown>)["photo"];
+    return typeof photo === "string" ? photo : "";
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        const photo = (parsed as Record<string, unknown>)["photo"];
+        return typeof photo === "string" ? photo : "";
+      }
+    } catch { /* fall through */ }
+  }
+  return "";
+}
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string; actor?: string };
 // RA04: strict loaders that tell "no row" apart from "the DB could
 // not be read". A state-changing POST must fail closed on a read
@@ -97,6 +118,19 @@ function damageClaimWindowEnds(row: BookingRow | null, sentAt: string | null): n
   if (Number.isFinite(dayMs)) return dayMs + 24 * 3600 * 1000 + DAMAGE_CLAIM_WINDOW_MS;
   const sentMs = Date.parse(sentAt ?? "");
   return Number.isFinite(sentMs) ? sentMs + DAMAGE_CLAIM_WINDOW_MS : null;
+}
+// Payment-date gate (B): a visit may be approved and paid on or after
+// its date, never before. "Today" is the Atlanta calendar date
+// (America/New_York), compared as YYYY-MM-DD strings — the same
+// pattern as todayInNewYork in api/visit.ts.
+function todayInNewYork(nowMs: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(nowMs));
+}
+export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
+  if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
+  return visitDate > todayInNewYork(nowMs);
 }
 async function findCustomerByEmail(
   secretKey: string,
@@ -703,6 +737,9 @@ export default async function handler(req: Req, res: Res) {
         // The cleaner who did the visit — /visit names them, /report
         // must too, so the two pages of one report agree.
         cleaner_name: row?.cleaner_name ?? meta["gh_cleaner_name"] ?? null,
+        // A5: the cleaner's roster photo ("" when the roster has none —
+        // the page then renders the generic fallback icon).
+        cleaner_photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "",
         photos: items.map((p) => p.url),
         photo_items: items,
         // Rooms the client asked not to photograph (comma-separated in
@@ -898,6 +935,16 @@ export default async function handler(req: Req, res: Res) {
     const nowIso = new Date().toISOString();
 
     if (action === "approve") {
+      // Payment-date gate (B): the visit has not happened yet — the
+      // client cannot approve and pay for a future visit. The visit
+      // may be approved on or after its date, never before. The
+      // effective date is the confirmed date when set, else the
+      // scheduled visit date.
+      const effectiveVisitDate = meta["gh_confirmed_date"] || row?.visit_date || "";
+      if (isFutureVisitDate(effectiveVisitDate)) {
+        res.status(409).json({ requestId, ok: false, error: "report_too_early", visit_date: effectiveVisitDate });
+        return;
+      }
       // P06: only a CURRENT published report can be approved and paid.
       // A cancelled visit never charges; a returned (or merely
       // submitted, unpublished) report is not a fresh publication.

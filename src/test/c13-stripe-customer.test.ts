@@ -237,7 +237,7 @@ function sentWorld(opts: { confirmedPm?: string | null; cachedPm?: string } = {}
   rows = [{
     id: ROW_ID, booking_id: BID, client_email: EMAIL, client_name: "Casey Client",
     status: "report_sent", report_status: "sent", amount_cents: 20000,
-    visit_date: "2027-01-15", window: "midday",
+    visit_date: "2026-11-10", window: "midday",
     issue_open: false, issue_ever: false, report_bounced: false,
     report_sent_at: sentAt, receipt_email_id: null,
   }];
