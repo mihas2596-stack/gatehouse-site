@@ -51,7 +51,7 @@ describe("quote steps", () => {
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByText("Due today")).toBeInTheDocument();
     expect(screen.getByText("$0")).toBeInTheDocument();
-    expect(screen.getByText("24 hours after we send the report").parentElement).toHaveTextContent(/neither approve nor report an issue.*automatically 24 hours after we send the report/i);
+    expect(screen.getByText("24 hours after we send the report").parentElement).toHaveTextContent(/if you don’t approve or report an issue.*automatically 24 hours after we send the report/i);
     // The resend/version/cleaner clause was removed from the client view.
     expect(screen.queryByText(/does not change if we resend a message, publish a new report version, or change the date or cleaner/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
@@ -150,8 +150,10 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "When you pay" })).toBeInTheDocument();
+    expect(screen.getByText("$0 charged today")).toBeInTheDocument();
     expect(screen.getByText(/Save your card with Stripe/)).toBeInTheDocument();
-    expect(screen.getByText(/Report an issue within those 24 hours/)).toHaveTextContent(/stop automatic payment.*approve again/i);
+    expect(screen.getByText("Approve & pay")).toBeInTheDocument();
+    expect(screen.getByText("Report an issue").parentElement).toHaveTextContent(/within those 24 hours to stop automatic payment.*you choose when to approve and pay/i);
     expect(screen.getByText("Pending confirmation.")).toBeInTheDocument();
     expect(screen.queryByText(/A report email that bounces blocks/)).not.toBeInTheDocument();
     expect(screen.queryByText(/After your visit we send a status update/)).not.toBeInTheDocument();
