@@ -136,8 +136,9 @@ describe("send-contact rooms and entry", () => {
     expect(inserts[0]["entry_method"]).toBe("arrange_before");
     expect(inserts[0]["entry_detail"]).toBe("lockbox");
     expect(inserts[0]["entry_notes"]).toBe("Park in driveway");
-    // The entry choice reaches the owner email with its detail label.
-    expect(JSON.stringify(resendCalls)).toContain("I'll arrange entry before the visit (Lockbox)");
+    // Standard quotes wait for the card before notifying the owner.
+    expect(resendCalls).toHaveLength(1);
+    expect(JSON.stringify(resendCalls)).not.toContain("Park in driveway");
   });
 
   it("splits extra zones instead of minting one-letter rooms, and falls back without counts", async () => {
