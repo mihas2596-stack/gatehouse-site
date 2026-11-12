@@ -1,16 +1,30 @@
 export default function PaymentSummary({ showCard = false, compact = false }: { showCard?: boolean; compact?: boolean }) {
   if (compact) {
     return (
-      <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-5">
-        <h2 id="quote-payment-heading" className="font-heading text-2xl font-bold text-sage-foreground">When you pay</h2>
-        <p className="mt-2 text-base leading-relaxed">
-          Save your card with Stripe. Gatehouse never sees or stores your full card number.
-        </p>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-base leading-relaxed">
-          <li>After cleaning, we send your photo report. Approve it to pay.</li>
-          <li>If you neither approve nor report an issue, we charge your card automatically <strong>24 hours after we send the report</strong>.</li>
-          <li>Report an issue within those 24 hours to stop automatic payment for this visit. You approve again to pay after the issue is resolved.</li>
-        </ul>
+      <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-6">
+        <h2 id="quote-payment-heading" className="font-heading text-3xl font-bold text-sage-foreground sm:text-4xl">When you pay</h2>
+        <div className="mt-4 rounded-lg bg-sage/15 p-4 sm:p-5">
+          <p className="text-2xl font-bold text-sage-foreground">$0 charged today</p>
+          <p className="mt-2 text-lg leading-relaxed sm:text-xl sm:leading-relaxed">
+            Save your card with Stripe for this visit. Only Stripe handles your full card number.
+          </p>
+        </div>
+        <dl className="mt-5 divide-y divide-border text-lg leading-relaxed sm:text-xl sm:leading-relaxed">
+          <div className="pb-4">
+            <dt className="font-bold">Review your cleaning first</dt>
+            <dd className="mt-1">
+              We’ll send you a photo report after cleaning. Select <strong>Approve &amp; pay</strong> to pay.
+              If you don’t approve or report an issue, we’ll charge your card automatically <strong>24 hours after we send the report</strong>.
+            </dd>
+          </div>
+          <div className="pt-4">
+            <dt className="font-bold">Something missed?</dt>
+            <dd className="mt-1">
+              Select <strong>Report an issue</strong> within those 24 hours to stop automatic payment for this visit.
+              Once we resolve the issue, you choose when to approve and pay.
+            </dd>
+          </div>
+        </dl>
       </section>
     );
   }
