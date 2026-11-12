@@ -2,14 +2,14 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
   if (compact) {
     return (
       <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-6">
-        <h2 id="quote-payment-heading" className="font-heading text-3xl font-bold text-sage-foreground sm:text-4xl">When you pay</h2>
+        <h2 id="quote-payment-heading" className="font-heading text-3xl font-bold text-sage-foreground max-md:[&&]:!text-3xl md:text-4xl">When you pay</h2>
         <div className="mt-4 rounded-lg bg-sage/15 p-4 sm:p-5">
           <p className="text-2xl font-bold text-sage-foreground">$0 charged today</p>
-          <p className="mt-2 text-lg leading-relaxed sm:text-xl sm:leading-relaxed">
+          <p className="mt-2 text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
             Save your card with Stripe for this visit. Only Stripe handles your full card number.
           </p>
         </div>
-        <dl className="mt-5 divide-y divide-border text-lg leading-relaxed sm:text-xl sm:leading-relaxed">
+        <dl className="mt-5 divide-y divide-border text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
           <div className="pb-4">
             <dt className="font-bold">Review your cleaning first</dt>
             <dd className="mt-1">
