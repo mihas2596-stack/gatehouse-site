@@ -802,12 +802,12 @@ const Quote = () => {
             </div>
 
             {service === "standard" && (
-              <fieldset className="mt-6" id="cleaning-history">
-                <legend className="block text-sm font-medium mb-2">Professionally cleaned in the last 3 months? *</legend>
-                {recentlyCleaned === "no" && (
-                  <p className="text-sm text-muted-foreground mb-2">First visit will be a deep clean.</p>
-                )}
-                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" aria-describedby={step1HistoryError ? "history-error" : undefined} className="grid grid-cols-2 gap-3">
+              <fieldset className="mt-5 min-w-0" id="cleaning-history">
+                <legend className="mb-1 text-base font-semibold">Professionally cleaned in the last 3 months? *</legend>
+                <p id="history-help" className="mb-2 text-base text-muted-foreground">
+                  {recentlyCleaned === "no" ? "First visit will be a deep clean." : "Your answer determines the type and price of your first visit."}
+                </p>
+                <div role="radiogroup" aria-label="Cleaned professionally in the last 3 months" aria-describedby={step1HistoryError ? "history-help history-error" : "history-help"} className="flex gap-2">
                   {(["yes", "no"] as const).map((v) => (
                     <button
                       key={v}
@@ -816,7 +816,7 @@ const Quote = () => {
                       role="radio"
                       aria-checked={recentlyCleaned === v}
                       onClick={() => { setRecentlyCleaned(v); setStep1HistoryError(false); }}
-                      className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
+                      className={`min-h-[44px] min-w-[76px] rounded-lg border-2 px-4 py-2 text-base font-semibold transition-colors ${
                         recentlyCleaned === v
                           ? "border-primary bg-peach/40 text-foreground"
                           : "border-border bg-background text-muted-foreground hover:border-primary/40"
@@ -887,7 +887,7 @@ const Quote = () => {
             </div>
 
             {/* Result */}
-            <div className="mt-8 p-6 rounded-xl bg-peach-gradient border border-border text-center" aria-live="polite">
+            <div className="mt-7 rounded-xl border border-border bg-background p-4 text-center sm:p-6" aria-live="polite">
               {tier === null ? (
                 <>
                   <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
@@ -901,7 +901,7 @@ const Quote = () => {
                 <p className="text-base text-foreground">Enter your ZIP code to see your price.</p>
               ) : (
                 <>
-                  <p className="text-sm font-medium text-muted-foreground mb-1">Your cleaning cost</p>
+                  <p className="mb-2 text-[1.125rem] font-semibold text-foreground">Your cleaning cost</p>
                   {service !== "standard" ? (
                     // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
@@ -924,18 +924,18 @@ const Quote = () => {
                           ? <>Estimated regular visits: <strong>{fmt$(breakdown?.recurring_total ?? 0)}</strong> every other week.</>
                           : <>Estimated one-time clean: <strong>{fmt$(breakdown?.first_total ?? 0)}</strong>.</>}
                       </p>
-                      <p className="text-sm text-muted-foreground">
-                        Answer the cleaning-history question above to confirm your first-visit price — a deep clean may be needed first. Not sure? Pick your best guess — we'll confirm the details with you before your visit.
+                      <p className="text-base text-muted-foreground">
+                        Answer the question above to see your first-visit price. If you&apos;re unsure, we&apos;ll confirm the details with you before your visit.
                       </p>
                     </div>
                   ) : breakdown ? (
                     <div className="flex flex-col items-center gap-1">
                       {isRecurring ? (
                         <>
-                          <p className="font-heading text-2xl sm:text-3xl font-bold text-primary">
+                          <p className="font-heading text-[1.75rem] font-bold leading-tight text-primary sm:text-[2rem]">
                             First visit ({breakdown.first_service === "deep" ? "Deep clean" : "Standard"}): {fmt$(breakdown.first_total)}
                           </p>
-                          <p className="text-base font-semibold text-foreground mt-1.5">
+                          <p className="mt-2 text-[1.125rem] font-semibold leading-relaxed text-foreground sm:text-[1.25rem]">
                             Future visits (Standard): {fmt$(breakdown.recurring_total)} every other week
                           </p>
                         </>
@@ -945,10 +945,8 @@ const Quote = () => {
                         </p>
                       )}
                       {breakdown.first_service === "deep" && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Homes not cleaned professionally in the last 3 months start with a deep clean. Inside oven,
-                          fridge and cabinets are included in a deep clean — never charged twice.
-                          {isRecurring && " Your first visit is the deep clean; after that, your visits are standard cleanings at the recurring rate above."}
+                        <p className="mt-2 max-w-[44ch] text-base text-muted-foreground">
+                          Homes not cleaned professionally in the last 3 months start with a deep clean. It includes the inside of the oven, fridge and cabinets.
                         </p>
                       )}
                       {priceBlockAddons && (
@@ -959,7 +957,7 @@ const Quote = () => {
                 </>
               )}
 
-              {showPrice && <p className="mt-3 text-base font-semibold text-foreground">Due today: $0</p>}
+              {showPrice && <p className="mt-4 border-t border-border pt-3 text-[1.125rem] font-bold text-sage-foreground sm:text-[1.25rem]">Due today: $0</p>}
               {showPrice && <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request.</p>}
               <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 
