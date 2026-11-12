@@ -35,7 +35,7 @@ import {
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
 import { normalizeClientPhone } from "./_client_contact.js";
-import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy, reportEmail } from "./_email_copy.js";
+import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
@@ -1010,28 +1010,24 @@ async function sendConfirmationEmail(args: {
 }): Promise<boolean> {
   const RESEND_API_KEY = process.env["RESEND_API_KEY"];
   if (!RESEND_API_KEY) return false;
-  const priceLine = args.cents !== null
-    ? `\nAgreed price: $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")} for the first visit.`
-    : "";
-  const serviceLine = args.service ? `\nService: ${args.service}.` : "";
-  const cleanerLine = args.cleaner ? `\nCleaner: ${args.cleaner}.` : "";
-  // The booking entry choice (row column, pre-migration rows read null
-  // and keep the generic paragraph). Never includes codes or details.
-  const entryLine = args.entryMethod === "home"
-    ? `\nEntry: you'll be home to let the cleaner in — no codes needed.\n\n`
+  const details = [
+    `Date: ${emailDate(args.date)}`,
+    `Arrival window: ${emailArrivalWindow(args.win)}`,
+    args.cleaner && `Cleaner: ${args.cleaner}`,
+    args.service && `Service: ${args.service}`,
+    args.cents !== null && `Agreed price: $${(args.cents / 100).toFixed(2).replace(/\.00$/, "")} for the first visit.`,
+  ].filter(Boolean).join("\n");
+  const entry = args.entryMethod === "home"
+    ? "You’ll be home to let your cleaner in."
     : args.entryMethod === "other_person"
-      ? `\nEntry: someone else will meet the cleaner — no codes needed.\n\n`
-      : args.entryMethod === "arrange_before"
-        ? `\nEntry: you chose to arrange entry before the visit — please add your private entry details on your visit page (link below). No entry details are in this email.\n\n`
-        : args.entryMethod === "decide_later"
-          ? `\nEntry: you asked us to contact you about entry — we'll be in touch before the visit. You can also choose on your visit page (link below).\n\n`
-          : `\nArrange entry for your visit: on your visit page, choose how your cleaner gets in — you can be home, have someone meet them, or arrange entry before the visit. No entry details are in this email.\n\n`;
-  const details = `Date: ${emailDate(args.date)}\nArrival window: ${emailArrivalWindow(args.win)}${serviceLine}${cleanerLine}${priceLine}`;
+      ? "Someone else will meet your cleaner."
+      : args.entryMethod === "decide_later"
+        ? "We’ll email you before the visit to arrange entry."
+        : "Please arrange entry on your private visit page before the cleaning.";
   const paragraphs = [
     details,
-    entryLine.trim(),
-    paymentEmailCopy(args.cents !== null ? `$${(args.cents / 100).toFixed(2).replace(/\.00$/, "")}` : ""),
-    "Need to change or cancel? Use your visit page or reply to this email — free up to 48 hours before your visit, $25 after that.",
+    entry,
+    "Need to change or cancel? Open your visit or reply to this email. Cancel free at least 48 hours before your visit. Later cancellations cost $25.",
   ];
   const renderedConfirmation = {
     text: `Hi ${args.firstName},\n\nYour cleaning is confirmed.\n\n${paragraphs.join("\n\n")}\n\nView my visit:\n${args.visitLink}\n\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`,

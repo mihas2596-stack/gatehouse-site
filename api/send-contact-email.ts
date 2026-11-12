@@ -899,8 +899,10 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
       </div>
     `;
 
-    // Step: owner notification (no database table exists; the owner email is the record)
-    try {
+    // Online bookings send the owner's scheduling email after the card
+    // is ready. Inquiries, scope exceptions and legacy requests still need
+    // immediate review.
+    if (!isQuote || !visitRowId || scope_review) try {
       const sent = await sendEmail(RESEND_API_KEY, {
         from: FROM_OWNER,
         to: [ownerNotificationEmail()],
@@ -930,8 +932,6 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
         const cleanedRecently = parsed.data.cleaned_recently !== false;
 
         // Home details and service label for the customer.
-        const baths = bathrooms ? String(bathrooms).replace(/\.0$/, "") : "";
-        const homeDetails = `${bedrooms || "?"} bed / ${baths || "?"} bath`;
         const firstVisitDeep = (parsed.data.service_key === "standard" || service === "Standard") && !cleanedRecently;
         const serviceLabel = firstVisitDeep ? "First visit: Deep clean" : (service || "Standard");
         const deepPara = firstVisitDeep
@@ -989,75 +989,33 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
           : "";
         const hasPrice = Boolean(serverFirst || price);
         const requestLines =
-          `Requested date: ${date ? emailDate(date) : "To be confirmed"}\nArrival preference: ${emailArrivalWindow(time || "flexible")}\nService: ${serviceLabel}\nFrequency: ${parsed.data.frequency === "onetime" ? "One-time" : "Every other week"}\nHome: ${homeDetails} · ZIP ${zip || ""}\n\n${hasPrice
+          `Requested date: ${date ? emailDate(date) : "To be confirmed"}\nArrival preference: ${emailArrivalWindow(time || "flexible")}\nService: ${serviceLabel}\nFrequency: ${parsed.data.frequency === "onetime" ? "One-time" : "Every other week"}\n\n${hasPrice
             ? `Quoted price: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.`
             : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
-        const explainer = paymentExplainer(priceDisplay);
-        const textBody = !isQuote ? `Hi ${firstName},
-
-Thanks for your question. We’ll reply within one business day. This is a general inquiry, not a booking request.
-
-Gatehouse Home Cleaning
-hello@gatehousehomecleaning.com` : cardOnFile ? `Hi ${firstName},
-
-Request received — your visit is not confirmed yet. We'll confirm your cleaner and arrival window by ${deadline}.
-
-${requestLines}
-${testNote}${deepPara}
-One step left: confirm your saved card for THIS booking, or add a different card. A card saved earlier is never used for a new booking without your say-so. Nothing is charged today.
-${scopeNote ? `\n${scopeNote}\n` : ""}
-
-Your visit page — confirm your card, see your status, your cleaner, reschedule or cancel:
-${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
-
-${explainer}
-
-Gatehouse Home Cleaning
-
-hello@gatehousehomecleaning.com` : `Hi ${firstName},
-
-Request received — your visit is not confirmed yet.
-
-Next step: save your card to continue. We never see your card number (Stripe handles it securely).
-
-Save your card — $0 today:
-${saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card"}
-
-${requestLines}
-${testNote}${deepPara}
-We'll confirm your cleaner and arrival window by ${deadline}. Your final confirmation comes in a separate email.
-${scopeNote ? `
-${scopeNote}
-` : ""}
-${explainer}
-
-Your visit page — status, your cleaner, reschedule or cancel:
-${visitUrl ?? "https://www.gatehousehomecleaning.com/visit"}
-
-Gatehouse Home Cleaning
-
-hello@gatehousehomecleaning.com`;
-        const htmlBody = !isQuote ? undefined : emailDocument({
-          firstName,
-          heading: "Request received — your visit is not confirmed yet",
-          paragraphs: [
-            cardOnFile
-              ? "Next step: choose your saved card for this booking, or add a different card. A card saved earlier is never used for a new booking without your say-so."
-              : "Next step: save your card through Stripe. We never see or store your full card number.",
-            requestLines,
-            testNote.trim(),
-            deepPara.trim(),
-            `We'll confirm your cleaner and arrival window by ${deadline}. Your final confirmation comes in a separate email.`,
-            scopeNote,
-            explainer,
-          ],
-          action: {
-            url: cardOnFile
-              ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
-              : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
-            label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
-          },
-        });
+        const action = {
+          url: cardOnFile
+            ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
+            : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
+          label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
+        };
+        const heading = "Cleaning request received";
+        const nextStep = cardOnFile
+          ? "Choose a card for this visit. $0 is charged today."
+          : "Save a card securely through Stripe to complete your request. $0 is charged today.";
+        const payment = "After cleaning, approve your photo report to pay. Your card is charged automatically 24 hours after we send the report unless you approve or report an issue. Reporting an issue stops automatic payment, and closing the issue does not restart it.";
+        const paragraphs = [
+          nextStep,
+          requestLines,
+          `Once your card is ready, we’ll email you an update on your date, arrival window and cleaner by ${deadline}.`,
+          scopeNote,
+          testNote.trim(),
+          deepPara.trim(),
+          payment,
+        ].filter(Boolean);
+        const textBody = !isQuote
+          ? `Hi ${firstName},\n\nThanks for your question. We’ll reply within one business day. This is a general inquiry, not a booking request.\n\nGatehouse Home Cleaning`
+          : `Hi ${firstName},\n\n${heading}\n\n${nextStep}\n\n${action.label}: ${action.url}\n\n${paragraphs.slice(1).join("\n\n")}\n\nGatehouse Home Cleaning`;
+        const htmlBody = isQuote ? emailDocument({ firstName, heading, paragraphs, action }) : undefined;
 
         const auto = await sendEmail(RESEND_API_KEY, {
           from: FROM_AUTO,

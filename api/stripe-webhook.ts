@@ -24,6 +24,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 import { sendReceiptEmailOnce, sendFeeReceiptEmailOnce } from "./booking-action.js";
+import { recordCheckoutCardForOwner } from "./card-status.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { webhookEventSeen, recordWebhookEvent } from "./_webhook_dedup.js";
 
@@ -197,6 +198,7 @@ export default async function handler(req: Req, res: Res) {
           const si = await stripeGet(STRIPE_SECRET_KEY, `/setup_intents/${encodeURIComponent(setupIntentId)}`);
           if (si.ok && si.data["status"] === "succeeded") {
             const pm = typeof si.data["payment_method"] === "string" ? (si.data["payment_method"] as string) : "";
+            if (bookingId && pm) await recordCheckoutCardForOwner(STRIPE_SECRET_KEY, bookingId, customerId, pm);
             await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
               "metadata[gh_state]": "card_ready",
               "metadata[gh_payment_method]": pm,
@@ -205,6 +207,7 @@ export default async function handler(req: Req, res: Res) {
             log("card_ready", { customer: customerId, booking: bookingId });
           } else {
             logErr("setup_intent", `not succeeded: ${String(si.data["status"])}`);
+            if (!si.ok) throw new Error("setup_intent_unavailable");
           }
         }
       }

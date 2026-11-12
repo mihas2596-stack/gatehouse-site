@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
-import { emailDate, emailDocument, paymentEmailCopy } from "./_email_copy.js";
+import { emailDate, emailDocument } from "./_email_copy.js";
+import { notifyOwnerCardReady } from "./_owner_email.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
@@ -14,6 +15,7 @@ type BookingRow = {
   stripe_customer_id?: string | null;
   client_name?: string | null; client_email?: string | null; created_at?: string | null; report_sent_at?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
+  window?: string | null; is_test?: boolean | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
@@ -324,6 +326,32 @@ async function ownedCard(secretKey: string, customerId: string, paymentMethod: s
   return { id: paymentMethod, brand: String(card.brand ?? ""), last4: String(card.last4 ?? "") };
 }
 
+export async function recordCheckoutCardForOwner(secretKey: string, bookingId: string, customerId: string, paymentMethod: string): Promise<void> {
+  const row = await latestBookingRow(bookingId);
+  if (!row || row.status !== "requested") return;
+  if (row.stripe_customer_id && row.stripe_customer_id !== customerId) return;
+  const stripeCustomer = await stripeGet(secretKey, `/customers/${encodeURIComponent(customerId)}`);
+  if (!stripeCustomer.ok) throw new Error("stripe_unavailable");
+  const email = row.client_email?.trim() ?? "";
+  if (!row.stripe_customer_id && (!email || String(stripeCustomer.data["email"] ?? "").toLowerCase() !== email.toLowerCase())) return;
+  const card = await ownedCard(secretKey, customerId, paymentMethod);
+  if (!card) throw new Error("saved_card_unavailable");
+  const events = await bookingEvents(bookingId);
+  if (!latestEvent(events, "card_confirmed") && !await logEventStrict(row.id, bookingId, "system", "card_confirmed", {
+    payment_method_id: card.id, brand: card.brand, last4: card.last4, via: "checkout_session",
+  })) throw new Error("card_confirmation_failed");
+  const clientEmail = email ? maybeSendCardSavedEmail(secretKey, {
+    id: customerId, email, metadata: (stripeCustomer.data["metadata"] as Record<string, string> | undefined) ?? {},
+  }, {
+    bid: bookingId, email, name: row.client_name ?? "", ts: Math.floor(Date.now() / 1000),
+  }, { visitId: row.id, amountCents: row.amount_cents }) : Promise.resolve();
+  await Promise.all([notifyOwnerCardReady(row), clientEmail]);
+}
+
+function logOwnerEmailFailure(error: unknown) {
+  console.error(JSON.stringify({ step: "owner_card_ready_email", error: error instanceof Error ? error.message : "unknown" }));
+}
+
 const fmtMoney = (dollars: string): string => {
   const n = parseFloat(dollars);
   if (!Number.isFinite(n)) return dollars ? `$${dollars}` : "";
@@ -425,8 +453,8 @@ async function maybeSendCardSavedEmail(
   const price = Number.isFinite(firstCents) && firstCents > 0
     ? fmtMoney(String(firstCents / 100))
     : fmtMoney(payload?.first ?? "");
-  const service = payload?.service || "Standard cleaning";
-  const date = payload?.date ?? "";
+  const service = ownRow?.service || payload?.service || "Standard cleaning";
+  const date = ownRow?.visit_date || payload?.date || "";
   let visitUrl = "https://www.gatehousehomecleaning.com/visit";
   if (payload?.bid) {
     const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
@@ -434,11 +462,11 @@ async function maybeSendCardSavedEmail(
   }
   const created = latestEvent(ownEvents, "visit_created")?.created_at || ownRow?.created_at;
   const deadline = confirmDeadlineLabel(created && !Number.isNaN(Date.parse(created)) ? new Date(created) : new Date());
-  const explainer = ownRow?.issue_ever || ownRow?.issue_open ? "Automatic payment is blocked for this visit. Updating your card does not restart it. You choose when to approve the report and pay." : paymentEmailCopy(price).replace(/^Due today: \$0\.\n\n/, "");
+  const explainer = ownRow?.issue_ever || ownRow?.issue_open ? "Automatic payment stays off for this visit. You choose when to approve the report and pay." : "";
   const requestSummary = `Service: ${service}${price ? `\nFirst visit: ${price}` : ""}${date ? `\nRequested date: ${emailDate(date)}` : ""}`;
   const confirmed = ownRow?.status !== "cancelled" && ownEvents.some((e) => e.event === "visit_confirmed");
-  const nextStep = ownRow?.report_sent_at ? "Your card is saved for this visit. Open your cleaning report to review the work and payment status." : confirmed ? "Your card is saved for your confirmed visit. View your date, arrival window and cleaner below." : `Your date is awaiting confirmation. We'll email your date, cleaner and arrival window by ${deadline}.`;
-  const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${nextStep}\n\n${requestSummary}\n\n${explainer}\n\nView my visit:\n${visitUrl}\n\nQuestions? Reply to this email.\n\nGatehouse Home Cleaning\n`;
+  const nextStep = ownRow?.report_sent_at ? "Open your visit to review the cleaning report and payment status." : confirmed ? "Your cleaning is confirmed. Open your visit for the date, arrival window and cleaner." : `No action needed right now. We'll email you an update on your requested date, arrival window and cleaner by ${deadline}.`;
+  const text = `Hi ${firstName},\n\nYour card is saved. $0 was charged today.\n\n${[nextStep, requestSummary, explainer].filter(Boolean).join("\n\n")}\n\nView my visit:\n${visitUrl}\n\nGatehouse Home Cleaning\n`;
   const html = emailDocument({
     firstName, heading: "Card saved — $0 charged today",
     paragraphs: [nextStep, requestSummary, explainer],
@@ -573,11 +601,14 @@ export default async function handler(req: Req, res: Res) {
         payment_method_id: card.id, brand: card.brand, last4: card.last4,
       });
       if (dbConfigured() && !persisted) { res.status(503).json({ ok: false, error: "card_confirmation_failed" }); return; }
-      await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
+    }
+    await Promise.all([
+      notifyOwnerCardReady(row).catch(logOwnerEmailFailure),
+      maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
         visitId: row?.id ?? null,
         amountCents: row?.amount_cents ?? null,
-      });
-    }
+      }),
+    ]);
     res.status(200).json({ ok: true, card_brand: card.brand, card_last4: card.last4 });
     return;
     } catch { res.status(503).json({ ok: false, error: "status_unavailable" }); return; }
@@ -802,9 +833,12 @@ export default async function handler(req: Req, res: Res) {
           booking.card_brand = card.brand;
           booking.card_last4 = card.last4;
         }
-        await maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
-          visitId: row?.id ?? null, amountCents: row?.amount_cents ?? null,
-        });
+        await Promise.all([
+          notifyOwnerCardReady(row).catch(logOwnerEmailFailure),
+          maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
+            visitId: row?.id ?? null, amountCents: row?.amount_cents ?? null,
+          }),
+        ]);
       }
     } catch (error) {
       logErr("card_confirmation", error);
