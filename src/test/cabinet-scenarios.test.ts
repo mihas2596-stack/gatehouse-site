@@ -19,7 +19,16 @@ const BID = "bid-scenario-1";
 const EMAIL = "client@example.com";
 const ROW_ID = "11111111-1111-4111-8111-111111111111";
 const CLEANER_ID = "roster-ana-1";
-const VISIT_DATE = "2026-11-10";
+// Today in America/New_York: the fixed 2026-11-10 aged past and the
+// past-date guard (G3) now rejects it. Today satisfies BOTH gates —
+// assign_confirm accepts today, and the cleaner submit gate allows
+// submitting on the visit date — so a fixed future date would break
+// the full-chain tests below.
+const nyDate = (days: number) => {
+  const d = new Date(Date.now() + days * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+};
+const VISIT_DATE = nyDate(0);
 const AUTH = "Bearer " + "adm-" + "secret";
 
 type Row = Record<string, unknown>;

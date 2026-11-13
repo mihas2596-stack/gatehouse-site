@@ -39,8 +39,8 @@ import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
 import { ownerNotificationEmail, ownerRequestEmailBody } from "./_owner_email.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
-import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
-import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
+import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate, todayInNewYork } from "./_visit_date.js";
+import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation, type FoundIntent } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { deleteAccess, revokeAccessForCleanerChange, saveAccess, saveAccessNote } from "./_visit_access.js";
@@ -1460,7 +1460,37 @@ export default async function handler(req: Req, res: Res) {
         `id=eq.${visit.id}&status=eq.${encodeURIComponent(rowStatus)}`,
         { status: "cancelled" },
       );
-      if (changed !== 1) return json(503, { ok: false, error: "cancellation_not_saved" });
+      if (changed !== 1) {
+        // M11: the conditional update lost a race — another cancel
+        // already moved the row (or the DB failed). Re-read the row
+        // and report the CURRENT state instead of a confusing 503:
+        // an already-cancelled visit is an idempotent cancel (200),
+        // not an error, and the loser must not re-journal, re-sync
+        // Stripe or re-email — the winner owns those side effects.
+        // Only a row that is still cancellable (a real DB failure)
+        // keeps the 503.
+        const reread = await latestBookingRowStrict(bookingId);
+        if (!reread.ok) return json(503, { ok: false, error: "db_unreadable" });
+        const current = reread.row;
+        if (!current) return json(404, { ok: false, error: "booking_not_found" });
+        const currentStatus = current.status ?? "";
+        if (currentStatus === "cancelled") {
+          // The winning cancel recorded the fee in its journal event;
+          // report the same fee the winner did. If the winner has
+          // not journaled yet, fall back to the fee computed from
+          // this request's own pre-cancel snapshot — both requests
+          // read the same row state, so the fee agrees.
+          const journal = await bookingEventsStrict(bookingId);
+          const cancelledEv = journal.ok ? latestEvent(journal.events, "visit_cancelled") : null;
+          const recordedFee = cancelledEv?.detail?.["fee_cents"];
+          const settledFee = typeof recordedFee === "number" ? recordedFee : fee;
+          log("owner_cancel", { booking: bookingId, fee_cents: settledFee, already_cancelled: true });
+          return json(200, { ok: true, already_cancelled: true, fee_cents: settledFee, email_sent: false });
+        }
+        if (currentStatus === "paid") return json(409, { ok: false, error: "already_paid" });
+        if (currentStatus === "refunded") return json(409, { ok: false, error: "already_refunded" });
+        return json(503, { ok: false, error: "cancellation_not_saved" });
+      }
       const journaled = await logEventStrict(visit.id, bookingId, "owner", "visit_cancelled", { scope: "once", fee_cents: fee });
       if (!journaled) {
         await dbUpdateCount("gh_visits", `id=eq.${visit.id}&status=eq.cancelled`, { status: rowStatus });
@@ -1554,35 +1584,72 @@ export default async function handler(req: Req, res: Res) {
       // booking is paid/refunded, has an open issue, or ever had one.
       // A requested/confirmed visit with no payment and no complaint
       // stays deletable (test bookings, duplicates).
-      const all = await dbSelectStrict<{ id: string; status: string | null; issue_open: boolean | null; issue_ever: boolean | null }>(
+      const all = await dbSelectStrict<{ id: string; status: string | null; issue_open: boolean | null; issue_ever: boolean | null; fee_status: string | null; fee_intent_id: string | null }>(
         "gh_visits",
-        `select=id,status,issue_open,issue_ever&booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc`,
+        `select=id,status,issue_open,issue_ever,fee_status,fee_intent_id&booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc`,
       );
       if (!all.ok) return json(503, { ok: false, error: "db_unreadable" });
       const visitIds = all.rows.map((r) => r.id).filter(Boolean);
       if (visitIds.length === 0) {
         return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: [], photos_removed: 0, photos_storage_failed: 0, events_deleted: 0 });
       }
+      // G3: a visit with ANY payment is evidence, not clutter — paid,
+      // refunded, a charge in flight, or a fee that was paid, is in
+      // flight, or even has a recorded intent. Deleting it would erase
+      // the report photos, the entry arrangement and the whole journal
+      // — the exact record a chargeback, a duplicate-charge claim or a
+      // re-clean dispute needs. Only unpaid, uncharged visits delete.
       const protectedVisit = all.rows.find(
         (r) =>
           r.status === "paid" ||
           r.status === "refunded" ||
+          r.status === "payment_pending" ||
           r.issue_open === true ||
-          r.issue_ever === true,
+          r.issue_ever === true ||
+          r.fee_status === "fee_paid" ||
+          r.fee_status === "fee_pending" ||
+          (r.fee_intent_id ?? "") !== "",
       );
       if (protectedVisit) {
         const reason =
           protectedVisit.status === "paid" || protectedVisit.status === "refunded"
             ? protectedVisit.status
-            : protectedVisit.issue_open === true
-              ? "issue_open"
-              : "issue_ever";
+            : protectedVisit.status === "payment_pending"
+              ? "payment_pending"
+              : protectedVisit.issue_open === true
+                ? "issue_open"
+                : protectedVisit.issue_ever === true
+                  ? "issue_ever"
+                  : protectedVisit.fee_status === "fee_paid"
+                    ? "fee_paid"
+                    : protectedVisit.fee_status === "fee_pending"
+                      ? "fee_pending"
+                      : "fee_intent";
         return json(409, {
           ok: false,
           error: "visit_protected",
           reason,
           visit_id: protectedVisit.id,
           message: "This visit is paid or has a complaint history, so its report, photos and journal are kept as evidence and cannot be deleted.",
+        });
+      }
+      // G3: the row can lag the money — a payment the webhook journaled
+      // (cleaning payment_succeeded, fee_charged / cancellation_fee_paid)
+      // while the row update failed still counts as a payment record.
+      // The journal is the authority here, so a paid visit whose row
+      // never flipped to paid still cannot be deleted.
+      const journal = await bookingEventsStrict(bookingId);
+      if (!journal.ok) return json(503, { ok: false, error: "db_unreadable" });
+      const paymentEvent = journal.events.find((e) =>
+        e.event === "payment_succeeded" || e.event === "fee_charged" || e.event === "cancellation_fee_paid",
+      );
+      if (paymentEvent) {
+        return json(409, {
+          ok: false,
+          error: "visit_protected",
+          reason: "payment_record",
+          visit_id: visitIds[0] ?? null,
+          message: "This visit has a payment record in its journal, so its report, photos and journal are kept as evidence and cannot be deleted.",
         });
       }
       // Report photos first: remove the bucket objects, then the rows.
@@ -1877,6 +1944,18 @@ export default async function handler(req: Req, res: Res) {
       if (wasConfirmed && reportStatus === "sent" && !already) {
         return json(409, { ok: false, error: "report_already_sent" });
       }
+      // G3: a NEW confirmation may not set a visit date in the past —
+      // the date is compared with today in America/New_York, the same
+      // clock the payment-date gate uses. Today itself is fine: a visit
+      // happening today can still be confirmed. Exempt: an exact repeat
+      // of the recorded confirmation (already) — an idempotent
+      // re-confirm must not start failing once its date has passed —
+      // and the explicit repair of a visit whose report was submitted
+      // without confirmation, which by definition records the date of
+      // a visit that already happened.
+      if (!repair && !already && date < todayInNewYork(Date.now())) {
+        return json(400, { ok: false, error: "confirmed_date_in_past", confirmed_date: date });
+      }
       // Metadata refresh (idempotent): the client page reads confirmation
       // from metadata, and the shared customer record may currently carry
       // another booking's values.
@@ -2015,6 +2094,14 @@ export default async function handler(req: Req, res: Res) {
       // forever with report_not_current). An exact repeat stays a no-op.
       if (wasConfirmed && reportStatus === "sent" && !already) {
         return json(409, { ok: false, error: "report_already_sent" });
+      }
+      // G3: same past-date rule as confirm — a NEW assignment may not
+      // set a visit date in the past (today is fine). An exact repeat
+      // of the recorded assignment and the explicit repair of a visit
+      // whose report was submitted without confirmation are exempt, for
+      // the same reasons as in confirm.
+      if (!repair && !already && date < todayInNewYork(Date.now())) {
+        return json(400, { ok: false, error: "confirmed_date_in_past", confirmed_date: date });
       }
       // Metadata refresh (idempotent): the client page reads
       // confirmation from metadata, and the shared customer record may
@@ -2971,7 +3058,11 @@ export default async function handler(req: Req, res: Res) {
       // never silently clear it — the owner either resolves the issue
       // first, or explicitly resolves it together with this re-send, so
       // metadata, the gh_visits column and the event journal move as one.
-      const issueIsOpen = meta["gh_issue_open"] === "1";
+      // M3: the open-issue signal is the ROW as well as the shared
+      // customer metadata — metadata may describe another booking of
+      // this email, or lag an issue the client just opened. Either
+      // source blocks a publish that does not resolve the issue.
+      const issueIsOpen = meta["gh_issue_open"] === "1" || visitRow?.issue_open === true;
       if (issueIsOpen && parsed.data.resolve_issue !== true) {
         return json(409, {
           ok: false,
@@ -2999,11 +3090,21 @@ export default async function handler(req: Req, res: Res) {
         // in-flight intent while a new Approve minted a second one
         // (the audit's $200 × 2). A first publish additionally
         // requires the row NOT to be payment_pending.
+        // M3: the claim also requires issue_open=false — an issue opened
+        // concurrently with this send (after the pre-check read the row)
+        // must make the publish lose instead of charging past the
+        // dispute. `neq.true` matches both false and legacy null, like
+        // the charge path in api/_payment_obligation.ts. A send that
+        // explicitly resolves the issue (resolve_issue) is exempt: its
+        // success path closes the issue after the email is proven sent,
+        // so the claim must not fail on the very issue it is about to
+        // resolve.
+        const issueGuard = parsed.data.resolve_issue === true ? "" : "&issue_open=neq.true";
         const casMatch = visitRow.report_status === "submitted"
-          ? `id=eq.${visitRow.id}&report_status=eq.submitted&status=neq.payment_pending`
+          ? `id=eq.${visitRow.id}&report_status=eq.submitted&status=neq.payment_pending${issueGuard}`
           : visitRow.report_sent_at
-            ? `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at)}&status=eq.report_sent`
-            : `id=eq.${visitRow.id}&report_status=eq.sent&status=eq.report_sent`;
+            ? `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at)}&status=eq.report_sent${issueGuard}`
+            : `id=eq.${visitRow.id}&report_status=eq.sent&status=eq.report_sent${issueGuard}`;
         const claimed = await dbUpdateCount("gh_visits", casMatch, {
           report_status: "sent",
           report_sent_at: sentAt,
@@ -3025,6 +3126,16 @@ export default async function handler(req: Req, res: Res) {
             return json(409, {
               ok: false, error: "payment_in_flight",
               hint: "A payment for this visit is in progress. Wait for it to settle, then re-send if still needed.",
+            });
+          }
+          // M3: a lost claim because an issue opened mid-publish is not
+          // "already sent" — it is a held report for the owner queue.
+          // (A send that resolves the issue never loses on this guard:
+          // its claim carries no issue condition.)
+          if (freshVisit?.issue_open === true && parsed.data.resolve_issue !== true) {
+            return json(409, {
+              ok: false, error: "issue_open",
+              hint: "A customer issue opened while this report was being sent. Resolve the issue first, or re-send with resolve_issue to resolve it together with the new report.",
             });
           }
           return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
@@ -3227,8 +3338,29 @@ export default async function handler(req: Req, res: Res) {
         if (tracked !== 1) {
           return json(502, { ok: false, error: "report_email_tracking_failed", email_sent: true });
         }
+        // M6: a (re-)publication re-arms the auto-charge reminders,
+        // mirroring api/cleaner.ts publishReportToClient — the reminder
+        // passes read gh_reminded_at / gh_reminder_for and
+        // gh_early_reminded_at / gh_early_reminder_for off the Stripe
+        // customer, so clearing them here makes the new publication's
+        // 4h and 20h reminders fire again instead of the old
+        // publication's flags silencing them. Best-effort Stripe write;
+        // the journal event below still records the re-arm.
+        try {
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+            "metadata[gh_reminded_at]": "",
+            "metadata[gh_reminder_for]": "",
+            "metadata[gh_early_reminded_at]": "",
+            "metadata[gh_early_reminder_for]": "",
+          });
+        } catch {
+          /* best-effort: the journal event below still records the re-arm */
+        }
+        await logEvent(visitRow.id, bookingId, "system", "reminders_rearmed", {
+          version, report_sent_at: sentAt,
+        });
         const journaled = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
-          version, email_sent: true, photos: finalPhotos.length,
+          version, email_sent: true, photos: finalPhotos.length, reminders_rearmed: true,
         });
         if (!journaled) {
           logErr("send_report", "email sent but report_sent journal failed — retry repairs it");
@@ -3305,6 +3437,13 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "invalid_transition", status: row?.status ?? state });
       }
       const alts = (parsed.data.alt_dates ?? []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      // G3: an alternative date in the past is not an alternative — the
+      // client cannot pick it. Same New York "today" as confirm: today
+      // itself is fine, yesterday is not.
+      const pastAlt = alts.find((d) => d < todayInNewYork(Date.now()));
+      if (pastAlt) {
+        return json(400, { ok: false, error: "alt_date_in_past", alt_date: pastAlt });
+      }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "date_declined",
         "metadata[gh_alt_dates]": alts.join(","),
@@ -3602,7 +3741,29 @@ export default async function handler(req: Req, res: Res) {
       if (!Number.isFinite(feeCents) || feeCents <= 0) {
         return json(409, { ok: false, error: "no_fee_due" });
       }
-      const feeRowRes = await dbSelectStrict<{ fee_status: string | null; fee_intent_id: string | null }>(
+      // G3: verifyIntentForObligation is the CLEANING obligation's
+      // verifier — it returns "wrong_kind" for ANY intent whose gh_kind
+      // is cancellation_fee, so using it here made every genuine fee
+      // intent "mismatch": the intent was silently dropped and
+      // charge_fee created a fresh one on top of it (a succeeded fee
+      // intent was ignored and charged twice; a processing one was
+      // doubled too). A fee intent is verified as a fee: kind must BE
+      // cancellation_fee, and amount, currency, customer and booking
+      // must match this fee obligation. Any mismatch refuses (409)
+      // instead of charging the wrong amount.
+      const feeIntentMismatch = (
+        intent: FoundIntent,
+        obligation: { amountCents: number; currency: string; customerId: string; bookingId: string },
+      ): string | null => {
+        if (intent.metadata?.["gh_kind"] !== "cancellation_fee") return "wrong_kind";
+        if (intent.amount !== obligation.amountCents) return "amount_mismatch";
+        if (intent.currency && intent.currency !== obligation.currency) return "currency_mismatch";
+        if (intent.customer && intent.customer !== obligation.customerId) return "customer_mismatch";
+        const bound = intent.metadata?.["gh_booking_id"];
+        if (!bound || bound !== obligation.bookingId) return "booking_mismatch";
+        return null;
+      };
+      const feeRowRes = await dbSelectStrict<{ fee_status: string | null; fee_intent_id: string | null; fee_amount_cents: number | null }>(
         "gh_visits",
         `id=eq.${row.id}&limit=1`,
       );
@@ -3611,6 +3772,25 @@ export default async function handler(req: Req, res: Res) {
       if (feeRow?.fee_status === "fee_paid"
         || events.some((e) => e.event === "fee_charged" || e.event === "cancellation_fee_paid")) {
         return json(200, { ok: true, already: true, fee_cents: feeCents });
+      }
+      // G3: verify the fee amount against the basis before charging.
+      // The journal's visit_cancelled event is the basis; the amount a
+      // previous charge_fee claim pinned on the row must agree with it
+      // — a pinned amount that differs means the basis moved under a
+      // live fee (or the row is corrupt), and charging either number
+      // would charge the wrong amount. (The shared Stripe mirror
+      // gh_cancel_fee_cents is deliberately NOT a hard check here: it
+      // lives on the per-email customer, so it can describe another
+      // booking of the same email that cancelled last.)
+      const pinnedCents = feeRow?.fee_amount_cents ?? null;
+      if (pinnedCents !== null && pinnedCents !== feeCents) {
+        await logEvent(row.id, bookingId, "system", "fee_basis_mismatch", {
+          journal_cents: feeCents, pinned_cents: pinnedCents,
+        });
+        return json(409, {
+          ok: false, error: "fee_basis_mismatch", reason: "pinned_amount_mismatch",
+          journal_cents: feeCents, pinned_cents: pinnedCents,
+        });
       }
       // The fee is THIS booking's obligation: charge THIS booking's
       // card — its card_confirmed journal event (the client's explicit
@@ -3673,17 +3853,24 @@ export default async function handler(req: Req, res: Res) {
         const got = await getIntent(STRIPE_SECRET_KEY, knownFeeId);
         if (got.status === "error") {
           feeUnknown = true;
+        } else if (got.intent.status === "canceled") {
+          // A cancelled intent is dead: it proves nothing about the fee
+          // and must not block a retry — fall through to search/create.
+          // (It is not adopted, and its amount is not verified: a dead
+          // intent can never charge.)
         } else {
-          const mismatch = verifyIntentForObligation(got.intent, {
+          const mismatch = feeIntentMismatch(got.intent, {
             amountCents: feeCents, currency: "usd", customerId: customer.id, bookingId,
           });
-          if (mismatch && got.intent.metadata?.["gh_kind"] !== "cancellation_fee") {
-            // A non-fee intent id on the fee row is corrupt data, not
-            // a fee payment: refuse, do not adopt it as the fee.
+          if (mismatch) {
+            // The fee row points at an intent that is not THIS fee
+            // (wrong amount, customer, booking, or not a fee intent at
+            // all): refuse, do not adopt it as the fee, and do not
+            // create a second intent on top of it.
             await markFeeFailed();
-            return json(409, { ok: false, error: "payment_intent_mismatch" });
+            return json(409, { ok: false, error: "payment_intent_mismatch", reason: mismatch });
           }
-          if (!mismatch) feeIntent = got.intent;
+          feeIntent = got.intent;
         }
       }
       if (!feeIntent && !feeUnknown) {
@@ -3694,11 +3881,19 @@ export default async function handler(req: Req, res: Res) {
           const fee = searched.intents
             .filter((pi) => pi.metadata?.["gh_kind"] === "cancellation_fee")
             .sort((a, b) => b.created - a.created)[0] ?? null;
-          if (fee) {
-            const mismatch = verifyIntentForObligation(fee, {
+          if (fee && fee.status !== "canceled") {
+            const mismatch = feeIntentMismatch(fee, {
               amountCents: feeCents, currency: "usd", customerId: customer.id, bookingId,
             });
-            if (!mismatch) feeIntent = fee;
+            if (mismatch) {
+              // A live fee intent for a DIFFERENT amount (or customer /
+              // booking) already exists: creating another one on top of
+              // it would charge twice or charge the wrong amount.
+              // Refuse with the mismatch reason instead.
+              await markFeeFailed();
+              return json(409, { ok: false, error: "payment_intent_mismatch", reason: mismatch });
+            }
+            feeIntent = fee;
           }
         }
       }
@@ -3885,6 +4080,27 @@ export default async function handler(req: Req, res: Res) {
           },
         );
         visit = created ?? (await latestVisit(bookingId));
+        // L2: close the check-then-act race — two concurrent cleaner_link
+        // calls for a Stripe-only booking can both see "no visit" and
+        // both insert a visit_no-1 row. Re-check: if an earlier row for
+        // this booking exists, drop ours and issue the link on it (no
+        // journal events or emails exist for our row yet). A failed
+        // re-check fails open: the row already exists and the link must
+        // still be issued.
+        if (created) {
+          const recheck = await dbSelectStrict<VisitRowLite & { id: string; created_at?: string }>(
+            "gh_visits",
+            `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.asc&limit=2`,
+          );
+          if (recheck.ok && recheck.rows.length > 1) {
+            const other = recheck.rows.find((r) => r.id !== created.id);
+            if (other) {
+              await dbDelete("gh_visits", `id=eq.${created.id}`);
+              log("booking_duplicate_race", { kept: other.id, dropped: created.id });
+              visit = other;
+            }
+          }
+        }
         if (!visit) return json(502, { ok: false, error: "db_error" });
       }
       const v2 = mintV2Link(visit.id, visit.visit_date);
@@ -4001,8 +4217,23 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "payment_in_flight" });
       }
       const noteText = (parsed.data.note ?? "").trim();
-      const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, { report_status: "returned" });
-      if (!okUpd) return json(502, { ok: false, error: "db_error" });
+      // L1: claim the report state this return was decided on — a
+      // concurrent return, or a return racing a cleaner re-publish,
+      // must not silently overwrite. The claim matches the
+      // report_status the returnable check above just read (submitted,
+      // or sent with an open issue): if another write moved the row
+      // first, the claim loses and the caller gets the current state
+      // instead of a success for a return that never landed.
+      const returned = await dbUpdateCount("gh_visits", `id=eq.${visit.id}&report_status=eq.${visit.report_status}`, { report_status: "returned" });
+      if (returned === 0) {
+        const fresh = await latestVisit(bookingId);
+        return json(409, {
+          ok: false, error: "report_state_changed",
+          report_status: fresh?.report_status ?? visit.report_status,
+          hint: "The report moved to a different state before this return landed. Reload the visit and try again.",
+        });
+      }
+      if (returned < 0) return json(502, { ok: false, error: "db_error" });
       await logEvent(visit.id, bookingId, "owner", "report_returned", { note: noteText });
       log("return_report", { booking: bookingId });
       return json(200, { ok: true, report_status: "returned" });

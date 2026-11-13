@@ -372,11 +372,16 @@ const Cleaner = () => {
       : d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   };
 
+  // Extension #2/#10: the warning icon used to sit under the fixed site
+  // header — py-16 (64px) is less than the header height, so only the
+  // lower half of the icon showed. page-shell is the same top clearance
+  // the working view uses (88px desktop, 64px mobile), so the full icon
+  // renders; shrink-0 keeps it from collapsing in the centered layout.
   if (error) {
     return (
-      <div className="min-h-screen bg-background px-4 py-16 text-center">
+      <div className="min-h-screen bg-background page-shell px-4 pb-16 text-center">
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
-        <AlertTriangle className="w-14 h-14 text-destructive mx-auto mb-4" strokeWidth={1.5} />
+        <AlertTriangle className="w-14 h-14 shrink-0 text-destructive mx-auto mb-4" strokeWidth={1.5} />
         <h1 className="font-heading text-2xl font-bold mb-3">
           {error === "link_expired" ? "This link has expired" : error === "db_unavailable" ? "We couldn't load this visit" : "This link doesn't work"}
         </h1>
@@ -440,16 +445,15 @@ const Cleaner = () => {
         <p className="text-base font-semibold tracking-wide text-primary mb-1">GATEHOUSE HOME CLEANING</p>
         <h1 className="font-heading text-3xl font-bold mb-1">Your cleaning job</h1>
         <p className="text-lg text-foreground">
-          {fmtDate(v.date)}
-          {v.window ? <> · {({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}</> : null}
+          {`${fmtDate(v.date)}${v.window ? ` · ${({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}` : ""}`}
         </p>
-        {v.service && <p className="text-muted-foreground break-words">{v.service}{(v.client_name ?? v.client_first_name) ? <> · for {v.client_name ?? v.client_first_name}</> : null}</p>}
+        {v.service && <p className="text-muted-foreground break-words">{`${v.service}${(v.client_name ?? v.client_first_name) ? ` · for ${v.client_name ?? v.client_first_name}` : ""}`}</p>}
         {/* B: the visit has not happened yet — the report can be sent
             only after the visit. The server rejects an early submit;
             this notice explains why Finish stays disabled. */}
         {isFutureVisit && (
           <p className="text-base font-medium rounded-lg border border-border bg-muted p-3 mt-3" role="status">
-            This visit is on {fmtDate(v.date)} — you can send the report after the visit.
+            {`This visit is on ${fmtDate(v.date)} — you can send the report after the visit.`}
           </p>
         )}
         {lastUpdated && <p className="text-xs text-muted-foreground">Updated {lastUpdated} Atlanta time — reopening this page refreshes it.</p>}
@@ -462,7 +466,7 @@ const Cleaner = () => {
 
         {data.reclean && (
           <div className="rounded-xl border border-primary/40 bg-primary/5 p-4 mt-4" role="status">
-            <p className="text-base font-semibold">Re-clean agreed{data.reclean.date ? <> for {fmtDate(data.reclean.date)}</> : null}{data.reclean.cleaner_name ? <> — {data.reclean.cleaner_name}</> : null}</p>
+            <p className="text-base font-semibold">{`Re-clean agreed${data.reclean.date ? ` for ${fmtDate(data.reclean.date)}` : ""}${data.reclean.cleaner_name ? ` — ${data.reclean.cleaner_name}` : ""}`}</p>
             {data.reclean.note && <p className="text-base text-muted-foreground">{data.reclean.note}</p>}
             <p className="text-base text-muted-foreground">The owner will confirm the details with you — check the rooms below for what needs a second look.</p>
           </div>
@@ -494,7 +498,7 @@ const Cleaner = () => {
           {!locked && <ClientContact phone={v.client_phone} />}
           {v.entry && (
             <div className="text-base space-y-1">
-              <p><span className="font-semibold">Entry:</span> {v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}</p>
+              <p><span className="font-semibold">Entry:</span>{` ${v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}`}</p>
               {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
               {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
             </div>
@@ -641,7 +645,7 @@ const Cleaner = () => {
                 <>
                   <h2 className="font-heading text-xl font-bold mb-2">2. Clean each room</h2>
                   <p className="text-base font-semibold mb-2">
-                    Rooms ready: {ready} of {checklist.rooms.length}
+                    {`Rooms ready: ${ready} of ${checklist.rooms.length}`}
                   </p>
                   <div className="h-2 rounded bg-muted overflow-hidden">
                     <div
@@ -937,12 +941,12 @@ const Cleaner = () => {
               return (
                 <div className="rounded-xl border border-border bg-card p-4 mt-4 text-base" role="status">
                   <h2 className="font-heading text-xl font-bold mb-2">3. Finish your job</h2>
-                  <p>Rooms ready: {checklist.rooms.length - missingRooms.length} of {checklist.rooms.length}</p>
+                  <p>{`Rooms ready: ${checklist.rooms.length - missingRooms.length} of ${checklist.rooms.length}`}</p>
                   {missingBefore.length > 0 && <p className="text-destructive">Still need a before photo (or a reason): {missingBefore.join(", ")}</p>}
                   {missingAfter.length > 0 && <p className="text-destructive">Still need an after photo (or a reason): {missingAfter.join(", ")}</p>}
                   {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
                   {missingRooms.length === 0 && uploading === 0 && !isFutureVisit && <p>Everything is ready — Finish will send the report.</p>}
-                  {isFutureVisit && <p>This visit is on {fmtDate(v.date)} — Finish unlocks after the visit.</p>}
+                  {isFutureVisit && <p>{`This visit is on ${fmtDate(v.date)} — Finish unlocks after the visit.`}</p>}
                 </div>
               );
             })()}

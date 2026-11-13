@@ -18,6 +18,7 @@ import {
   dbSelect,
   dbSelectStrict,
   dbInsert,
+  dbUpsert,
   dbUpdate,
   dbUpdateCount,
   dbDelete,
@@ -31,6 +32,15 @@ import {
   hashToken,
   tokenHashEquals,
 } from "./_db.js";
+// G3: isFutureVisitDate lives in api/_visit_date.ts — the shared,
+// calendar-validated copy (an impossible date like "2026-13-40" is
+// never future). The regex-only local copy used to read it as future.
+// Re-exported so existing imports keep working.
+import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
+export { isFutureVisitDate };
+// M5: orphan accounting — objects signed for upload but never
+// registered are listed from Storage and counted against the cap.
+import { countUnregisteredObjects, storageListObjects } from "./storage-cleanup.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
 import { photoBlocked } from "./_photo_policy.js";
 import { reportEmail } from "./_email_copy.js";
@@ -78,6 +88,11 @@ type VisitRow = {
   cleaner_link_version?: string | null;
   cleaner_link_issuance?: string | null;
   status: string;
+  // M2: the row's updated_at is the checklist revision token —
+  // dbUpdate/dbUpdateCount stamp it on every write, so a client that
+  // echoes the value it loaded gets a 409 when another writer moved
+  // the row first. No new column needed.
+  updated_at?: string | null;
   // Re-clean (task 4, 12.11.2026): the `reclean_*` columns
   // (migration 20261112_reclean_fields). Absent (not yet migrated) =
   // undefined at runtime, which reads as "no re-clean arranged" and
@@ -99,6 +114,12 @@ type PhotoRow = {
 
 const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const EDITABLE = new Set(["none", "draft", "returned"]);
+
+// M5: at most this many signed-but-unregistered uploads may pile up
+// for one visit. Each sign-then-abandon leaves an orphan object in
+// Storage; the cap bounds the pile-up, and the periodic cleanup in
+// api/storage-cleanup.ts removes the rest.
+const MAX_UNREGISTERED_PHOTOS = 10;
 
 const roomSlug = (room: string): string =>
   room.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "room";
@@ -195,6 +216,76 @@ async function resolveVisit(
   return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" || visit.status === "refunded" };
 }
 
+/** M1: validate a cleaner-supplied checklist against the stored
+ * work-scope rooms. The row's checklist IS the booking-time scope
+ * (buildWorkRooms in api/send-contact-email.ts); every save was
+ * validated against the stored scope before it, so the scope can only
+ * ever change by a validated write — a fake one-room checklist can
+ * never become the scope. The room-name SET must match exactly: no
+ * dropped rooms, no invented rooms. An empty stored scope (legacy row
+ * with no rooms) has nothing to check against and fails open. */
+export function checklistRoomMismatch(
+  stored: Checklist | null | undefined,
+  incoming: Checklist,
+): { missing: string[]; unknown: string[] } {
+  const expectedByLower = new Map<string, string>();
+  for (const r of stored?.rooms ?? []) {
+    const key = r.name.trim().toLowerCase();
+    if (key && !expectedByLower.has(key)) expectedByLower.set(key, r.name.trim());
+  }
+  if (expectedByLower.size === 0) return { missing: [], unknown: [] };
+  const incomingByLower = new Map<string, string>();
+  for (const r of incoming.rooms) {
+    const key = r.name.trim().toLowerCase();
+    if (key && !incomingByLower.has(key)) incomingByLower.set(key, r.name.trim());
+  }
+  return {
+    missing: [...expectedByLower.entries()]
+      .filter(([key]) => !incomingByLower.has(key))
+      .map(([, name]) => name),
+    unknown: [...incomingByLower.entries()]
+      .filter(([key]) => !expectedByLower.has(key))
+      .map(([, name]) => name),
+  };
+}
+
+/** M2: optimistic-concurrency check for checklist saves. The client
+ * sends the checklist_revision it loaded (the row's updated_at, as
+ * returned by GET); a different stored value means another writer
+ * saved first and this write is stale. No revision sent (old clients)
+ * or an unparseable value fails open — the save proceeds, as before. */
+export function checklistRevisionStale(
+  storedUpdatedAt: string | null | undefined,
+  expectedRevision: unknown,
+): boolean {
+  if (typeof expectedRevision !== "string" || !expectedRevision) return false;
+  const storedMs = Date.parse(storedUpdatedAt ?? "");
+  const expectedMs = Date.parse(expectedRevision);
+  if (!Number.isFinite(storedMs) || !Number.isFinite(expectedMs)) return false;
+  return storedMs !== expectedMs;
+}
+
+/** M4: the re-clean date from the journal (issue_resolved event),
+ * the fallback for rows arranged before migration
+ * 20261112_reclean_fields — the row's reclean_* columns may not
+ * exist yet. A date counts only when the latest decision was a
+ * re-clean (or no decision event survives in the journal window);
+ * any other decision means no re-clean was arranged. */
+async function journalRecleanDate(visitId: string): Promise<string> {
+  const decision = await dbSelect<{ detail: { decision?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.issue_decision&order=created_at.desc&limit=1`,
+  );
+  const decided = decision[0]?.detail?.decision;
+  if (typeof decided === "string" && decided !== "reclean") return "";
+  const resolved = await dbSelect<{ detail: { reclean_date?: string } | null }>(
+    "gh_events",
+    `visit_id=eq.${visitId}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
+  );
+  const d = resolved[0]?.detail?.reclean_date;
+  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+}
+
 /** Rooms that still block submission: a room needs a before photo AND an after
  * photo, unless it has a skip reason or is on the client's do-not-photograph
  * list. Mirrors the cleaner UI's per-room step rule. */
@@ -233,20 +324,19 @@ async function visitConfirmed(visitId: string): Promise<boolean> {
 }
 
 // Payment-date gate (B): a visit may be reported on or after its date,
-// never before. "Today" is the Atlanta calendar date (America/New_York),
-// compared as YYYY-MM-DD strings — the same pattern as
-// earliestServiceDate / todayInNewYork in api/visit.ts. A future
-// visit_date means the cleaning has not happened yet, so no report and
-// no payment may exist for it.
-function todayInNewYork(nowMs: number): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date(nowMs));
-}
-
-export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
-  if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
-  return visitDate > todayInNewYork(nowMs);
+// never before. The rule itself is the shared isFutureVisitDate from
+// api/_visit_date.ts (calendar-validated); the date it is applied to
+// is effectiveGateDate below — the SAME rule as the client approve
+// gate in api/report.ts (G3): the re-clean date when one is scheduled,
+// else the effective visit date (confirmed date when set, else the
+// scheduled date). A future date means the cleaning has not happened
+// yet, so no report and no payment may exist for it.
+export function effectiveGateDate(
+  recleanDate: string,
+  confirmedDate: string,
+  visitDate: string | null | undefined,
+): string {
+  return recleanDate || effectiveVisitDate(confirmedDate, visitDate);
 }
 
 async function view(visit: VisitRow, restricted = false) {
@@ -410,6 +500,9 @@ async function view(visit: VisitRow, restricted = false) {
         && await visitConfirmed(visit.id) ? await loadClientPhone(visit.id) : null,
     },
     checklist: visit.checklist ?? { rooms: [] },
+    // M2: the revision the next checklist save must echo back, or a
+    // 409 tells it the row moved first.
+    checklist_revision: visit.updated_at ?? null,
     photos: withUrls,
     report_status: visit.report_status,
     // A "sent" row whose client email bounced must not render as
@@ -556,9 +649,14 @@ async function publishReportToClient(
   // report_bounced pessimistically: if the email step then fails,
   // the clock stays blocked instead of running on an undelivered
   // report; the success write below clears it.
+  // M3: the claim also requires issue_open=false — an issue opened
+  // concurrently with the submit (after the held-check read the row)
+  // must make the publish lose instead of charging past the dispute.
+  // `neq.true` matches both false and legacy null, like the charge
+  // path in api/_payment_obligation.ts.
   const claimed = await dbUpdateCount(
     "gh_visits",
-    `id=eq.${visit.id}&report_status=eq.submitted&status=eq.report_submitted`,
+    `id=eq.${visit.id}&report_status=eq.submitted&status=eq.report_submitted&issue_open=neq.true`,
     {
       report_status: "sent",
       report_sent_at: sentAt,
@@ -568,10 +666,13 @@ async function publishReportToClient(
     },
   );
   if (claimed === 0) {
-    const fresh = await dbSelect<{ status: string | null }>(
+    const fresh = await dbSelect<{ status: string | null; issue_open: boolean | null }>(
       "gh_visits",
       `id=eq.${visit.id}`,
     );
+    // M3: a lost claim because an issue opened mid-publish is not
+    // "already published" — it is a held report for the owner queue.
+    if (fresh[0]?.issue_open === true) return { status: "failed", error: "issue_open" };
     if (fresh[0]?.status === "cancelled") return { status: "failed", error: "visit_cancelled" };
     return { status: "already_published" };
   }
@@ -668,8 +769,31 @@ async function publishReportToClient(
       { report_email_id: reportEmailId, report_bounced: false });
     if (tracked !== 1) return { status: "failed", error: "report_email_tracking_failed", email_sent: true };
   }
+  // M6: a (re-)publication re-arms the auto-charge reminders. The
+  // reminder passes in api/auto-charge.ts read gh_reminded_at /
+  // gh_reminder_for and gh_early_reminded_at / gh_early_reminder_for
+  // off the Stripe customer (rebuilt from the journal by hydration
+  // only for bookings the shared customer is not bound to — and this
+  // publish just bound it), so clearing them here makes the new
+  // publication's 4h and 20h reminders fire again instead of the old
+  // publication's flags silencing them. The journal event records
+  // the re-arm for the owner panel and for any future guard that
+  // keys the reminder-before-charge check to the publication.
+  try {
+    await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      "metadata[gh_reminded_at]": "",
+      "metadata[gh_reminder_for]": "",
+      "metadata[gh_early_reminded_at]": "",
+      "metadata[gh_early_reminder_for]": "",
+    });
+  } catch {
+    /* best-effort: the journal event below still records the re-arm */
+  }
+  await logEvent(visit.id, visit.booking_id, "system", "reminders_rearmed", {
+    version, report_sent_at: sentAt,
+  });
   await logEvent(visit.id, visit.booking_id, "cleaner", "report_sent", {
-    version, email_sent: emailSent, photos: photos.length, auto: true,
+    version, email_sent: emailSent, photos: photos.length, auto: true, reminders_rearmed: true,
   });
   return { status: "published", email_sent: emailSent, version, sent_at: sentAt };
 }
@@ -757,15 +881,41 @@ export default async function handler(req: Req, res: Res) {
     if (action === "checklist") {
       const checklist = sanitizeChecklist(body["checklist"]);
       if (!checklist) return json(400, { ok: false, error: "invalid_checklist" });
+      // M1: the room-name set must match the stored work scope
+      // exactly — a one-room fake with a skip reason never saves.
+      const mismatch = checklistRoomMismatch(visit.checklist, checklist);
+      if (mismatch.missing.length > 0 || mismatch.unknown.length > 0) {
+        return json(400, { ok: false, error: "checklist_rooms_mismatch", missing: mismatch.missing, unknown: mismatch.unknown });
+      }
+      // M2: a stale revision loses — the writer must reload and retry.
+      const expectedRevision = typeof body["checklist_revision"] === "string" ? (body["checklist_revision"] as string) : null;
+      if (expectedRevision && checklistRevisionStale(visit.updated_at, expectedRevision)) {
+        return json(409, { ok: false, error: "checklist_stale", checklist_revision: visit.updated_at ?? null });
+      }
       // Keep the server-stamped submission time out of cleaner control.
       if (visit.checklist?.submitted_at) checklist.submitted_at = visit.checklist.submitted_at;
-      const changed = await dbUpdateCount("gh_visits", `id=eq.${visit.id}&report_status=in.(none,draft,returned)`, {
+      // M2: the revision is part of the CAS itself, so two saves that
+      // both loaded the same revision cannot both win — the loser
+      // re-reads below and gets checklist_stale, not a silent
+      // overwrite. No revision sent (old clients) keeps the old
+      // report_status-only CAS.
+      const casFilter = `id=eq.${visit.id}&report_status=in.(none,draft,returned)` +
+        (expectedRevision && visit.updated_at ? `&updated_at=eq.${encodeURIComponent(visit.updated_at)}` : "");
+      const changed = await dbUpdateCount("gh_visits", casFilter, {
         checklist,
         report_status: visit.report_status === "none" ? "draft" : visit.report_status,
       });
       if (changed < 0) return json(502, { ok: false, error: "db_error" });
-      if (changed === 0) return json(409, { ok: false, error: "report_locked" });
-      return json(200, { ok: true });
+      if (changed === 0) {
+        const fresh = await dbSelectStrict<VisitRow>("gh_visits", `id=eq.${visit.id}&limit=1`);
+        if (fresh.ok && fresh.rows[0] && expectedRevision && checklistRevisionStale(fresh.rows[0].updated_at, expectedRevision)) {
+          return json(409, { ok: false, error: "checklist_stale", checklist_revision: fresh.rows[0].updated_at ?? null });
+        }
+        return json(409, { ok: false, error: "report_locked" });
+      }
+      // M2: hand the writer its new revision for the next save.
+      const fresh = await dbSelect<{ updated_at: string | null }>("gh_visits", `id=eq.${visit.id}&limit=1`);
+      return json(200, { ok: true, ...(fresh[0]?.updated_at ? { checklist_revision: fresh[0].updated_at } : {}) });
     }
 
     if (action === "photo_sign") {
@@ -776,6 +926,20 @@ export default async function handler(req: Req, res: Res) {
         return json(400, { ok: false, error: "invalid_room" });
       }
       if (photoBlocked(visit.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
+      // M5: cap unregistered uploads — objects signed for upload but
+      // never registered. Listed from Storage, minus the registered
+      // rows: a cleaner who keeps signing without registering cannot
+      // pile up orphans without bound. A listing failure fails OPEN
+      // (the sign proceeds): blocking the cleaner's work because a
+      // read-only listing call failed would be worse than one more
+      // orphan, and the periodic cleanup still removes it later.
+      const listed = await storageListObjects(`visits/${visit.id}/`, 200);
+      if (listed !== null) {
+        const registeredPaths = (await photosOf(visit.id)).map((p) => p.storage_path);
+        if (countUnregisteredObjects(listed, registeredPaths) >= MAX_UNREGISTERED_PHOTOS) {
+          return json(400, { ok: false, error: "too_many_unregistered_photos" });
+        }
+      }
       const objectPath = `visits/${visit.id}/${roomSlug(room)}/${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}.jpg`;
@@ -790,6 +954,14 @@ export default async function handler(req: Req, res: Res) {
       const storagePath = typeof body["storage_path"] === "string" ? (body["storage_path"] as string) : "";
       if (!room || !storagePath.startsWith(`visits/${visit.id}/`)) {
         return json(400, { ok: false, error: "invalid_photo" });
+      }
+      // L3: the room is validated against the visit's work-scope rooms
+      // — the same rule as photo_sign (and the M1 checklist
+      // validation, for a single room): a photo for an invented room
+      // never registers.
+      const scopeRooms = (visit.checklist?.rooms ?? []).map((r) => r.name);
+      if (!scopeRooms.includes(room) && room !== "Other areas") {
+        return json(400, { ok: false, error: "invalid_room" });
       }
       if (photoBlocked(visit.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
       // Server-side validation of the uploaded bytes (type + size): the
@@ -807,15 +979,41 @@ export default async function handler(req: Req, res: Res) {
       }
       if (existing.length >= 60) return json(400, { ok: false, error: "too_many_photos" });
       const note = typeof body["note"] === "string" ? (body["note"] as string).slice(0, 300) : null;
-      const row = await dbInsert<PhotoRow>("gh_photos", {
+      const newRow = {
         visit_id: visit.id,
         room,
         storage_path: storagePath,
         kind,
         note,
-      });
-      if (!row) return json(502, { ok: false, error: "db_error" });
-      return json(200, { ok: true, photo_id: row.id });
+      };
+      // L3: the duplicate claim is atomic — a conditional upsert on
+      // the photo's unique key (storage_path, migration
+      // 20261113_photo_storage_path_unique). Two concurrent registers
+      // of the same upload collapse into one row instead of two.
+      // M5: registration is retried with backoff — a transient DB
+      // failure after a successful upload used to strand the bytes as
+      // an orphan. After each failed attempt the row is re-read: a row
+      // that appeared meanwhile means the register already landed
+      // (already:true), never a second row.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const claimed = await dbUpsert<PhotoRow>("gh_photos", newRow, "storage_path");
+        if (claimed) return json(200, { ok: true, photo_id: claimed.id });
+        const reread = await photosOf(visit.id);
+        if (reread.some((p) => p.storage_path === storagePath)) {
+          return json(200, { ok: true, already: true });
+        }
+        // The upsert returns null when the unique index does not exist
+        // yet (migration not applied): fall back to the plain insert
+        // instead of failing a valid registration.
+        const inserted = await dbInsert<PhotoRow>("gh_photos", newRow);
+        if (inserted) return json(200, { ok: true, photo_id: inserted.id });
+        const rereadAfterInsert = await photosOf(visit.id);
+        if (rereadAfterInsert.some((p) => p.storage_path === storagePath)) {
+          return json(200, { ok: true, already: true });
+        }
+        if (attempt < 2) await new Promise((r) => setTimeout(r, attempt === 0 ? 250 : 700));
+      }
+      return json(502, { ok: false, error: "db_error" });
     }
 
     if (action === "photo_delete") {
@@ -839,18 +1037,49 @@ export default async function handler(req: Req, res: Res) {
       // RE-CLEAN date, not the original visit date — the original
       // date is already past, so gating on it would let the cleaner
       // submit days before the re-clean happens.
-      const recleanScheduled =
+      // M4: the journal is the fallback for rows arranged before the
+      // reclean_* migration — a re-clean date that lives only on the
+      // issue_resolved event gates exactly like a row one.
+      const rowRecleanScheduled =
         visit.reclean_status === "scheduled" &&
         typeof visit.reclean_date === "string" &&
         !!visit.reclean_date;
-      const gateDate = recleanScheduled ? (visit.reclean_date as string) : visit.visit_date;
+      const journalDate = rowRecleanScheduled ? "" : await journalRecleanDate(visit.id);
+      const recleanScheduled = rowRecleanScheduled || !!journalDate;
+      // G3: the gate date is shared with the client approve gate in
+      // api/report.ts (effectiveGateDate): the re-clean date when one
+      // is scheduled, else the effective visit date — the confirmed
+      // date from the journal when set, else the scheduled visit
+      // date. The two gates must never disagree about which date
+      // allows a report.
+      const recleanDate = rowRecleanScheduled ? (visit.reclean_date as string) : journalDate;
+      const confirmedDate = recleanDate
+        ? ""
+        : confirmedDateOf(await dbSelect<{ event: string; detail: { date?: string } | null }>(
+            "gh_events",
+            `visit_id=eq.${visit.id}&event=eq.visit_confirmed&limit=1`,
+          ));
+      const gateDate = effectiveGateDate(recleanDate, confirmedDate, visit.visit_date);
       if (isFutureVisitDate(gateDate)) {
         return json(400, { ok: false, error: "report_too_early", visit_date: gateDate, ...(recleanScheduled ? { reclean: true } : {}) });
       }
       if (!EDITABLE.has(visit.report_status)) {
         return json(409, { ok: false, error: "report_locked", report_status: visit.report_status });
       }
+      // M2: a submit that carries a stale checklist revision loses
+      // like a stale save — reload and retry instead of publishing
+      // over a newer checklist.
+      const submitRevision = typeof body["checklist_revision"] === "string" ? (body["checklist_revision"] as string) : null;
+      if (submitRevision && checklistRevisionStale(visit.updated_at, submitRevision)) {
+        return json(409, { ok: false, error: "checklist_stale", checklist_revision: visit.updated_at ?? null });
+      }
       const checklist = sanitizeChecklist(body["checklist"]) ?? visit.checklist;
+      // M1: the submitted room-name set must match the stored work
+      // scope exactly — a fake one-room checklist never submits.
+      const submitMismatch = checklistRoomMismatch(visit.checklist, checklist);
+      if (submitMismatch.missing.length > 0 || submitMismatch.unknown.length > 0) {
+        return json(400, { ok: false, error: "checklist_rooms_mismatch", missing: submitMismatch.missing, unknown: submitMismatch.unknown });
+      }
       const photos = await photosOf(visit.id);
       const missing = missingRooms(checklist, photos, visit.no_photo_zones);
       if (missing.length > 0) {
@@ -877,7 +1106,9 @@ export default async function handler(req: Req, res: Res) {
       // "submitted" (best-effort, separate from the CAS above — the
       // column does not exist until migration 20261112_reclean_fields,
       // and a failed write must never fail the submission itself).
-      if (recleanScheduled) {
+      // Only for a row-tracked re-clean: a journal-only re-clean has
+      // no row status to move.
+      if (rowRecleanScheduled) {
         await dbUpdate("gh_visits", `id=eq.${visit.id}`, { reclean_status: "submitted" });
       }
       await logEvent(visit.id, visit.booking_id, "cleaner", "report_submitted", {
@@ -917,6 +1148,22 @@ export default async function handler(req: Req, res: Res) {
       }
       if (published.status === "failed" && published.error === "visit_cancelled") {
         return json(409, { ok: false, error: "visit_not_confirmed" });
+      }
+      if (published.status === "failed" && published.error === "issue_open") {
+        // M3: an issue opened between the held-check and the publish
+        // claim — the report stays in the owner review queue, exactly
+        // as if the issue had been open at submit time. Nothing was
+        // emailed to the client and no clock started.
+        const emailed = await sendOwnerEmail(
+          `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
+          `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
+        );
+        if (!emailed) {
+          await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
+            what: "report_submitted",
+          });
+        }
+        return json(200, { ok: true, published: false, held: true });
       }
       if (published.status === "failed") {
         await logEvent(visit.id, visit.booking_id, "system", "report_publish_failed", {

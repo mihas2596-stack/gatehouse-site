@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import { dbUpdateCount } from "./_db.js";
+import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
+import { carryDedupMarkers } from "./_stripe_customer.js";
 
 type BookingPayload = {
   bid: string;
@@ -376,6 +377,34 @@ export default async function handler(req: Req, res: Res) {
     }
     log("validate", "ok");
 
+    // G3: a Checkout Session ($0 card save) must never be created for
+    // a booking that is already over. A cancelled or already-paid
+    // booking has nothing to save a card for, and a booking with a
+    // payment in flight (row status payment_pending — the claim
+    // _payment_obligation sets before creating the intent) must not
+    // gain a second, parallel payment surface for the same obligation.
+    // Only bookings that arrived with a verified token can have a row;
+    // standalone (freshly minted token) bookings have none yet and
+    // skip the gate. When the DB is not configured there is no row to
+    // check (legacy token-only path); when it is configured but
+    // unreadable, fail closed instead of issuing a session blind.
+    if (arrivedWithToken && dbConfigured()) {
+      const visitRes = await dbSelectStrict<{ status: string | null }>(
+        "gh_visits",
+        `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+      );
+      if (!visitRes.ok) {
+        logErr("visit_lookup", "db_unreadable");
+        return json(503, { ok: false, error: "db_unreadable" });
+      }
+      const visitRow = visitRes.rows[0] ?? null;
+      const visitStatus = visitRow?.status ?? "";
+      if (visitStatus === "cancelled") return json(409, { ok: false, error: "visit_cancelled" });
+      if (visitStatus === "paid") return json(409, { ok: false, error: "already_paid" });
+      if (visitStatus === "refunded") return json(409, { ok: false, error: "already_refunded" });
+      if (visitStatus === "payment_pending") return json(409, { ok: false, error: "payment_in_progress" });
+    }
+
     // Step: reuse an existing customer when the email is already known,
     // so repeat visits don't create duplicates. Uses the list endpoint with
     // an email filter (not /customers/search) so restricted API keys work.
@@ -470,9 +499,21 @@ export default async function handler(req: Req, res: Res) {
         "gh_postpay_issue", "gh_postpay_issue_reason", "gh_postpay_issue_room", "gh_postpay_issue_at",
         "gh_report_client_action", "gh_report_responded_at", "gh_access_notes", "gh_no_photo_zones",
       ]) clearStale[`metadata[${k}]`] = "";
+      // G3Z: the dedup markers (gh_last_payment, gh_fee_last_payment)
+      // must survive the rebind — read the live values first and carry
+      // them back into the patch AFTER the clear, so a redelivered
+      // payment_intent.succeeded is still recognised as recorded.
+      // Best-effort: if the read fails, the DB row/journal remains the
+      // durable dedup authority.
+      let currentMeta: Record<string, string> | undefined;
+      try {
+        const current = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customerId}`);
+        if (current.ok) currentMeta = (current.data["metadata"] as Record<string, string> | undefined);
+      } catch { /* ignore — carry nothing */ }
       try {
         await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
           ...clearStale,
+          ...carryDedupMarkers(currentMeta),
           "metadata[gh_booking_id]": bookingId,
           "metadata[gh_state]": "awaiting_card",
           ...(toCents(bookingSummary.first) !== null

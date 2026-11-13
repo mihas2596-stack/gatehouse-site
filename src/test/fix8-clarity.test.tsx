@@ -155,7 +155,9 @@ describe("fix8 — clarity: step-1 validation is never silent", () => {
 describe("quote bathroom summary", () => {
   it("uses full bathrooms only and links to the correct access terms", () => {
     goToStep2();
-    expect(screen.getByText(/3 bed, 2 full bath · ZIP 30024/)).toBeInTheDocument();
+    // Group 1(b): the summary pluralises ("3 beds, 2 full baths") — the
+    // old singular-for-plural wording was the live-run finding.
+    expect(screen.getByText(/3 beds, 2 full baths · ZIP 30024/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Half bathrooms")).not.toBeInTheDocument();
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));

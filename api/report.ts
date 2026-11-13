@@ -27,7 +27,12 @@ import { ownerNotificationEmail } from "./_owner_email.js";
 
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
-import { autoChargeDeadlineMs } from "./_visit_date.js";
+import { autoChargeDeadlineMs, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
+// G3: isFutureVisitDate is the shared, calendar-validated copy from
+// api/_visit_date.ts (an impossible date like "2026-13-40" is never
+// future). The regex-only local copy used to read it as future.
+// Re-exported so existing imports keep working.
+export { isFutureVisitDate };
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -132,18 +137,31 @@ function damageClaimWindowEnds(row: BookingRow | null, sentAt: string | null): n
   const sentMs = Date.parse(sentAt ?? "");
   return Number.isFinite(sentMs) ? sentMs + DAMAGE_CLAIM_WINDOW_MS : null;
 }
-// Payment-date gate (B): a visit may be approved and paid on or after
-// its date, never before. "Today" is the Atlanta calendar date
-// (America/New_York), compared as YYYY-MM-DD strings — the same
-// pattern as todayInNewYork in api/visit.ts.
-function todayInNewYork(nowMs: number): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date(nowMs));
+// G3: the approve gate and the cleaner submit gate share one date
+// rule (effectiveGateDate — the mirror of api/cleaner.ts): the
+// re-clean date when one is scheduled, else the effective visit date
+// (confirmed date when set, else the scheduled date).
+export function effectiveGateDate(
+  recleanDate: string,
+  confirmedDate: string,
+  visitDate: string | null | undefined,
+): string {
+  return recleanDate || effectiveVisitDate(confirmedDate, visitDate);
 }
-export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
-  if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
-  return visitDate > todayInNewYork(nowMs);
+
+/** G3: the re-clean date from the journal, mirroring
+ * journalRecleanDate in api/cleaner.ts — the fallback for rows
+ * arranged before migration 20261112_reclean_fields. A date counts
+ * only when the latest decision was a re-clean; any other decision
+ * means no re-clean was arranged. Events are newest-first, so the
+ * first match is the latest. */
+function journalRecleanDateFromEvents(events: BookingEvent[]): string {
+  const decision = events.find((e) => e.event === "issue_decision");
+  const decided = decision?.detail?.["decision"];
+  if (typeof decided === "string" && decided !== "reclean") return "";
+  const resolved = events.find((e) => e.event === "issue_resolved");
+  const d = resolved?.detail?.["reclean_date"];
+  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
 }
 async function findCustomerByEmail(
   secretKey: string,
@@ -502,7 +520,7 @@ function deriveState(meta: Record<string, string>): ReportState {
   return "not_ready";
 }
 
-export type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
+export type PhotoItem = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 
 function readPhotoItems(meta: Record<string, string>): PhotoItem[] {
   let json = "";
@@ -595,6 +613,13 @@ export default async function handler(req: Req, res: Res) {
       if (typeof body["photo"] === "string" && body["photo"].length <= 1_400_000) {
         photoB64 = body["photo"].replace(/^data:image\/[a-zA-Z]+;base64,/, "");
         if (!/^[A-Za-z0-9+/=\s]+$/.test(photoB64)) photoB64 = "";
+        // L8: the photo is stored and emailed as .jpg / image/jpeg, so
+        // verify it really is a JPEG (SOI marker FF D8 FF). A PNG/WebP
+        // would otherwise be stored mislabelled and never render.
+        if (photoB64) {
+          const head = Buffer.from(photoB64, "base64").subarray(0, 3);
+          if (!(head.length === 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff)) photoB64 = "";
+        }
       }
     }
     if (!bt) {
@@ -697,6 +722,12 @@ export default async function handler(req: Req, res: Res) {
     // and sign fresh download URLs on every view — a link from an old
     // email keeps working for the whole 90-day retention window.
     let dbPhotoItems: PhotoItem[] | null = null;
+    // M7: a photo whose signed URL could not be minted is NOT silently
+    // dropped — it stays in the list as unavailable, and the response
+    // carries a partial-load flag, so the client sees 7/8 WITH the
+    // explanation instead of 7/8 with no word at all.
+    let dbPhotosPartial = false;
+    let dbPhotosUnavailable = 0;
     if (meta["gh_rp_source"] === "db" && dbConfigured()) {
       try {
         const vrows = await dbSelect<{ id: string }>(
@@ -719,6 +750,16 @@ export default async function handler(req: Req, res: Res) {
                 room: r.room,
                 kind: r.kind === "before" ? "before" : "after",
                 ...(r.note ? { note: r.note } : {}),
+              });
+            } else {
+              dbPhotosPartial = true;
+              dbPhotosUnavailable++;
+              items.push({
+                url: null,
+                room: r.room,
+                kind: r.kind === "before" ? "before" : "after",
+                ...(r.note ? { note: r.note } : {}),
+                unavailable: true,
               });
             }
           }
@@ -779,8 +820,12 @@ export default async function handler(req: Req, res: Res) {
         // A5: the cleaner's roster photo ("" when the roster has none —
         // the page then renders the generic fallback icon).
         cleaner_photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "",
-        photos: items.map((p) => p.url),
+        photos: items.flatMap((p) => (p.url ? [p.url] : [])),
         photo_items: items,
+        // M7: partial-load flag + count — the page renders an honest
+        // note and an "unavailable" tile per failed photo.
+        photos_partial: dbPhotosPartial,
+        photos_unavailable: dbPhotosUnavailable,
         // Rooms the client asked not to photograph (comma-separated in
         // gh_no_photo_zones) — the client report labels them explicitly
         // instead of silently omitting them.
@@ -990,12 +1035,27 @@ export default async function handler(req: Req, res: Res) {
     if (action === "approve") {
       // Payment-date gate (B): the visit has not happened yet — the
       // client cannot approve and pay for a future visit. The visit
-      // may be approved on or after its date, never before. The
-      // effective date is the confirmed date when set, else the
-      // scheduled visit date.
-      const effectiveVisitDate = meta["gh_confirmed_date"] || row?.visit_date || "";
-      if (isFutureVisitDate(effectiveVisitDate)) {
-        res.status(409).json({ requestId, ok: false, error: "report_too_early", visit_date: effectiveVisitDate });
+      // may be approved on or after its date, never before.
+      // G3: the gate date is the SAME as the cleaner submit gate
+      // (effectiveGateDate): the re-clean date when one is scheduled,
+      // else the effective visit date (confirmed date when set, else
+      // the scheduled visit date). A client must not be able to
+      // approve — and pay — the old report before the re-clean the
+      // cleaner cannot yet submit.
+      const rowRecleanScheduled =
+        row?.reclean_status === "scheduled" &&
+        typeof row?.reclean_date === "string" &&
+        !!row.reclean_date;
+      const recleanDate = rowRecleanScheduled
+        ? (row.reclean_date as string)
+        : journalRecleanDateFromEvents(events);
+      const confirmedDate =
+        evStr(latestEvent(events, "visit_confirmed"), "date") ||
+        meta["gh_confirmed_date"] ||
+        "";
+      const gateDate = effectiveGateDate(recleanDate, confirmedDate, row?.visit_date ?? null);
+      if (isFutureVisitDate(gateDate)) {
+        res.status(409).json({ requestId, ok: false, error: "report_too_early", visit_date: gateDate, ...(recleanDate ? { reclean: true } : {}) });
         return;
       }
       // P06: only a CURRENT published report can be approved and paid.

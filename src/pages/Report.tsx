@@ -20,7 +20,7 @@ type ReportStateName =
   | "waived"
   | "refunded";
 
-type PhotoItem = { url: string; room?: string; note?: string; kind?: string };
+type PhotoItem = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 
 type ReportData = {
   ok: boolean;
@@ -32,6 +32,11 @@ type ReportData = {
   cleaner_photo?: string | null;
   photos?: string[];
   photo_items?: PhotoItem[];
+  // M7: the server keeps a photo whose signed URL failed as an
+  // unavailable item instead of silently dropping it, and flags a
+  // partial load — the page says so honestly (see reportPhotos).
+  photos_partial?: boolean;
+  photos_unavailable?: number;
   amount?: string | null;
   amount_cents?: number | null;
   report_sent_at?: string | null;
@@ -352,6 +357,14 @@ const Report = () => {
   // instead of letting the client compare a "before" that isn't there.
   const hasAfterPhotos = (data?.photo_items ?? []).some((p) => p.kind === "after");
   const hasBeforePhotos = (data?.photo_items ?? []).some((p) => p.kind === "before");
+  // M7: honest partial-load note — a client who sees 7/8 photos is
+  // told the eighth could not be loaded, not left guessing.
+  const unavailableCount = data?.photos_unavailable ?? 0;
+  const partialNote = data?.photos_partial
+    ? unavailableCount === 1
+      ? "One photo could not be loaded — the rest of the report is complete."
+      : `${unavailableCount} photos could not be loaded — the rest of the report is complete.`
+    : null;
   // B (payment-date gate): the visit has not happened yet — a report
   // that exists for a future date cannot be approved or paid. "Today"
   // is the Atlanta calendar date (America/New_York), compared as
@@ -377,6 +390,28 @@ const Report = () => {
     </div>
   );
 
+  // M7: one shared tile for a photo the server could not sign — an
+  // honest placeholder with a retry, in every view of the report,
+  // instead of a broken image or a silently missing photo. `p` is the
+  // page's own PhotoItem (url may be null, unavailable may be set);
+  // ReportContent types its items as url: string, so call sites pass
+  // this callback with an explicit (p: PhotoItem) annotation.
+  const unavailablePhoto = (p: PhotoItem) => (
+    <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
+      <p className="text-xs text-muted-foreground">
+        This photo couldn&apos;t be loaded. The rest of the report is complete — email
+        hello@gatehousehomecleaning.com and we&apos;ll resend it.
+      </p>
+      <button
+        type="button"
+        className="text-xs underline"
+        onClick={() => void load()}
+      >
+        Try again
+      </button>
+    </div>
+  );
+
   // The photo report itself (photos + checklist + photo note), shared by
   // the awaiting view and the open-issue view: a client with an open
   // issue must still be able to see what was cleaned.
@@ -384,13 +419,18 @@ const Report = () => {
     <>
       {data?.photo_items && data.photo_items.length > 0 ? (
         <div className="mb-6">
+          {partialNote ? (
+            <p className="text-sm text-muted-foreground mb-4 text-left">{partialNote}</p>
+          ) : null}
           <ReportContent
             photoItems={data.photo_items}
             checklist={data.checklist}
             excludedRooms={data.no_photo_zones ?? []}
-            renderPhoto={(p) => (
+            renderPhoto={(p: PhotoItem) => (
               <figure>
-                {failedPhotos.has(p.url) ? (
+                {p.unavailable || !p.url ? (
+                  unavailablePhoto(p)
+                ) : failedPhotos.has(p.url) ? (
                   <div className="w-full h-40 md:h-52 rounded-xl border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 text-center">
                     <p className="text-xs text-muted-foreground">
                       This photo couldn&apos;t load. Check your connection, or email
@@ -571,7 +611,7 @@ const Report = () => {
                 photoNote={issuePhotoNote}
                 onPhotoPick={onPhotoPick}
                 busy={busy}
-                submitLabel="Send — block auto-charge"
+                submitLabel="Send — pause payment"
                 helper="Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one business day."
                 onSubmit={() => void act("issue")}
                 onCancel={() => setIssueOpen(false)}
@@ -796,12 +836,18 @@ const Report = () => {
             {summary}
             {(data.photo_items && data.photo_items.length > 0) || (data.checklist && data.checklist.rooms.length > 0) ? (
               <div className="mb-6 text-left">
+                {partialNote ? (
+                  <p className="text-sm text-muted-foreground mb-4 text-left">{partialNote}</p>
+                ) : null}
                 <ReportContent
                   photoItems={data.photo_items ?? []}
                   checklist={data.checklist}
                   excludedRooms={data.no_photo_zones ?? []}
-                  renderPhoto={(p) => (
+                  renderPhoto={(p: PhotoItem) => (
                     <figure>
+                      {p.unavailable || !p.url ? (
+                        unavailablePhoto(p)
+                      ) : (
                       <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
                         <img
                           src={p.url}
@@ -810,6 +856,7 @@ const Report = () => {
                           className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                         />
                       </ZoomablePhoto>
+                      )}
                       <figcaption className="text-xs text-muted-foreground mt-1">
                         <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
                         {p.note ? <> — {p.note}</> : null}
@@ -880,12 +927,18 @@ const Report = () => {
             {summary}
             {(data.photo_items && data.photo_items.length > 0) || (data.checklist && data.checklist.rooms.length > 0) ? (
               <div className="mb-6 text-left">
+                {partialNote ? (
+                  <p className="text-sm text-muted-foreground mb-4 text-left">{partialNote}</p>
+                ) : null}
                 <ReportContent
                   photoItems={data.photo_items ?? []}
                   checklist={data.checklist}
                   excludedRooms={data.no_photo_zones ?? []}
-                  renderPhoto={(p) => (
+                  renderPhoto={(p: PhotoItem) => (
                     <figure>
+                      {p.unavailable || !p.url ? (
+                        unavailablePhoto(p)
+                      ) : (
                       <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
                         <img
                           src={p.url}
@@ -894,6 +947,7 @@ const Report = () => {
                           className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                         />
                       </ZoomablePhoto>
+                      )}
                       <figcaption className="text-xs text-muted-foreground mt-1">
                         <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
                         {p.note ? <> — {p.note}</> : null}

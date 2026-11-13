@@ -44,6 +44,9 @@ type VisitData = {
     recurring?: string | null;
   };
   cleaner?: { name: string; photo: string; phone?: string } | null;
+  // The rooms this visit covers — the same list the cleaner checklist
+  // and the owner report show (from the stored work scope).
+  rooms?: string[];
   alt_dates?: string[];
   proposed_date?: string;
   proposed_pending?: boolean;
@@ -95,7 +98,7 @@ const STATE_HEADLINE: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-type ReportPhoto = { url: string; room?: string; note?: string; kind?: string };
+type ReportPhoto = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 type ReportChecklist = { rooms: Array<{ name: string; items: Array<{ label: string; done: boolean }>; skip_reason?: string }>; problem_note?: string };
 type ReportData = {
   ok: boolean;
@@ -120,6 +123,10 @@ type ReportData = {
   // (resolved_at + reclean_date) — same payload as /report.
   issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
   resolution?: { resolved_at: string; reclean_date: string } | null;
+  // Task 4: the live re-clean (date + cleaner) — visible while the
+  // issue is still open, not only after it is resolved.
+  reclean_date?: string;
+  reclean_cleaner_name?: string;
   no_photo_zones?: string[];
   error?: string;
 };
@@ -170,12 +177,18 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
     reader.readAsDataURL(file);
   };
 
-  useEffect(() => {
+  // M7: the report fetch, refetchable — an unavailable photo tile
+  // offers "Try again" (same as /report) instead of a dead end.
+  const reload = useCallback(() => {
     fetch(`/api/report?bt=${encodeURIComponent(bt)}`)
       .then((r) => r.json())
       .then((j) => setRep(j as ReportData))
       .catch(() => setRep({ ok: false, state: "not_ready" }));
   }, [bt]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
@@ -425,8 +438,8 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           {rep.issue_decision.resolution ? (
             <p className="mb-1">Our response: “{rep.issue_decision.resolution}”</p>
           ) : null}
-          {rep.issue_decision.decision === "reclean" && rep.resolution?.reclean_date ? (
-            <p className="mb-2">Re-clean agreed for <strong>{fmtDateUS(rep.resolution.reclean_date)}</strong>.</p>
+          {rep.issue_decision.decision === "reclean" && (rep.reclean_date || rep.resolution?.reclean_date) ? (
+            <p className="mb-2">Re-clean agreed for <strong>{fmtDateUS(rep.reclean_date || rep.resolution?.reclean_date || "")}</strong>{rep.reclean_cleaner_name ? <> — {rep.reclean_cleaner_name}</> : null}.</p>
           ) : null}
           {rep.issue_reason && rep.issue_source === "client" ? (
             <p className="mb-2">You told us: “{rep.issue_reason}”.</p>
@@ -460,7 +473,26 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         photoItems={rep.photo_items ?? []}
         checklist={rep.checklist}
         excludedRooms={rep.no_photo_zones ?? []}
-        renderPhoto={(p) => (
+        renderPhoto={(p) =>
+          // M7: a null-url photo (the server could not sign it) renders
+          // an honest placeholder — same wording as /report — instead
+          // of a broken <img src="null">. The tile keeps its place in
+          // the report, so the client sees what is missing, not a gap.
+          !p.url ? (
+            <div className="w-full rounded-lg border border-border bg-muted flex flex-col items-center justify-center gap-2 px-3 py-6 text-center">
+              <p className="text-xs text-muted-foreground">
+                This photo couldn&apos;t be loaded. The rest of the report is complete — email
+                hello@gatehousehomecleaning.com and we&apos;ll resend it.
+              </p>
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={() => reload()}
+              >
+                Try again
+              </button>
+            </div>
+          ) : (
           <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`}>
             <figure>
               <img src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
@@ -469,7 +501,8 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
               </figcaption>
             </figure>
           </ZoomablePhoto>
-        )}
+          )
+        }
       />
       {hasAfterPhotos && !hasBeforePhotos && (
         <p className="mb-3 text-sm text-muted-foreground">After photos only — no before photos were taken for this visit.</p>
@@ -529,7 +562,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             photoNote={issuePhotoNote}
             onPhotoPick={onPhotoPick}
             busy={busy}
-            submitLabel="Send issue — block auto-charge"
+            submitLabel="Send issue — pause payment"
             helper="Sending this blocks the automatic charge for this visit. We'll confirm by email and reply within one business day."
             onSubmit={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}
             onCancel={() => setShowIssue(false)}
@@ -712,6 +745,10 @@ const Visit = () => {
 
   const rows: Array<[string, string]> = [];
   if (b.service) rows.push(["Service", b.service + (b.first_service === "deep" ? " · First visit: Deep clean" : "")]);
+  // The rooms this visit covers — the same list the cleaner checklist
+  // and the owner report show. A visit booked before the work scope
+  // was stored has none, so the row is omitted.
+  if (data?.rooms?.length) rows.push(["Rooms we'll clean", data.rooms.join(", ")]);
   if (b.confirmed_date) rows.push(["Visit date (confirmed)", fmtDateUS(b.confirmed_date)]);
   else if (b.requested_date) rows.push([data?.state === "date_passed" ? "Requested date (already passed)" : "Requested date — not confirmed yet", fmtDateUS(b.requested_date)]);
   if (b.window) rows.push(["Arrival window (Atlanta time)", formatArrivalWindow(b.window)]);
@@ -980,7 +1017,7 @@ const Visit = () => {
                   You&apos;re welcome to meet your cleaner on your first visit. If someone will be there to let them in, no entry codes are needed.
                 </p>
                 {data.entry_choice?.method && (
-                  <p className="text-sm text-foreground mb-3">Your booking entry choice: {entrySummaryLabel(data.entry_choice.method as EntryMethodChoice, data.entry_choice.detail as EntryDetailChoice | null)}. You can change it below.</p>
+                  <p className="text-sm text-foreground mb-3">{`Your booking entry choice: ${entrySummaryLabel(data.entry_choice.method as EntryMethodChoice, data.entry_choice.detail as EntryDetailChoice | null).replace(/\.$/, "")}. You can change it below.`}</p>
                 )}
                 <div role="radiogroup" aria-label="How would you like to arrange entry?" className="space-y-2 mb-4">
                   {[

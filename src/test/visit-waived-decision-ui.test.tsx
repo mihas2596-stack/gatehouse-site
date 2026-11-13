@@ -152,7 +152,7 @@ describe("shared issue form on /visit (idea 3)", () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Report an issue" }));
     fireEvent.change(await screen.findByLabelText("What isn't right?"), { target: { value: "The floor is still dirty." } });
-    fireEvent.click(screen.getByRole("button", { name: "Send issue — block auto-charge" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send issue — pause payment" }));
     await waitFor(() => expect(screen.getByText(/The 24-hour window for reporting an issue on this report has passed/)).toBeInTheDocument());
     expect(screen.getByText(/email us at hello@gatehousehomecleaning.com/)).toBeInTheDocument();
     expect(posts).toHaveLength(1);

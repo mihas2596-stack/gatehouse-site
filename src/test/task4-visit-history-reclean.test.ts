@@ -546,7 +546,9 @@ describe("task4: reassigning the cleaner updates the re-clean and revokes the ol
     const r = await callOwner({
       action: "assign_confirm",
       cleaner_id: "roster-beth",
-      confirmed_date: rows[0]["visit_date"],
+      // The original visit is in the past (history row); the confirmation
+      // is for the scheduled re-clean, which is in the future.
+      confirmed_date: daysFromNow(2),
       confirmed_window: "midday",
     });
     expect(r.code).toBe(200);

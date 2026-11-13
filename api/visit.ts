@@ -40,6 +40,10 @@ type BookingRow = {
   amount_cents: number | null; cleaner_name: string | null;
   report_sent_at: string | null; report_bounced: boolean | null;
   access_notes: string | null; no_photo_zones: string | null;
+  // The work scope stored at booking time (send-contact-email):
+  // the same room list the cleaner checklist and the owner report
+  // read. The client page (/visit) shows it too.
+  checklist?: { rooms?: Array<{ name?: string }> } | string | null;
   report_status?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
   // Waive durability (fix round 2): the `charge_waived` column
@@ -52,6 +56,24 @@ type BookingRow = {
   cleaner_profile?: unknown;
   stripe_customer_id?: string | null;
 };
+
+/** Room names from the visit's stored work scope — the same list the
+ * cleaner checklist and the owner report show. A visit booked before
+ * the checklist was stored has none, so the client page hides the
+ * section instead of showing an empty list. */
+export function rowRoomNames(row: BookingRow | null): string[] {
+  const raw = row?.checklist;
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch { return []; }
+  }
+  if (!parsed || typeof parsed !== "object") return [];
+  const rooms = (parsed as { rooms?: unknown }).rooms;
+  if (!Array.isArray(rooms)) return [];
+  return rooms
+    .map((r) => (r && typeof r === "object" ? (r as { name?: unknown }).name : null))
+    .filter((n): n is string => typeof n === "string" && n.trim() !== "");
+}
 
 /** Cleaner work phone from the per-visit profile (v2): the row is the
  * truth, because shared Stripe metadata is overwritten by other
@@ -591,6 +613,14 @@ export function visitWindowStartHour(window: string | undefined | null): number 
 export function visitMomentMs(meta: Record<string, string>, requestedDate: string, windowOverride = ""): number {
   const d = meta["gh_confirmed_date"] || requestedDate || "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
+  // G3 remainder: Date.UTC normalises out-of-range parts (month 13,
+  // day 40) into a real date, so a malformed date used to yield a fee
+  // measured from a phantom visit. Validate the calendar date first —
+  // an impossible date has no visit moment (NaN), and cancelFeeCents
+  // treats that as fee-due, never as free.
+  const [y, m, day] = d.split("-").map(Number);
+  if (m < 1 || m > 12 || day < 1) return NaN;
+  if (day > new Date(Date.UTC(y, m, 0)).getUTCDate()) return NaN;
   const hour = visitWindowStartHour(windowOverride || meta["gh_confirmed_window"]);
   // P12: the window-start wall-clock reading in America/New_York for
   // THIS date. A fixed -04:00 offset is wrong in winter (EST is -05:00)
@@ -598,7 +628,6 @@ export function visitMomentMs(meta: Record<string, string>, requestedDate: strin
   // early. Convert the wall-clock reading via Intl: the offset between
   // a UTC guess and its New York wall-clock reading is the zone offset
   // that day.
-  const [y, m, day] = d.split("-").map(Number);
   const guess = Date.UTC(y, m - 1, day, hour, 0, 0);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour12: false,
@@ -614,11 +643,19 @@ export function visitMomentMs(meta: Record<string, string>, requestedDate: strin
 export function cancelFeeCents(meta: Record<string, string>, requestedDate: string, nowMs: number, windowOverride = ""): number {
   const state = deriveVisitState(meta, requestedDate, nowMs);
   if (state === "cancelled" || state === "paid") return 0;
+  const visitMs = visitMomentMs(meta, requestedDate, windowOverride);
+  // G4 L9 (fail closed): an unparseable visit date used to yield fee 0
+  // — a free cancellation for a visit whose date we cannot even read.
+  // A bad date must never produce a free cancellation: treat it as
+  // fee-due ($25) so the owner, not the client, decides whether the
+  // fee is waived. Checked BEFORE the date_passed branch below: a
+  // malformed date in a past year ("2026-13-40") sorts before today
+  // as a string and would otherwise read as a passed (free) visit.
+  // Terminal states above still cancel free.
+  if (!Number.isFinite(visitMs)) return LATE_CANCEL_FEE_CENTS;
   // B6: cancelling a visit whose date already passed is free — there is
   // no visit left to miss; the $25 fee is for a live visit inside 48h.
   if (state === "date_passed") return 0;
-  const visitMs = visitMomentMs(meta, requestedDate, windowOverride);
-  if (!Number.isFinite(visitMs)) return 0;
   return visitMs - nowMs >= 48 * 3600 * 1000 ? 0 : LATE_CANCEL_FEE_CENTS;
 }
 
@@ -634,11 +671,19 @@ const q = (v: string | string[] | undefined): string =>
 // maintains gh_payment_method, but a missing webhook secret or a dropped
 // event must not hide a card that Stripe actually holds. Backfills the
 // metadata cache when a card is found.
+// G4 L10: a GET/read path must not mutate card state. Reconciling
+// still READS Stripe's list (so the page shows the true card), but the
+// metadata backfill (gh_payment_method / gh_state=card_ready) happens
+// only when allowWrite is set — i.e. behind an explicit POST action.
+// The reconciled card id is returned either way, so the caller can
+// display it from memory without persisting anything on a read.
 async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
   confirmedPmId?: string | null,
+  opts?: { allowWrite?: boolean },
 ): Promise<string> {
+  const allowWrite = opts?.allowWrite === true;
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
   const res = await stripeGet(
@@ -654,6 +699,7 @@ async function reconcileCard(
   const picked = pickCard(list, { confirmedPmId, cachedPmId: null });
   if (picked.status !== "ok") return "";
   const pm = picked.pm;
+  if (!allowWrite) return pm;
   const patch: Record<string, string> = { "metadata[gh_payment_method]": pm };
   const state = customer.metadata["gh_state"] ?? "";
   if (!state || state === "awaiting_card" || state === "card_failed") {
@@ -760,9 +806,14 @@ export default async function handler(req: Req, res: Res) {
     }
     if (customer && row) { customer.name = row.client_name || payload.name || customer.name; customer.email = row.client_email || payload.email || customer.email; }
     const bound = Boolean(boundCustomer);
+    // G4 L10: reconcile on a GET is a read — it must not write
+    // card_ready into Stripe metadata. Only a POST action may persist
+    // the backfill. The returned id is still used for display (below),
+    // from memory, without persisting anything on a read.
+    let reconciledPm = "";
     if (customer) {
       try {
-        await reconcileCard(STRIPE_SECRET_KEY, customer, confirmedPaymentMethodId(events));
+        reconciledPm = await reconcileCard(STRIPE_SECRET_KEY, customer, confirmedPaymentMethodId(events), { allowWrite: req.method === "POST" });
       } catch {
         /* cached metadata still applies */
       }
@@ -796,7 +847,7 @@ export default async function handler(req: Req, res: Res) {
     // booking's cancel (409 already_cancelled). Same override for both
     // methods now: the row + journal are the per-booking truth.
     const meta = row
-      ? { ...customer.metadata, ...buildEffectiveMeta(row, events, customer.metadata["gh_payment_method"] ?? "", payload.recurring, customer.metadata["gh_state"] ?? "") }
+      ? { ...customer.metadata, ...buildEffectiveMeta(row, events, reconciledPm || customer.metadata["gh_payment_method"] || "", payload.recurring, customer.metadata["gh_state"] ?? "") }
       : customer.metadata;
     // B6: the token often carries no date (owner-minted links) — fall
     // back to the visit row so /visit shows the date instead of blank rows.
@@ -873,6 +924,10 @@ export default async function handler(req: Req, res: Res) {
         cleaner: meta["gh_cleaner_name"]
           ? { name: meta["gh_cleaner_name"], photo: rowCleanerPhoto(row) || meta["gh_cleaner_photo"] || "", phone: rowCleanerPhone(row) }
           : null,
+        // The rooms this visit covers — the same list the cleaner
+        // checklist and the owner report show, so the client sees
+        // what is included instead of a bare service name.
+        rooms: rowRoomNames(row),
         alt_dates: (meta["gh_alt_dates"] ?? "").split(",").filter(Boolean),
         // V2: a pending client proposal survives reloads — the old
         // agreed date stays the agreement until the owner confirms.
@@ -1104,7 +1159,37 @@ export default async function handler(req: Req, res: Res) {
       if (row) {
         const previousStatus = row.status;
         const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.${encodeURIComponent(previousStatus ?? "requested")}`, { status: "cancelled" });
-        if (changed !== 1) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
+        if (changed !== 1) {
+          // M11 twin (same race as owner_cancel): the conditional
+          // update lost to a concurrent cancel — re-read the row and
+          // return the CURRENT state instead of a confusing 503. An
+          // already-cancelled visit is an idempotent cancel (200, the
+          // fee the winner recorded, no duplicate journal/Stripe/email
+          // side effects); only a row that is still cancellable on
+          // re-read (a genuine DB failure) keeps the 503.
+          const reread = await latestBookingRowStrict(payload.bid);
+          if (!reread.ok) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
+          const current = reread.row;
+          if (!current) { res.status(404).json({ requestId, ok: false, error: "booking_not_found" }); return; }
+          const currentStatus = current.status ?? "";
+          if (currentStatus === "cancelled") {
+            const journal = await bookingEventsStrict(payload.bid);
+            const cancelledEv = journal.ok ? latestEvent(journal.events, "visit_cancelled") : null;
+            const recordedFee = cancelledEv?.detail?.["fee_cents"];
+            const settledFee = typeof recordedFee === "number" ? recordedFee : fee;
+            row.status = "cancelled";
+            meta["gh_state"] = "cancelled";
+            meta["gh_cancel_fee_cents"] = String(settledFee);
+            res.status(200).json({ ...view(), fee_cents: settledFee, already_cancelled: true, notification_email_sent: false });
+            return;
+          }
+          if (currentStatus === "paid" || currentStatus === "refunded") {
+            res.status(409).json({ requestId, ok: false, error: "visit_already_done" });
+            return;
+          }
+          res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" });
+          return;
+        }
         const journaled = await logEventStrict(row.id, payload.bid, "client", "visit_cancelled", { scope, fee_cents: fee });
         if (!journaled) {
           const rollback = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.cancelled`, { status: previousStatus });
@@ -1157,8 +1242,22 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ requestId, ok: false, error: "nothing_to_update" });
         return;
       }
+      // M12: validate FIRST — against the row (entry_available, loaded
+      // above) — before writing anything. The old order wrote the
+      // no-photo zones into Stripe metadata and only then hit the
+      // entry_not_available 409 for the notes, so a rejected request
+      // still leaked the zones write; and the visit-row write below
+      // was unchecked, so a failed row update still returned 200.
+      if (notes !== null && row && !entryAvailable) {
+        res.status(409).json({ requestId, ok: false, error: "entry_not_available" });
+        return;
+      }
       if (Object.keys(params).length > 0) {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+        const metaRes = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, params);
+        if (!metaRes.ok) {
+          res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+          return;
+        }
         Object.assign(meta, { ...(zones !== null ? { gh_no_photo_zones: zones } : {}) });
       }
       // Legacy entry-notes path, re-routed: notes are a general note in
@@ -1167,17 +1266,16 @@ export default async function handler(req: Req, res: Res) {
       // not save notes either — entry is closed, full stop. Zones
       // (no-photo areas) are unaffected and still save above.
       if (notes !== null && row) {
-        if (!entryAvailable) {
-          res.status(409).json({ requestId, ok: false, error: "entry_not_available" });
-          return;
-        }
         await saveAccessNote(row.id, payload.bid, notes);
         if (entryAvailable) entryView = clientEntryView(await loadAccess(row.id), true);
       }
-      if (row) {
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
-          ...(zones !== null ? { no_photo_zones: zones } : {}),
-        });
+      if (row && zones !== null) {
+        const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { no_photo_zones: zones });
+        if (changed !== 1) {
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
+        }
+        row.no_photo_zones = zones;
       }
       res.status(200).json(view());
       return;

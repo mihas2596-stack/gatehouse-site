@@ -31,11 +31,12 @@ export function clientApprovedEvent(events: BasisEvent[]): BasisEvent | null {
   // was given. A later republication supersedes it — the client must
   // approve the NEW report (or the timer rule must apply to it) before
   // anyone charges. Old approval events carry no version, so the binding
-  // is by time: any report_sent strictly after the approval voids it.
+  // is by time: any report_sent at or after the approval voids it (G3:
+  // strict > missed a republication sharing the approval's timestamp).
   // (A payment_failed retry passes because no republication happened
   // between the approval and the retry.)
   const superseded = events.some(
-    (e) => e.event === "report_sent" && e.created_at > approved.created_at,
+    (e) => e.event === "report_sent" && e.created_at >= approved.created_at,
   );
   if (superseded) return null;
   // RA09: a dispute opened AFTER the approval voids it for any payment
@@ -44,9 +45,10 @@ export function clientApprovedEvent(events: BasisEvent[]): BasisEvent | null {
   // NEW explicit approval of the current report (which is newer than
   // the dispute) re-arms payment. Approving WHILE a dispute is open
   // (the "Resolve issue & pay" flow) is newer than the dispute and
-  // stays valid.
+  // stays valid. At-or-after (G3): a dispute sharing the approval's
+  // timestamp voids it too — ties fail closed.
   const voidedByDispute = events.some(
-    (e) => e.event === "issue_opened" && e.created_at > approved.created_at,
+    (e) => e.event === "issue_opened" && e.created_at >= approved.created_at,
   );
   return voidedByDispute ? null : approved;
 }

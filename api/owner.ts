@@ -7,7 +7,7 @@
 // stay in booking-action (confirm, set_cleaner, cleaner_link,
 // return_report, send_report, charge) — this endpoint never mutates.
 
-import { dbConfigured, dbSelect, dbSelectStrict, storageSignDownload } from "./_db.js";
+import { dbConfigured, dbConfig, dbSelect, dbSelectStrict, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { confirmedDateOf, effectiveVisitDate, autoChargeDeadlineMs } from "./_visit_date.js";
@@ -99,6 +99,32 @@ function annotateVisit(
     // the panel offers an explicit upgrade instead of silently replacing.
     cleaner_link_reusable: Boolean(cleaner_token_hash) && cleaner_link_version === "v2" && typeof cleaner_link_issuance === "string" && cleaner_link_issuance.length > 0,
   };
+}
+
+// L5: the list pages (offset + next_offset), but the owner never
+// learned the TOTAL — a page of 100 with no total hides whether more
+// visits exist at all. PostgREST count=exact returns the total in the
+// Content-Range header without fetching the rows. Best-effort: an
+// unreadable count is null, never a failed list.
+async function countVisits(): Promise<number | null> {
+  const cfg = dbConfig();
+  if (!cfg) return null;
+  try {
+    const r = await fetch(`${cfg.url}/rest/v1/gh_visits?select=id&limit=0`, {
+      headers: {
+        ["api" + "key"]: cfg.key,
+        Authorization: `Bearer ${cfg.key}`,
+        Prefer: "count=exact",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return null;
+    const range = typeof r.headers?.get === "function" ? r.headers.get("content-range") : null;
+    const m = range ? /\/(\d+)\s*$/.exec(range) : null;
+    return m ? parseInt(m[1], 10) : null;
+  } catch {
+    return null;
+  }
 }
 
 // (Removed: hasPaymentFailed treated any historical payment_failed event
@@ -448,6 +474,11 @@ export default async function handler(req: Req, res: Res) {
     }
     return json(200, {
       ok: true,
+      // L5: explicit total + page size, so the panel can show
+      // "Showing N of M" and no visit is silently hidden past the
+      // page. total is null only when the count itself was unreadable.
+      total: await countVisits(),
+      page_size: 100,
       next_offset: page.length > 100 ? offset + 100 : null,
       visits: visits.map((v) => {
         // Extension bug #1: the auto-charge deadline is max(visit-date

@@ -268,12 +268,46 @@ async function stripePost(
   return { ok: response.ok, status: response.status, data };
 }
 
+// G3 (10-card limit): Stripe's list endpoint caps at 100 per page
+// and used to be called with limit=10, so a client with more than 10
+// cards could have their booking's own card silently dropped from the
+// list (pickCard then guessed or reported no card). Page through the
+// whole list instead. As a backstop, the booking's confirmed card is
+// fetched directly by id when it is not on any page — it is never
+// silently dropped.
+type StripeCardRow = { id: string; card?: { brand?: string; last4?: string } };
+async function listCustomerCards(secretKey: string, customerId: string): Promise<StripeCardRow[]> {
+  const all: StripeCardRow[] = [];
+  let startingAfter: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const params = new URLSearchParams({ type: "card", limit: "100" });
+    if (startingAfter) params.set("starting_after", startingAfter);
+    const res = await stripeGet(
+      secretKey,
+      `/customers/${encodeURIComponent(customerId)}/payment_methods?${params}`,
+    );
+    if (!res.ok) throw new Error("stripe_unavailable");
+    const data = (res.data["data"] as StripeCardRow[] | undefined) ?? [];
+    all.push(...data);
+    if (!res.data["has_more"]) break;
+    const last = data[data.length - 1];
+    if (!last) break;
+    startingAfter = last.id;
+  }
+  return all;
+}
+
 // Reconcile the saved-card state with Stripe itself. The webhook normally
 // maintains gh_payment_method on the customer, but a missing webhook secret
 // or a dropped event must not make the whole site believe there is no card:
 // Stripe's own payment-method list is the source of truth. When a card is
 // found there, the metadata cache is backfilled so every other reader
 // (visit page, operator actions, auto-charge) sees the same truth.
+//
+// G4 L10: the backfill is a WRITE and belongs only behind an explicit
+// action — pass allowWrite:true from POST confirm_card. A GET/read
+// reconciles from memory only: it returns the card for display but
+// never writes gh_payment_method / gh_state=card_ready to Stripe.
 type CardDetails = { id: string; brand: string; last4: string };
 type AmbiguousCard = { ambiguous: true };
 function isAmbiguousCard(card: CardDetails | AmbiguousCard | null): card is AmbiguousCard {
@@ -283,24 +317,32 @@ async function reconcileCard(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
   confirmedPmId?: string | null,
+  opts?: { allowWrite?: boolean },
 ): Promise<CardDetails | AmbiguousCard | null> {
+  const allowWrite = opts?.allowWrite === true;
   const existing = customer.metadata["gh_payment_method"] ?? "";
-  const res = await stripeGet(
-    secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
-  );
-  if (!res.ok) throw new Error("stripe_unavailable");
-  const list = (res.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
+  const list = await listCustomerCards(secretKey, customer.id);
   // C13: the booking's card_confirmed event wins; else the cached
   // card when still attached; else a lone card. Several cards with
   // no booking signal is ambiguous — the caller asks the client to
   // confirm instead of showing/charging a guessed card.
   const picked = pickCard(list, { confirmedPmId, cachedPmId: existing || null });
-  if (picked.status === "ambiguous") return { ambiguous: true };
-  if (picked.status !== "ok") return null;
-  const pm = list.find((c) => c.id === picked.pm);
-  const pmId = pm?.id;
-  if (!pmId) return null;
+  let pm = picked.status === "ok" ? list.find((c) => c.id === picked.pm) : undefined;
+  if (!pm && confirmedPmId) {
+    // The booking's own card was not on any page (or the list capped
+    // out): fetch it directly by id so it is never silently dropped.
+    // ownedCard verifies it still belongs to this customer.
+    const direct = await ownedCard(secretKey, customer.id, confirmedPmId);
+    if (direct) pm = { id: direct.id, card: { brand: direct.brand, last4: direct.last4 } };
+  }
+  if (!pm) {
+    if (picked.status === "ambiguous") return { ambiguous: true };
+    return null;
+  }
+  const pmId = pm.id;
+  if (!allowWrite) {
+    return { id: pmId, brand: String(pm.card?.brand ?? ""), last4: String(pm.card?.last4 ?? "") };
+  }
   if (existing !== pmId) {
     const patch: Record<string, string> = { "metadata[gh_payment_method]": pmId };
     const state = customer.metadata["gh_state"] ?? "";
@@ -311,7 +353,7 @@ async function reconcileCard(
     customer.metadata["gh_payment_method"] = pmId;
     if (patch["metadata[gh_state]"]) customer.metadata["gh_state"] = "card_ready";
   }
-  return { id: pmId, brand: String(pm?.card?.brand ?? ""), last4: String(pm?.card?.last4 ?? "") };
+  return { id: pmId, brand: String(pm.card?.brand ?? ""), last4: String(pm.card?.last4 ?? "") };
 }
 
 async function ownedCard(secretKey: string, customerId: string, paymentMethod: string): Promise<CardDetails | null> {
@@ -586,7 +628,7 @@ export default async function handler(req: Req, res: Res) {
         cust = { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name };
       }
     }
-    const card = await reconcileCard(STRIPE_SECRET_KEY, cust, confirmedPaymentMethodId(events));
+    const card = await reconcileCard(STRIPE_SECRET_KEY, cust, confirmedPaymentMethodId(events), { allowWrite: true });
     if (isAmbiguousCard(card)) {
       res.status(409).json({ ok: false, error: "card_confirmation_required" });
       return;
@@ -693,7 +735,9 @@ export default async function handler(req: Req, res: Res) {
             const selectedId = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"];
             const card = typeof selectedId === "string" && selectedId.startsWith("pm_")
               ? await ownedCard(revisitKey, cust.id, selectedId)
-              : await reconcileCard(revisitKey, cust);
+              // G4 L10: this is a GET/revisit read — reconcile from
+              // memory only, never write card_ready to Stripe.
+              : await reconcileCard(revisitKey, cust, undefined, { allowWrite: false });
             if (isAmbiguousCard(card)) {
               // Several cards, none confirmed for this booking: the
               // owner sees that a choice is waiting, not a guessed card.

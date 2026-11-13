@@ -312,7 +312,10 @@ describe("minimal flow (part 2)", () => {
         { id: "p1", visit_id: VISIT_ID, room: "Kitchen", kind: "after", storage_path: "visits/x/kitchen/a.jpg" },
         { id: "p2", visit_id: VISIT_ID, room: "Bathrooms", kind: "after", storage_path: "visits/x/bath/a.jpg" },
       ];
-      const hashInput = photos.map((ph) => `https://test.supabase.co/storage/v1/object/sign/report-photos/${ph["storage_path"]}`).join("|");
+      // The guard hashes the stable storage paths (the same input
+      // the cleaner's auto-publish hashes) — not the signed URLs,
+      // which embed host and bucket and never match.
+      const hashInput = photos.map((ph) => ph["storage_path"]).join("|");
       stripeMeta["gh_state"] = "report_sent";
       stripeMeta["gh_rp_hash"] = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
       stripeMeta["gh_report_sent_at"] = new Date().toISOString();

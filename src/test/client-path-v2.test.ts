@@ -322,7 +322,9 @@ describe("report issue with room + photo", () => {
     const res = response();
     await reportHandler(post(btFor("bid-v"), {
       action: "issue", room: "Kitchen", reason: "Streaks on the mirror",
-      photo: "data:image/jpeg;base64,QUJD",
+      // Real minimal JPEG (FF D8 FF JFIF header) — L8 requires genuine
+      // JPEG bytes, not just a .jpg label.
+      photo: "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
     }) as never, res as never);
     expect(res.body["state"]).toBe("issue_open");
     expect(res.body["issue_room"]).toBe("Kitchen");
@@ -339,6 +341,27 @@ describe("report issue with room + photo", () => {
     const items = view.body["photo_items"] as Array<{ room?: string }>;
     expect(items[0].room).toBe("Kitchen");
     expect(view.body["amount"]).toBe("$189");
+  });
+
+  it("drops a non-JPEG photo (PNG) but still records the issue (L8)", async () => {
+    store[0].metadata = {
+      ...store[0].metadata,
+      gh_state: "report_sent",
+      gh_report_sent_at: new Date().toISOString(),
+      gh_report_amount_cents: "18900",
+      gh_rp_0: JSON.stringify([{ url: "https://img.example/k.jpg", room: "Kitchen" }]),
+    };
+    const res = response();
+    await reportHandler(post(btFor("bid-v"), {
+      action: "issue", room: "Kitchen", reason: "Streaks on the mirror",
+      // 1x1 PNG (89 50 4E 47 magic) — not a JPEG, so no attachment.
+      photo: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    }) as never, res as never);
+    expect(res.body["state"]).toBe("issue_open");
+    expect(res.body["issue_room"]).toBe("Kitchen");
+    const ownerMail = resendCalls.find((c) => (c["to"] as string[]).includes("nikolajmihasenok@gmail.com"));
+    expect(ownerMail).toBeTruthy();
+    expect(ownerMail?.["attachments"]).toBeFalsy();
   });
 });
 

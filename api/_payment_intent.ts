@@ -63,8 +63,14 @@ export async function searchIntents(
   const q = `metadata['gh_booking_id']:'${bookingId.replace(/'/g, "")}'`;
   const out: FoundIntent[] = [];
   let page: string | undefined;
-  for (let hops = 0; hops < 5; hops++) {
-    const params: Record<string, string> = { query: q, limit: "20" };
+  // G3Z: walk ALL pages. The old bound (5 hops x 20 = 100 intents)
+  // silently dropped every intent past the first hundred, so a
+  // succeeded payment beyond page 5 was never reconciled and a
+  // duplicate charge could be created. Stripe search pages carry at
+  // most 100 results; the hop cap below (50 x 100 = 5000) is only a
+  // runaway guard — the loop normally ends on the missing next_page.
+  for (let hops = 0; hops < 50; hops++) {
+    const params: Record<string, string> = { query: q, limit: "100" };
     if (page) params["page"] = page;
     let res: Response;
     try {
@@ -178,6 +184,13 @@ export async function reconcileIntent(
 ): Promise<ReconciledIntent> {
   let newestLive: FoundIntent | null = null;
   let newestFailed: FoundIntent | null = null;
+  // G3Z: a mismatched intent must NOT abort the pass. The old code
+  // returned "mismatch" on the first mismatch, so one stray intent
+  // (wrong amount, another booking's) hid a later succeeded one and
+  // the caller created a duplicate charge. Mismatches are logged and
+  // skipped; only a mismatched intent is flagged, and only when
+  // nothing usable (succeeded / live / failed) was found at all.
+  let firstMismatch: { intent: FoundIntent; reason: string } | null = null;
   const consider = (intent: FoundIntent): ReconciledIntent | null => {
     // A cancellation-fee intent is a DIFFERENT obligation: it never
     // stands in for the cleaning payment, and it never blocks creating
@@ -186,7 +199,18 @@ export async function reconcileIntent(
     // Binding to THIS booking is part of verification (N08): an intent
     // for another booking, even with the right amount, is a mismatch.
     const mismatch = verifyIntentForObligation(intent, { ...obligation, bookingId });
-    if (mismatch) return { state: "mismatch", intent, reason: mismatch };
+    if (mismatch) {
+      console.warn(
+        JSON.stringify({
+          step: "reconcile_mismatch_skip",
+          booking: bookingId,
+          intent: intent.id,
+          reason: mismatch,
+        }),
+      );
+      if (!firstMismatch) firstMismatch = { intent, reason: mismatch };
+      return null;
+    }
     if (intent.status === "succeeded") return { state: "succeeded", intent };
     if (LIVE_STATUSES.includes(intent.status)) {
       if (!newestLive || intent.created >= newestLive.created) newestLive = intent;
@@ -211,17 +235,26 @@ export async function reconcileIntent(
   }
   if (newestLive) return { state: "live", intent: newestLive };
   if (newestFailed) return { state: "failed", intent: newestFailed };
+  if (firstMismatch) return { state: "mismatch", intent: firstMismatch.intent, reason: firstMismatch.reason };
   return { state: "none" };
 }
 
 // Backwards-compatible helpers for existing callers/tests.
+// G3Z: findSucceededCleaningIntent used to pass customerId "" —
+// verifyIntentForObligation then skipped the customer check entirely,
+// so a succeeded intent belonging to ANOTHER customer was accepted as
+// this booking's payment (P14 fixed the same gap for findLiveIntent
+// only). Pass the booking's customer id whenever it is known; without
+// it the legacy unchecked behaviour remains for callers that cannot
+// supply one.
 export async function findSucceededCleaningIntent(
   secretKey: string,
   bookingId: string,
   amountCents: number,
+  customerId?: string,
 ): Promise<string | null> {
   const r = await reconcileIntent(secretKey, bookingId, [], {
-    amountCents, currency: "usd", customerId: "",
+    amountCents, currency: "usd", customerId: customerId ?? "",
   });
   return r.state === "succeeded" ? r.intent.id : null;
 }

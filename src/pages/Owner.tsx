@@ -354,6 +354,7 @@ const Owner = () => {
   const [viewLinkOpen, setViewLinkOpen] = useState(false);
   const [viewLinkUrl, setViewLinkUrl] = useState("");
   const [viewLinkError, setViewLinkError] = useState("");
+  const [viewLinkCopyStatus, setViewLinkCopyStatus] = useState("");
   const [cleanerCopyStatus, setCleanerCopyStatus] = useState("");
   const [clientCopyStatus, setClientCopyStatus] = useState("");
   const [manualCopy, setManualCopy] = useState<{ text: string; label: string; owner: "cleaner" | "client" } | null>(null);
@@ -1380,7 +1381,7 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
                   {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)} {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">test price</span>}</span>
+                  <span className="text-sm text-muted-foreground">{`${fmtVisitDate(v.visit_date)}${v.window ? ` ${formatArrivalWindow(v.window)}` : ""} · ${money(v.amount_cents)}`} {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">test price</span>}</span>
                 </div>
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
                 <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
@@ -1550,7 +1551,7 @@ const Owner = () => {
               <section id="block-summary" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h2 id="owner-detail-title" tabIndex={-1} className="font-heading text-2xl font-bold outline-none">{v.client_name ?? "—"}</h2>
                 <p className="text-sm text-muted-foreground">
-                  {v.service ?? ""} · {fmtVisitDate(v.visit_date)} {v.window ? formatArrivalWindow(v.window) : ""} · {money(v.amount_cents)}
+                  {`${v.service ? `${v.service} · ` : ""}${fmtVisitDate(v.visit_date)}${v.window ? ` ${formatArrivalWindow(v.window)}` : ""} · ${money(v.amount_cents)}`}
                 </p>
                 <p className="text-sm">{v.address ?? ""}</p>
                 {v.access_notes && <p className="text-sm">Access: {v.access_notes}</p>}
@@ -1568,7 +1569,7 @@ const Owner = () => {
                   <p className="text-sm font-semibold mb-1">Ready for the visit</p>
                   <ul className="text-sm space-y-0.5">
                     <li>Cleaner: {v.cleaner_name ?? "not assigned"}</li>
-                    <li>Visit confirmed: {v.visit_confirmed ? "yes" : "not yet"}</li>
+                    <li>{`Visit confirmed: ${v.visit_confirmed ? "yes" : "not yet"}`}</li>
                     {/* A2: the "Card:" line reads the CARD state, not the
                         payment lifecycle. The live state (cardMethod)
                         comes from the status action ("saved"/"none");
@@ -1579,9 +1580,7 @@ const Owner = () => {
                         in the "Payment:" line above, not here. */}
                     <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : cardMethod === "saved" ? (cardBrand && cardLast4 ? `${cardBrand} •••• ${cardLast4}` : "Card ready") : cardMethod === "none" ? "not saved yet" : v.card_confirmed ? "Card ready" : "not saved yet"}</li>
                     <li>
-                      Entry: {entryStatusText(v)}
-                      {v.entry_agreed ? " · settled" : ""}
-                      {v.entry?.has_secret ? " · private entry details saved" : ""}
+                      {`Entry: ${entryStatusText(v)}${v.entry_agreed ? " · settled" : ""}${v.entry?.has_secret ? " · private entry details saved" : ""}`}
                     </li>
                     {(v.entry_choice?.notes ?? v.entry_notes) && (
                       <li>Parking/building notes: {v.entry_choice?.notes ?? v.entry_notes}</li>
@@ -1992,7 +1991,25 @@ const Owner = () => {
                         </button>
                         {viewLinkOpen && viewLinkUrl && (
                           <div className="mt-2">
-                            <input readOnly className="w-full text-xs bg-muted rounded p-2 mb-2" value={viewLinkUrl} onFocus={(e) => e.target.select()} aria-label="Cleaner link (select and copy if the button does not work)" />
+                            {/* The link is shown wrapped in full, never in
+                                a truncating single-line field: copying a
+                                visually cut token used to produce a dead
+                                cleaner link. The Copy button below copies
+                                the complete URL, not the visible text. */}
+                            <p className="w-full text-xs bg-muted rounded p-2 mb-2 break-all" aria-label="Cleaner link (full URL)">{viewLinkUrl}</p>
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  const copied = await copyText(viewLinkUrl);
+                                  setViewLinkCopyStatus(copied ? "Link copied." : "Copy failed — select the full link above and copy it manually.");
+                                }}
+                              >
+                                Copy link
+                              </Button>
+                              {viewLinkCopyStatus && <span className="text-xs text-muted-foreground" role="status">{viewLinkCopyStatus}</span>}
+                            </div>
                             <textarea readOnly rows={7} className="w-full text-xs bg-muted rounded p-2" value={cleanerMessage(viewLinkUrl)} />
                             <div className="flex flex-wrap gap-2 mt-1">
                               <Button
@@ -2073,7 +2090,7 @@ const Owner = () => {
                 {(v.visit_confirmed && v.status !== "cancelled" && v.status !== "paid") && !scheduleEditing ? (
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm">Confirmed: {fmtVisitDate(v.visit_date)}{v.window ? ` · ${formatArrivalWindow(v.window)}` : ""}</p>
+                      <p className="text-sm">{`Confirmed: ${fmtVisitDate(v.visit_date)}${v.window ? ` · ${formatArrivalWindow(v.window)}` : ""}`}</p>
                       <Button variant="outline" size="sm" onClick={() => { setConfirmDate(v.proposed_pending && v.proposed_date ? v.proposed_date : (v.visit_date ?? "")); setConfirmWindow(v.window ?? ""); setScheduleEditing(true); }}>
                         Change
                       </Button>

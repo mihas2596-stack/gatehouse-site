@@ -31,6 +31,7 @@ import { chargeVisit } from "./_payment_obligation.js";
 import { isFutureVisitDate } from "./_visit_date.js";
 import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { loadAccess } from "./_visit_access.js";
+import { cleanupOrphanPhotos } from "./storage-cleanup.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
@@ -59,6 +60,54 @@ async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
+
+// G3: the reminder-before-charge guard is keyed to the CURRENT
+// publication, not to any reminder ever sent. The anchor is the
+// latest (re-)publication: the reminders_rearmed event's
+// report_sent_at when present (logged by publishReportToClient in
+// api/cleaner.ts on every publish), else the latest report_sent
+// event's time. A reminder counts only when it was sent AFTER that
+// anchor — a reminder sent for an old publication never satisfies
+// the guard for the new one, so the client always gets a fresh
+// reminder before a charge on the new publication. With no anchor on
+// record (legacy publications) the old behaviour stands: any latest
+// reminder counts — the guard fails open rather than stalling
+// charges on journal history it cannot see.
+export function publicationAnchorMs(events: BookingEvent[]): number | null {
+  const candidates: number[] = [];
+  const rearm = latestEvent(events, "reminders_rearmed");
+  if (rearm) {
+    const sentAt = typeof rearm.detail?.["report_sent_at"] === "string" ? rearm.detail["report_sent_at"] : "";
+    const ms = Date.parse(sentAt || rearm.created_at);
+    if (Number.isFinite(ms)) candidates.push(ms);
+  }
+  const sent = latestEvent(events, "report_sent");
+  if (sent) {
+    const ms = Date.parse(sent.created_at);
+    if (Number.isFinite(ms)) candidates.push(ms);
+  }
+  return candidates.length > 0 ? Math.max(...candidates) : null;
+}
+
+/**
+ * The latest event of one of <names> that belongs to the current
+ * publication: after the anchor when one exists, else the latest
+ * overall (legacy). Null when no such event exists — e.g. the only
+ * reminder predates a republication, so the new publication is
+ * unreminded and the guard must wait for a fresh reminder.
+ */
+export function latestCurrentEvent(
+  events: BookingEvent[],
+  names: string[],
+): BookingEvent | null {
+  const anchor = publicationAnchorMs(events);
+  const matches = events.filter((e) => names.includes(e.event));
+  if (anchor === null) return matches[0] ?? null;
+  return matches.find((e) => {
+    const ms = Date.parse(e.created_at);
+    return Number.isFinite(ms) && ms > anchor;
+  }) ?? null;
+}
 
 // N29: a bounced reminder is not a delivered reminder. True when a
 // <bounceEvent> journal event exists for this booking after <afterIso>
@@ -114,8 +163,15 @@ async function hydrateCustomerMeta(
   const issueEver = row.issue_ever === true || Boolean(opened);
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
-  const remindedEv = latestEvent(events, "reminder_sent");
-  const earlyRemindedEv = latestEvent(events, "early_reminder_sent");
+  // G3: the reminder flags hydrate ONLY from a reminder that belongs
+  // to the current publication (latestCurrentEvent). Without this,
+  // hydration rebuilt the flags from the OLD publication's reminder
+  // on every cron run, silently undoing the re-arm publishReportToClient
+  // performed — the new publication's reminders would never fire, and
+  // the charge-loop guard below would wait forever for a reminder the
+  // reminder passes thought was already sent.
+  const remindedEv = latestCurrentEvent(events, ["reminder_sent"]);
+  const earlyRemindedEv = latestCurrentEvent(events, ["early_reminder_sent"]);
   const cardEmailEv = latestEvent(events, "card_saved_email");
   const state = row.status === "paid" ? "paid"
     // Fix round 2: a refunded visit is its own state — it must never
@@ -162,6 +218,12 @@ async function hydrateCustomerMeta(
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const MAX_PER_RUN = 25;
+// M8: the reminder passes share the charge cap's per-run discipline —
+// one cron run sends at most MAX_PER_RUN reminders (early + 20h
+// combined), so a backlog of unreminded reports can never turn a
+// single run into an unbounded burst of reminder emails. Only the
+// charges were capped before; the reminder loops below break on it.
+const MAX_REMINDERS_PER_RUN = MAX_PER_RUN;
 
 type Req = {
   method?: string;
@@ -482,6 +544,8 @@ export default async function handler(req: Req, res: Res) {
     let earlyReminded = 0;
     if (RESEND_API_KEY) {
       for (const c of candidates) {
+        // M8: cap the early-reminder pass like the charges.
+        if (earlyReminded + reminded >= MAX_REMINDERS_PER_RUN) break;
         const m = c.metadata;
         // C18: the flag alone proves nothing — it may belong to a
         // previous visit of the same (shared) customer. Only a flag
@@ -575,6 +639,10 @@ export default async function handler(req: Req, res: Res) {
     }
     if (RESEND_API_KEY) {
       for (const c of candidates) {
+        // M8: cap the 20h-reminder pass like the charges — the cap is
+        // shared with the early pass above, so one run sends at most
+        // MAX_REMINDERS_PER_RUN reminders in total.
+        if (earlyReminded + reminded >= MAX_REMINDERS_PER_RUN) break;
         const m = c.metadata;
         // C18: same per-booking rule as the early pass — a flag whose
         // _for names another booking does not satisfy this visit.
@@ -676,25 +744,35 @@ export default async function handler(req: Req, res: Res) {
       try {
         // Reminder-before-charge: never charge a report in the run that
         // first reminded it, and never charge one that was never
-        // reminded while reminders are enabled. Fail open when the
-        // journal is unreadable or reminders are disabled, so a DB
-        // outage cannot stall charges — the next run retries the
-        // reminder, and the panel still shows the failure.
-        if (RESEND_API_KEY && dbConfigured()) {
+        // reminded while reminders are enabled. Fail open only when the
+        // journal is unreadable — a DB outage cannot stall charges, the
+        // next run retries the reminder, and the panel still shows the
+        // failure. A MISSING reminder channel fails CLOSED (G3): with no
+        // RESEND_API_KEY no reminder was ever sent, so charging would
+        // surprise a client who never heard from us — the item waits.
+        if (!RESEND_API_KEY) {
+          skipped++;
+          log("skip_no_reminder_channel", { booking: item.bookingId });
+          continue;
+        }
+        if (dbConfigured()) {
           let firstReminder = remindedThisRun.has(item.bookingId);
           if (!firstReminder) {
             try {
-              // N29: the latest reminder event decides — a bounce after
-              // the send means the client was never reminded, so the
-              // charge waits for a fresh reminder. Filtered client-side
-              // too, so a backend that ignores the `in.` filter cannot
-              // mistake an unrelated journal event for a reminder.
-              const prior = await dbSelect<{ created_at: string; event: string }>(
+              // N29 + G3: the latest reminder event decides — a bounce
+              // after the send means the client was never reminded, so
+              // the charge waits for a fresh reminder — AND the reminder
+              // must belong to the CURRENT publication
+              // (latestCurrentEvent): a reminder sent for a publication
+              // that was later replaced never satisfies the guard.
+              // Filtered client-side too, so a backend that ignores the
+              // `in.` filter cannot mistake an unrelated journal event
+              // for a reminder.
+              const prior = await dbSelect<{ created_at: string; event: string; detail: Record<string, unknown> | null }>(
                 "gh_events",
-                `booking_id=eq.${encodeURIComponent(item.bookingId)}&event=in.(reminder_sent,reminder_bounced)&order=created_at.desc&limit=1`,
+                `booking_id=eq.${encodeURIComponent(item.bookingId)}&event=in.(reminder_sent,reminder_bounced,reminders_rearmed,report_sent)&order=created_at.desc&limit=10`,
               );
-              const reminderEvents = prior.filter((e) => e.event === "reminder_sent" || e.event === "reminder_bounced");
-              const latest = reminderEvents[0];
+              const latest = latestCurrentEvent(prior, ["reminder_sent", "reminder_bounced"]);
               firstReminder = !latest || latest.event === "reminder_bounced";
             } catch {
               firstReminder = false;
@@ -905,6 +983,23 @@ export default async function handler(req: Req, res: Res) {
       }
     } catch (err) { retentionFailed++; logErr("retention", err); }
 
+    // M5: orphan-photo cleanup — objects signed for upload but never
+    // registered (the sign→register gap) are NOT covered by the 90-day
+    // retention pass above (it only deletes REGISTERED photos). The
+    // admin-only /api/storage-cleanup handler does the same run on
+    // demand; the cron runs it here, best-effort. No free Vercel cron
+    // slot exists (both slots are this endpoint, 10:00 and 22:00), so
+    // this piggybacks the existing run instead of a new schedule.
+    let orphanPhotosDeleted = 0;
+    let orphanPhotosFailed = 0;
+    try {
+      const orphan = await cleanupOrphanPhotos({ nowMs: now });
+      orphanPhotosDeleted = orphan.deleted;
+      orphanPhotosFailed = orphan.failed;
+    } catch (err) {
+      logErr("orphan_cleanup", err);
+    }
+
     // --- Receipt-retry pass (N13): a paid visit whose receipt email
     // failed earlier gets the EMAIL resent — never the payment (§7:
     // retry the letter, not the charge). The marker is PER BOOKING
@@ -913,15 +1008,24 @@ export default async function handler(req: Req, res: Res) {
     // flag, which belongs to whatever booking the customer is
     // currently bound to and used to suppress other bookings'
     // receipts. The amount comes from the visit's own pinned amount.
+    // M10: the old pass fetched an arbitrary 50 paid visits
+    // (status=eq.paid, no order, no receipt filter), so a visit
+    // missing its receipt could starve forever behind 50 already-
+    // receipted ones. Now the DB filters to visits actually missing
+    // a receipt (no id, or a stale "claim:" placeholder whose send
+    // never landed) and orders oldest-paid first, so every paid
+    // visit eventually gets its receipt. The journal check below
+    // (payment_succeeded with receipt_sent) stays as the second half
+    // of the "missing receipt" filter.
     let receipts = 0;
     try {
       if (dbConfigured()) {
         const paidRows = await dbSelect<{
           id: string; booking_id: string; amount_cents: number | null; receipt_email_id: string | null;
-          client_email: string | null;
+          client_email: string | null; paid_at: string | null;
         }>(
           "gh_visits",
-          `status=eq.paid&limit=50`,
+          `status=eq.paid&or=(receipt_email_id.is.null,receipt_email_id.like.claim:*)&order=paid_at.asc.nullslast&limit=50`,
         );
         for (const prow of paidRows) {
           if (!prow.booking_id) continue;
@@ -996,8 +1100,20 @@ export default async function handler(req: Req, res: Res) {
           const deleted = await dbDeleteCount("gh_visit_access", `id=eq.${encodeURIComponent(e.id)}`);
           if (deleted > 0) entryCleaned++;
         }
-        const today = new Date(now).toISOString().slice(0, 10);
-        const tomorrow = new Date(now + 24 * 3600 * 1000).toISOString().slice(0, 10);
+        // M9: the visit window is an ET window — "today"/"tomorrow"
+        // are America/New_York calendar dates, not UTC dates. Around
+        // midnight UTC a visit can be "tomorrow" in UTC while still
+        // "today" in Atlanta (and vice versa), so the UTC window
+        // reminded on the wrong day for the client. Tomorrow is
+        // calendar arithmetic on the NY date, so DST never skews it.
+        const nyDay = (ms: number) =>
+          new Intl.DateTimeFormat("en-CA", {
+            timeZone: "America/New_York",
+            year: "numeric", month: "2-digit", day: "2-digit",
+          }).format(new Date(ms));
+        const today = nyDay(now);
+        const [nyY, nyM, nyD] = today.split("-").map(Number);
+        const tomorrow = new Date(Date.UTC(nyY, nyM - 1, nyD + 1)).toISOString().slice(0, 10);
         const rows = await dbSelect<{
           id: string; booking_id: string; client_email: string | null; client_name?: string | null; cleaner_name: string | null;
           visit_date: string | null; window: string | null; status: string | null; report_sent_at: string | null;
@@ -1065,11 +1181,12 @@ export default async function handler(req: Req, res: Res) {
       logErr("entry_reminder", err);
     }
 
-    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned });
+    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned, orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed });
     res.status(200).json({
       requestId, ok: true,
       checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded,
       entry_reminded: entryReminded, entry_cleaned: entryCleaned, photo_retention_deleted: retentionDeleted, photo_retention_failed: retentionFailed,
+      orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed,
     });
   } catch (error: unknown) {
     logErr("unexpected", error);

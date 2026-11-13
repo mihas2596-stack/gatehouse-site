@@ -13,6 +13,16 @@ import { rowCleanerPhone } from "../../api/visit";
 
 const BID = "bid-minimal-flow";
 const VISIT_ID = "33333333-4444-5555-6666-777777777777";
+// Today in America/New_York: the fixed 2026-11-10 aged past and the
+// past-date guard (G3) now rejects it. Today satisfies BOTH gates —
+// assign_confirm accepts today, and the cleaner submit gate allows
+// submitting on the visit date — so a fixed future date would break
+// the auto-publish tests below.
+const nyDate = (days: number) => {
+  const d = new Date(Date.now() + days * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+};
+const TODAY_NY = nyDate(0);
 const CLEANER_TOKEN = "legacy-cleaner-token-1234567890";
 
 type Row = Record<string, unknown>;
@@ -37,7 +47,7 @@ function makeRow(overrides: Row = {}): Row {
     visit_no: 1,
     status: "requested",
     report_status: "none",
-    visit_date: "2026-11-10",
+    visit_date: TODAY_NY,
     window: "morning",
     service: "Standard cleaning",
     client_name: "Casey Client",
@@ -318,11 +328,11 @@ describe("minimal flow", () => {
 
   describe("assign_confirm", () => {
     it("requires a roster id, an existing active cleaner", async () => {
-      expect((await call({ action: "assign_confirm", booking_id: BID, confirmed_date: "2026-11-10", confirmed_window: "morning" })).body["error"]).toBe("cleaner_id_required");
-      expect((await call({ action: "assign_confirm", booking_id: BID, cleaner_id: "nope", confirmed_date: "2026-11-10", confirmed_window: "morning" })).code).toBe(404);
+      expect((await call({ action: "assign_confirm", booking_id: BID, confirmed_date: TODAY_NY, confirmed_window: "morning" })).body["error"]).toBe("cleaner_id_required");
+      expect((await call({ action: "assign_confirm", booking_id: BID, cleaner_id: "nope", confirmed_date: TODAY_NY, confirmed_window: "morning" })).code).toBe(404);
       const id = await addCleaner();
       await call({ action: "roster_update", cleaner_id: id, active: false });
-      const r = await call({ action: "assign_confirm", booking_id: BID, cleaner_id: id, confirmed_date: "2026-11-10", confirmed_window: "morning" });
+      const r = await call({ action: "assign_confirm", booking_id: BID, cleaner_id: id, confirmed_date: TODAY_NY, confirmed_window: "morning" });
       expect(r.code).toBe(409);
       expect(r.body["error"]).toBe("cleaner_inactive");
     });
@@ -331,7 +341,7 @@ describe("minimal flow", () => {
       const id = await addCleaner();
       const r = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-10", confirmed_window: "morning",
+        confirmed_date: TODAY_NY, confirmed_window: "morning",
       });
       expect(r.body["ok"]).toBe(true);
       expect(r.body["email_sent"]).toBe(true);
@@ -349,12 +359,12 @@ describe("minimal flow", () => {
       const id = await addCleaner();
       const first = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-10", confirmed_window: "morning",
+        confirmed_date: TODAY_NY, confirmed_window: "morning",
       });
       expect(first.body["ok"]).toBe(true);
       const second = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-10", confirmed_window: "morning",
+        confirmed_date: TODAY_NY, confirmed_window: "morning",
       });
       expect(second.body["already_confirmed"]).toBe(true);
       expect(second.body["email_sent"]).toBe(false);
@@ -367,13 +377,13 @@ describe("minimal flow", () => {
       rows[0]["status"] = "report_submitted";
       const blocked = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-10", confirmed_window: "morning",
+        confirmed_date: TODAY_NY, confirmed_window: "morning",
       });
       expect(blocked.code).toBe(409);
       expect(blocked.body["error"]).toBe("needs_review");
       const repaired = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: id,
-        confirmed_date: "2026-11-10", confirmed_window: "morning", repair: true,
+        confirmed_date: TODAY_NY, confirmed_window: "morning", repair: true,
       });
       expect(repaired.body["ok"]).toBe(true);
       expect(rows[0]["report_status"]).toBe("submitted");

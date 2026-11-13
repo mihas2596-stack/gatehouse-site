@@ -75,14 +75,19 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("card-status reconciliation", () => {
-  it("finds the card Stripe holds, backfills metadata, never emails on revisit", async () => {
+  it("finds the card Stripe holds, never emails on revisit, and never writes on a GET", async () => {
     const res = response();
     await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
     expect(res.code).toBe(200);
     const booking = res.body.booking as Record<string, string>;
     expect(booking.has_card).toBe("1");
+    // G4 L10: a GET/revisit is a read — it must report the card Stripe
+    // holds but must NOT backfill gh_payment_method / gh_state into
+    // Stripe metadata. That write belongs behind the explicit POST
+    // confirm_card action (covered by g3y-card-status.test.ts).
     const bodies = stripePosts().map(([, i]) => String(i?.body ?? ""));
-    expect(bodies.some((b) => b.includes("gh_payment_method") && b.includes("pm_123"))).toBe(true);
+    expect(bodies.some((b) => b.includes("gh_payment_method") && b.includes("pm_123"))).toBe(false);
+    expect(bodies.some((b) => b.includes("gh_state") && b.includes("card_ready"))).toBe(false);
     // §3: a revisit NEVER sends "Card saved" on its own — a card on file
     // without an explicit per-booking confirmation is a choice, not a
     // confirmation. The revisit returns the card's brand/last4 so the

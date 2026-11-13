@@ -6,7 +6,11 @@
 // Handled events:
 //  - checkout.session.completed (mode=setup) → mark card saved on the
 //    customer (gh_state=card_ready, gh_payment_method=<pm_id>)
-//  - setup_intent.succeeded / setup_intent.setup_failed → update card state
+//  - setup_intent.succeeded → mark card saved the same way (the
+//    Checkout path covers setup sessions; this covers SetupIntents
+//    that complete outside Checkout — G3Z: the event used to be
+//    ignored entirely, so the card stayed "awaiting_card" forever)
+//  - setup_intent.setup_failed → update card state
 //  - payment_intent.succeeded / payment_intent.payment_failed → update
 //    payment state for the booking (succeeded verifies the payment
 //    basis first — waived / issue / future date never marks paid)
@@ -21,6 +25,18 @@
 // in-memory set below as a same-instance fast path only. The persistent
 // row is written only AFTER successful processing, so a failed delivery
 // (5xx) is still retried by Stripe instead of being swallowed.
+//
+// G3Z: two webhook hardening rules.
+//   - Livemode: the event's livemode must match the environment
+//     (sk_live_ key ↔ livemode true, sk_test_ key ↔ false). A
+//     mismatch is rejected and never acted on — a test-mode event
+//     must not move production state, or vice versa.
+//   - Fail-closed DB: money events (payment_intent.*, charge.refunded,
+//     charge.dispute.created) are never acknowledged when the database
+//     cannot be read/written — the handler returns 5xx so Stripe
+//     retries, and nothing is recorded as paid/succeeded. A succeeded
+//     intent for a booking with no visit row is likewise never marked
+//     paid: there is no pinned amount to verify against.
 //
 // The endpoint must be registered in Stripe Dashboard:
 //   Developers → Webhooks → Add endpoint →
@@ -67,7 +83,49 @@ type Res = {
 };
 
 // Best-effort dedupe of redelivered events (per function instance).
-const seenEvents = new Set<string>();
+// G3Z: BOUNDED. The old Set grew forever — one entry per event id,
+// never evicted. The bound is safe only because the persistent
+// gh_webhook_events row (C14) is the cross-instance authority: an
+// evicted in-memory entry is still recognised from the DB, so
+// eviction can never re-admit a processed event while the DB
+// answers. Entries expire after 24h and the set evicts oldest-first
+// past 2000 entries (Stripe redelivers within hours, not days).
+const WEBHOOK_DEDUP_MAX = 2000;
+const WEBHOOK_DEDUP_TTL_MS = 24 * 3600 * 1000;
+
+export function createWebhookSeenSet(
+  maxSize: number = WEBHOOK_DEDUP_MAX,
+  ttlMs: number = WEBHOOK_DEDUP_TTL_MS,
+) {
+  const entries = new Map<string, number>();
+  return {
+    has(id: string): boolean {
+      const at = entries.get(id);
+      if (at === undefined) return false;
+      if (Date.now() - at > ttlMs) {
+        entries.delete(id);
+        return false;
+      }
+      return true;
+    },
+    add(id: string): void {
+      // Re-insert to refresh recency; Map iterates in insertion order,
+      // so the oldest entry is always first.
+      if (entries.has(id)) entries.delete(id);
+      entries.set(id, Date.now());
+      while (entries.size > maxSize) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) break;
+        entries.delete(oldest);
+      }
+    },
+    get size(): number {
+      return entries.size;
+    },
+  };
+}
+
+const seenEvents = createWebhookSeenSet();
 
 function verifySignature(secret: string, payload: string, header: string): boolean {
   // Stripe-Signature: t=<timestamp>,v1=<hmac>
@@ -159,12 +217,56 @@ export default async function handler(req: Req, res: Res) {
     return;
   }
 
-  let event: { id?: string; type?: string; data?: { object?: Record<string, unknown> } };
+  let event: { id?: string; type?: string; livemode?: boolean; data?: { object?: Record<string, unknown> } };
   try {
     event = JSON.parse(rawBody) as typeof event;
   } catch {
     logErr("parse", "invalid json");
     res.status(400).json({ ok: false, error: "invalid_payload" });
+    return;
+  }
+
+  // G3Z (livemode): a test-mode event must never move production
+  // state, and a live-mode event must never move test state. The
+  // expected mode comes from the secret key's prefix; an event that
+  // carries the opposite boolean is rejected before anything is
+  // read or written. An event with NO livemode field is synthetic
+  // (Stripe always sends one) — it is logged and processed, so
+  // existing callers/tests that build events without the field keep
+  // working.
+  const expectedLivemode = STRIPE_SECRET_KEY.startsWith("sk_live_")
+    ? true
+    : STRIPE_SECRET_KEY.startsWith("sk_test_")
+      ? false
+      : null;
+  if (
+    typeof event.livemode === "boolean" &&
+    expectedLivemode !== null &&
+    event.livemode !== expectedLivemode
+  ) {
+    logErr("livemode", `mismatch: event livemode=${event.livemode}, key expects ${expectedLivemode}`);
+    res.status(400).json({ ok: false, error: "livemode_mismatch" });
+    return;
+  }
+  if (typeof event.livemode !== "boolean") log("livemode", "missing — proceeding");
+
+  // G3Z (fail-closed DB): a money event whose effects could not be
+  // persisted must never be acknowledged. Without a database there
+  // is no pinned amount and no basis to verify a succeeded intent
+  // against, and no journal to record a refund/dispute in — so the
+  // handler returns 5xx and Stripe retries the delivery. (A
+  // configured-but-unreachable DB fails the same way further down:
+  // the strict reads set mirrorFailed and return 500.)
+  const MONEY_EVENT_TYPES = new Set([
+    "payment_intent.succeeded",
+    "payment_intent.payment_failed",
+    "charge.refunded",
+    "charge.dispute.created",
+  ]);
+  const eventTypeForGate = event.type ?? "";
+  if (MONEY_EVENT_TYPES.has(eventTypeForGate) && !dbConfigured()) {
+    logErr("db", "money event with no database configured — failing closed");
+    res.status(500).json({ ok: false, error: "db_unavailable" });
     return;
   }
 
@@ -218,6 +320,47 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
+    } else if (eventType === "setup_intent.succeeded") {
+      // G3Z: this event used to be ignored entirely — a SetupIntent
+      // that succeeded outside Checkout (client-side save-card flow)
+      // left the card "awaiting_card" forever, even though the card
+      // was saved at Stripe. Handle it exactly like the Checkout
+      // path above: confirm the SetupIntent succeeded, resolve the
+      // booking (SI metadata first, then the customer's metadata),
+      // journal card_confirmed for the booking, and mark the customer
+      // card_ready. The metadata write is idempotent and the
+      // persistent event dedup (C14) guards redelivery, so a repeat
+      // delivery is a no-op.
+      const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
+      const siId = typeof obj["id"] === "string" ? (obj["id"] as string) : "";
+      const siMeta = (obj["metadata"] as Record<string, string> | undefined) ?? {};
+      let bookingId: string | null = siMeta["gh_booking_id"] ?? null;
+      const eventPm = typeof obj["payment_method"] === "string" ? (obj["payment_method"] as string) : "";
+      if (customerId && siId) {
+        // Confirm the SetupIntent actually succeeded — the event says
+        // so, but the object is the authority (same check as Checkout).
+        const si = await stripeGet(STRIPE_SECRET_KEY, `/setup_intents/${encodeURIComponent(siId)}`);
+        if (!si.ok) throw new Error("setup_intent_unavailable");
+        if (si.data["status"] !== "succeeded") {
+          log("setup_intent", { state: "not_succeeded", id: siId, status: String(si.data["status"]) });
+        } else {
+          const pm = typeof si.data["payment_method"] === "string" ? (si.data["payment_method"] as string) : eventPm;
+          if (!bookingId) {
+            const cust = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customerId)}`);
+            const custMeta = (cust.ok ? (cust.data["metadata"] as Record<string, string> | undefined) : undefined) ?? {};
+            bookingId = custMeta["gh_booking_id"] ?? null;
+          }
+          if (bookingId && pm) await recordCheckoutCardForOwner(STRIPE_SECRET_KEY, bookingId, customerId, pm);
+          await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+            "metadata[gh_state]": "card_ready",
+            "metadata[gh_payment_method]": pm,
+            ...(bookingId ? { "metadata[gh_booking_id]": bookingId } : {}),
+          });
+          log("card_ready", { via: "setup_intent.succeeded", customer: customerId, booking: bookingId });
+        }
+      } else {
+        log("setup_intent", { state: "ignored_no_customer_or_id", id: siId });
+      }
     } else if (eventType === "setup_intent.setup_failed") {
       const customerId = typeof obj["customer"] === "string" ? obj["customer"] : null;
       if (customerId) {
@@ -263,15 +406,22 @@ export default async function handler(req: Req, res: Res) {
                 log("fee", { state: "conflict_skip", booking: bookingId, pi: piId });
               }
               if (feeVerified && !mirrorFailed) {
-                const cevs = await dbSelect<{ detail: Record<string, unknown> | null }>(
+                // G3Z: the old dbSelect swallowed a DB error as "no
+                // cancel record" and the fee was then mirrored WITHOUT
+                // any amount verification. A failed read fails closed.
+                const cevs = await dbSelectStrict<{ detail: Record<string, unknown> | null }>(
                   "gh_events",
                   `booking_id=eq.${encodeURIComponent(bookingId)}&event=eq.visit_cancelled&limit=1`,
                 );
-                const recorded = typeof cevs[0]?.detail?.["fee_cents"] === "number"
-                  ? (cevs[0].detail["fee_cents"] as number) : NaN;
-                if (Number.isFinite(recorded) && recorded !== feeCents) {
-                  feeVerified = false;
-                  log("fee", { state: "amount_mismatch_skip", booking: bookingId, pi: piId });
+                if (!cevs.ok) {
+                  mirrorFailed = true;
+                } else {
+                  const recorded = typeof cevs.rows[0]?.detail?.["fee_cents"] === "number"
+                    ? (cevs.rows[0].detail["fee_cents"] as number) : NaN;
+                  if (Number.isFinite(recorded) && recorded !== feeCents) {
+                    feeVerified = false;
+                    log("fee", { state: "amount_mismatch_skip", booking: bookingId, pi: piId });
+                  }
                 }
               }
             }
@@ -404,6 +554,15 @@ export default async function handler(req: Req, res: Res) {
                 log("payment", { state: "conflict_skip", booking: bookingId, pi: piId });
               }
             }
+            // G3Z (amount check, no-row gap): a succeeded intent for
+            // a booking with NO visit row has no pinned amount and no
+            // basis to verify against — it must never be recorded as
+            // paid. The old code marked it paid in customer metadata
+            // anyway (cleanVerified stayed true with no row).
+            if (!cleanRow && eventType === "payment_intent.succeeded") {
+              cleanVerified = false;
+              log("payment", { state: "no_row_skip", booking: bookingId, pi: piId });
+            }
           }
         }
         // Basis check (fix round 2): a succeeded intent must not mark
@@ -471,6 +630,13 @@ export default async function handler(req: Req, res: Res) {
         } else if (piId && curMeta["gh_last_payment"] === piId && curState === newState) {
           // Same payment intent already recorded (cross-instance redelivery):
           // the write below would be a no-op, skip it.
+          // NOTE (G3Z): the DB row — not this metadata marker — is the
+          // durable dedup authority for the paid write below (a rebind
+          // clears gh_last_payment, but the row still names the paid
+          // intent and the conditional write skips the duplicate). The
+          // metadata write here stays an idempotent re-mirror: after a
+          // rebind it REPAIRS the wiped marker rather than depending
+          // on it, so it must not be skipped when the row says paid.
           log("payment", { state: "already_recorded", booking: bookingId, pi: piId });
         } else {
           await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
@@ -726,9 +892,11 @@ export default async function handler(req: Req, res: Res) {
 
   // Mark as processed only after success. The persistent row in
   // gh_webhook_events is the cross-instance dedup (C14); the
-  // in-memory Set is only a same-instance fast path and is never
-  // cleared — the old "clear past 2000" silently re-admitted
-  // redeliveries. Stripe's own retry + idempotent state writes are
+  // in-memory set is only a same-instance fast path and is BOUNDED
+  // (24h TTL, 2000 entries, oldest-first eviction — G3Z). Eviction
+  // is safe because the persistent row remains the authority; the
+  // old "never cleared" set grew without bound on long-lived
+  // instances. Stripe's own retry + idempotent state writes are
   // the remaining safety net.
   await recordWebhookEvent("stripe", eventId, eventType);
   seenEvents.add(eventId);

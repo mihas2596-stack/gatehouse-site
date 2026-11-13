@@ -10,6 +10,16 @@ import cleanerHandler from "../../api/cleaner";
 
 const BID = "bid-confirm-flow";
 const VISIT_ID = "22222222-3333-4444-5555-666666666666";
+// Today in America/New_York: the fixed 2026-11-10 aged past and the
+// past-date guard (G3) now rejects it. Today satisfies BOTH gates —
+// confirm accepts today, and the cleaner submit gate allows submitting
+// on the visit date — so a fixed future date would break the submit
+// tests below.
+const nyDate = (days: number) => {
+  const d = new Date(Date.now() + days * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+};
+const TODAY_NY = nyDate(0);
 
 type Row = Record<string, unknown>;
 type Ev = { visit_id: string | null; event: string };
@@ -40,7 +50,7 @@ function makeRow(overrides: Row = {}): Row {
     visit_no: 1,
     status: "requested",
     report_status: "none",
-    visit_date: "2026-11-10",
+    visit_date: TODAY_NY,
     window: "midday",
     service: "Standard cleaning",
     client_name: "Casey Client",
@@ -180,20 +190,24 @@ describe("visit confirmation flow", () => {
 
   const confirmVisit = () => call({
     action: "confirm", booking_id: BID,
-    confirmed_date: "2026-11-10", confirmed_window: "midday",
+    confirmed_date: TODAY_NY, confirmed_window: "midday",
   });
 
   const assignCleaner = async () => {
     rows[0]["cleaner_name"] = "Test Cleaner";
     rows[0]["cleaner_token_hash"] = hashToken("legacy-cleaner-token-1234567890");
-    rows[0]["cleaner_token_expires"] = new Date(Date.now() + 86400000).toISOString();
+    // +5 days: production links cover the visit date + 2 days, and
+    // confirm rotates a link that would expire before the confirmed
+    // date + 2 days (H2). A +24h expiry would rotate on confirm and
+    // invalidate the legacy token the submit below uses.
+    rows[0]["cleaner_token_expires"] = new Date(Date.now() + 5 * 86400000).toISOString();
   };
 
   it("confirm is owner-only", async () => {
     await assignCleaner();
     const r = await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-10", confirmed_window: "midday",
+      confirmed_date: TODAY_NY, confirmed_window: "midday",
     }, "Bearer wrong");
     expect(r.code).toBe(401);
     expect(rows[0]["status"]).toBe("requested");
@@ -212,7 +226,7 @@ describe("visit confirmation flow", () => {
     expect(r.body["ok"]).toBe(true);
     expect(r.body["email_sent"]).toBe(true);
     expect(rows[0]["status"]).toBe("confirmed");
-    expect(rows[0]["visit_date"]).toBe("2026-11-10");
+    expect(rows[0]["visit_date"]).toBe(TODAY_NY);
     expect(rows[0]["window"]).toBe("midday");
     expect(events.some((e) => e.event === "visit_confirmed")).toBe(true);
     expect(events.some((e) => e.event === "confirmation_email_sent")).toBe(true);
@@ -246,7 +260,7 @@ describe("visit confirmation flow", () => {
     expect(rows[0]["status"]).toBe("report_submitted");
     const repaired = await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-10", confirmed_window: "midday", repair: true,
+      confirmed_date: TODAY_NY, confirmed_window: "midday", repair: true,
     });
     expect(repaired.body["ok"]).toBe(true);
     expect(rows[0]["status"]).toBe("confirmed");
@@ -327,7 +341,7 @@ describe("visit confirmation flow", () => {
     expect(blocked.body["error"]).toBe("needs_confirmation");
     await call({
       action: "confirm", booking_id: BID,
-      confirmed_date: "2026-11-10", confirmed_window: "midday", repair: true,
+      confirmed_date: TODAY_NY, confirmed_window: "midday", repair: true,
     });
     const noPhotos = await call({ action: "send_report", booking_id: BID });
     expect(noPhotos.code).toBe(409);

@@ -162,6 +162,15 @@ describe("reminder-before-charge guard", () => {
     expect(piCalls).toBe(1);
     expect(row["status"]).toBe("paid");
   });
+
+  it("no reminder channel (G3): never charges unreminded — fail closed", async () => {
+    vi.stubEnv("RESEND_API_KEY", "");
+    const r = await run();
+    expect(r.body["charged"]).toBe(0);
+    expect(r.body["skipped"]).toBe(1);
+    expect(piCalls).toBe(0);
+    expect(resendSubjects).toHaveLength(0);
+  });
 });
 
 describe("G2: timer charge re-verifies amount + identity against the row", () => {

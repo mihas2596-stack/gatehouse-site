@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
-import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, logEvent } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
@@ -810,6 +810,36 @@ export default async function handler(req: Req, res: Res) {
       if (dbConfigured()) {
         try {
           const actualService = parsed.data.service_key === "moveinout" ? "Move-in / Move-out cleaning" : server?.first_service === "deep" ? "Deep cleaning" : (service ?? "Standard cleaning");
+          // L2: the duplicate answer, shared by the pre-insert check
+          // and the post-insert race re-check below — same bid, a
+          // fresh link token, the same server-verified totals. No new
+          // row, no new journal events, no emails: the original
+          // submission already sent the confirmation (so
+          // customerEmailSent is true: the client has it).
+          const duplicateBody = (duplicateRow: VisitDedupRow) => {
+            const dupSigned = signBooking(bookingLinkSecret(signingSecret), {
+              email: (duplicateRow.client_email ?? "").trim(),
+              name: (duplicateRow.client_name ?? "").trim(),
+              first: duplicateRow.amount_cents != null
+                ? String(duplicateRow.amount_cents / 100)
+                : tokenPrice,
+              recurring: tokenRecurring,
+              service: (duplicateRow.service ?? "").trim() || undefined,
+              date: (duplicateRow.visit_date ?? "").trim() || undefined,
+              bid: duplicateRow.booking_id,
+            });
+            log("booking_duplicate", { bid: duplicateRow.booking_id });
+            return {
+              ok: true,
+              success: true,
+              customerEmailSent: true,
+              duplicate: true,
+              ...(serverFirst ? { server_first: serverFirst } : {}),
+              ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
+              booking_id: duplicateRow.booking_id,
+              bt: dupSigned.token,
+            };
+          };
           const rooms = buildWorkRooms({ bedrooms, fullBaths: parsed.data.full_baths ?? bathrooms, halfBaths: parsed.data.half_baths, extraZones: extra_zones, deep: server?.first_service === "deep", addons: parsed.data.addons });
           // M6/N-upsert: insert-only, never merge. A retried or
           // concurrent submission reproduces the same booking id by
@@ -833,52 +863,30 @@ export default async function handler(req: Req, res: Res) {
             // window is the same request, not a second visit: return it
             // instead of inserting a duplicate row. Skipped for an
             // explicit second visit (force_new_booking).
+            const naturalKey: NaturalBookingKey = {
+              email: (email ?? "").trim().toLowerCase(),
+              date: (date ?? "").trim(),
+              service: actualService,
+              address: (address ?? "").trim().toLowerCase(),
+              window: (time ?? "").trim(),
+              amountCents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
+            };
             if (!forceNewBooking) {
+              // The same-date scan is capped at 200 rows: on a busy
+              // day more than 50 same-date bookings would push the
+              // true duplicate out of the old limit=50 window and let
+              // a resubmission through.
               const dupCheck = await dbSelectStrict<VisitDedupRow>(
                 "gh_visits",
-                `visit_date=eq.${encodeURIComponent((date ?? "").trim())}&order=created_at.desc&limit=50`,
+                `visit_date=eq.${encodeURIComponent((date ?? "").trim())}&order=created_at.desc&limit=200`,
               );
               if (!dupCheck.ok) {
                 logErr("dedup_read", "could not check for an existing identical booking");
                 return json(503, { ok: false, error: "booking_save_failed" });
               }
-              const naturalKey: NaturalBookingKey = {
-                email: (email ?? "").trim().toLowerCase(),
-                date: (date ?? "").trim(),
-                service: actualService,
-                address: (address ?? "").trim().toLowerCase(),
-                window: (time ?? "").trim(),
-                amountCents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
-              };
               const duplicateRow = dupCheck.rows.find((row) => isNaturalDuplicate(naturalKey, row));
               if (duplicateRow && duplicateRow.booking_id) {
-                // Return the existing booking: same bid, a fresh link
-                // token for it, the same server-verified totals. No new
-                // row, no new journal events, no emails — the original
-                // submission already sent the confirmation (so
-                // customerEmailSent is true: the client has it).
-                const dupSigned = signBooking(bookingLinkSecret(signingSecret), {
-                  email: (duplicateRow.client_email ?? "").trim(),
-                  name: (duplicateRow.client_name ?? "").trim(),
-                  first: duplicateRow.amount_cents != null
-                    ? String(duplicateRow.amount_cents / 100)
-                    : tokenPrice,
-                  recurring: tokenRecurring,
-                  service: (duplicateRow.service ?? "").trim() || undefined,
-                  date: (duplicateRow.visit_date ?? "").trim() || undefined,
-                  bid: duplicateRow.booking_id,
-                });
-                log("booking_duplicate", { bid: duplicateRow.booking_id });
-                return json(200, {
-                  ok: true,
-                  success: true,
-                  customerEmailSent: true,
-                  duplicate: true,
-                  ...(serverFirst ? { server_first: serverFirst } : {}),
-                  ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
-                  booking_id: duplicateRow.booking_id,
-                  bt: dupSigned.token,
-                });
+                return json(200, duplicateBody(duplicateRow));
               }
             }
             const inserted = await dbInsert<{ id: string }>("gh_visits", {
@@ -913,6 +921,35 @@ export default async function handler(req: Req, res: Res) {
                 `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
               );
               visitRow = reread[0] ?? null;
+            }
+            // L2: close the check-then-act race — two identical
+            // submissions with different request_ids can both pass the
+            // pre-insert check (neither row exists yet) and both
+            // insert. Re-check now: if an EARLIER identical row
+            // exists, this call's row is the duplicate — delete it
+            // (no journal events or emails exist for it yet; those are
+            // logged after this block) and return the earlier booking.
+            // A failed re-check fails OPEN: the booking already exists
+            // and must not fail on a read error.
+            if (createdByThisCall && !forceNewBooking && visitRow) {
+              const recheck = await dbSelectStrict<VisitDedupRow>(
+                "gh_visits",
+                `visit_date=eq.${encodeURIComponent((date ?? "").trim())}&order=created_at.desc&limit=200`,
+              );
+              if (recheck.ok) {
+                const mineCreatedAt = (visitRow as { created_at?: string }).created_at ?? "";
+                const earlier = recheck.rows
+                  .filter((row) => row.booking_id !== bookingId)
+                  .find((row) => isNaturalDuplicate(naturalKey, row)
+                    && ((row.created_at ?? "") < mineCreatedAt
+                      || ((row.created_at ?? "") === mineCreatedAt
+                        && (row.booking_id ?? "") < (bookingId ?? ""))));
+                if (earlier && earlier.booking_id) {
+                  await dbDelete("gh_visits", `id=eq.${visitRow.id}`);
+                  log("booking_duplicate_race", { kept: earlier.booking_id, dropped: bookingId ?? "" });
+                  return json(200, duplicateBody(earlier));
+                }
+              }
             }
           }
           if (!visitRow) return json(503, { ok: false, error: "booking_save_failed" });

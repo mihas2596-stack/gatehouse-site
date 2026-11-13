@@ -50,7 +50,7 @@ function RoomCard({ name, photo, checks }: { name: string; photo?: { src: string
               <figcaption className="mt-1 text-xs text-muted-foreground">{photo.caption}</figcaption>
             </figure>
           ) : (
-            <p className="mt-1 text-sm text-muted-foreground">In a real report, this room&apos;s photos appear here.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Sample checklist shown — a real report also has before and after photos for each room.</p>
           )}
           <ul className="mt-2 space-y-1">
             {checks.map((check) => (

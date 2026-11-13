@@ -16,6 +16,13 @@ export function todayInNewYork(nowMs: number): string {
 
 export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
   if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
+  // G3: a well-formed-looking but impossible calendar date
+  // ("2026-13-40", "2026-02-30") passes the regex and compares as a
+  // future string — fail-open for every gate that trusts this. An
+  // unparseable date is NEVER a future date: visitDateStartNYMs
+  // validates the calendar date and returns NaN for impossible ones,
+  // so gates fail closed on garbage instead of treating it as future.
+  if (!Number.isFinite(visitDateStartNYMs(visitDate))) return false;
   return visitDate > todayInNewYork(nowMs);
 }
 

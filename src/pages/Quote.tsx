@@ -975,7 +975,7 @@ const Quote = () => {
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip || "—"}</p>
+                <p className="text-muted-foreground mt-1">{`${bedrooms} ${bedrooms === 1 ? "bed" : "beds"}, ${fullBaths} full bath${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? `, ${halfBaths} half bath${halfBaths === 1 ? "" : "s"}` : ""} · ZIP ${zip || "—"}`}</p>
                 <Link to="/whats-included" className="inline-flex min-h-[44px] items-center text-primary underline">See the full room-by-room list</Link>
               </div>
 
@@ -994,11 +994,11 @@ const Quote = () => {
                   <div>
                     <dt className="text-muted-foreground">Cleaning price</dt>
                     <dd className="text-[1.25rem] font-semibold leading-tight">{reviewPrice}</dd>
-                    <dd className="mt-1">{SERVICE_LABEL_CALC[service]} · {service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}</dd>
+                    <dd className="mt-1">{`${SERVICE_LABEL_CALC[service]} · ${service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}`}</dd>
                   </div>
                   <div className="border-t border-border pt-3 sm:col-span-2">
                     <dt className="text-muted-foreground">Requested date</dt>
-                    <dd className="font-semibold">{booking.date ? fmtDate(booking.date) : "—"} · {WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}</dd>
+                    <dd className="font-semibold">{`${booking.date ? fmtDate(booking.date) : "—"} · ${WINDOW_LABEL[booking.time] ?? "Flexible arrival window"}`}</dd>
                   </div>
                 </dl>
                 <p className="mt-2 text-base leading-relaxed"><strong>Pending confirmation.</strong> We&apos;ll email your date, arrival window and cleaner within one business day.</p>
@@ -1006,8 +1006,8 @@ const Quote = () => {
                   <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 break-words">
                     <dt className="font-semibold">Address</dt><dd className="min-w-0">{fullAddress || "—"}</dd>
-                    <dt className="font-semibold">Home</dt><dd>{bedrooms} bedrooms · {fullBaths} full bathrooms{halfBaths > 0 ? ` · ${halfBaths} half bathroom${halfBaths > 1 ? "s" : ""}` : ""}</dd>
-                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{booking.name} · {booking.email} · {booking.phone}</dd>
+                    <dt className="font-semibold">Home</dt><dd>{`${bedrooms} ${bedrooms === 1 ? "bedroom" : "bedrooms"} · ${fullBaths} full bathroom${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? ` · ${halfBaths} half bathroom${halfBaths === 1 ? "" : "s"}` : ""}`}</dd>
+                    <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{`${booking.name} · ${booking.email} · ${booking.phone}`}</dd>
                     <dt className="font-semibold">Entry</dt><dd>{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd>
                   </dl>
                   {entryMethod === "decide_later" && (

@@ -11,6 +11,15 @@ import { verifyBooking } from "../../api/create-checkout-session";
 // is "Your cleaning is confirmed — [date]".
 
 const BID = "bid-test-123";
+// NY-calendar dates: fixed 2026-11 dates aged past and the past-date
+// guard (G3) now rejects them. Today/tomorrow in America/New_York stay
+// valid whatever the run hour (UTC dates would flip near midnight).
+const nyDate = (days: number) => {
+  const d = new Date(Date.now() + days * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+};
+const DATE_1 = nyDate(0);
+const DATE_2 = nyDate(1);
 const CUSTOMER = {
   id: "cus_test_1",
   email: "client@example.com",
@@ -84,14 +93,14 @@ describe("booking-action confirm", () => {
   it("sets the confirmed flag and emails the client", async () => {
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler(confirmReq("2026-11-07", "Midday (11 AM – 2 PM)") as any, res as any);
+    await handler(confirmReq(DATE_1, "Midday (11 AM – 2 PM)") as any, res as any);
     expect(res.code).toBe(200);
     expect(res.body["ok"]).toBe(true);
     expect(res.body["booking_confirmed"]).toBe(true);
     expect(res.body["email_sent"]).toBe(true);
     const written = metaWrites.map((p) => p.toString()).join("&");
     expect(written).toContain("metadata%5Bgh_booking_confirmed%5D=1");
-    expect(written).toContain("metadata%5Bgh_confirmed_date%5D=2026-11-07");
+    expect(written).toContain(`metadata%5Bgh_confirmed_date%5D=${DATE_1}`);
     expect(resendCalls).toHaveLength(1);
     const emailBody = JSON.parse(String(resendCalls[0])) as { subject: string; text: string; to: string[] };
     expect(emailBody.to).toEqual(["client@example.com"]);
@@ -102,16 +111,16 @@ describe("booking-action confirm", () => {
   it("does not re-email on an identical repeat, but does on a date change", async () => {
     const res1 = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler(confirmReq("2026-11-07", "Midday") as any, res1 as any);
+    await handler(confirmReq(DATE_1, "Midday") as any, res1 as any);
     expect(resendCalls).toHaveLength(1);
     const res2 = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler(confirmReq("2026-11-07", "Midday") as any, res2 as any);
+    await handler(confirmReq(DATE_1, "Midday") as any, res2 as any);
     expect(res2.body["already_confirmed"]).toBe(true);
     expect(resendCalls).toHaveLength(1);
     const res3 = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler(confirmReq("2026-11-08", "Midday") as any, res3 as any);
+    await handler(confirmReq(DATE_2, "Midday") as any, res3 as any);
     expect(res3.body["already_confirmed"]).toBe(false);
     expect(resendCalls).toHaveLength(2);
   });
@@ -123,7 +132,7 @@ describe("booking-action confirm", () => {
     expect(resNoDate.code).toBe(400);
     const resNoAuth = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler({ method: "POST", headers: {}, body: { action: "confirm", booking_id: BID, confirmed_date: "2026-11-07" } } as any, resNoAuth as any);
+    await handler({ method: "POST", headers: {}, body: { action: "confirm", booking_id: BID, confirmed_date: DATE_1 } } as any, resNoAuth as any);
     expect(resNoAuth.code).toBe(401);
   });
 });
