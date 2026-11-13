@@ -42,6 +42,10 @@ export type AccessRow = {
   assigned_cleaner_id: string | null;
   expires_at: string | null;
   created_at?: string | null;
+  // Last save (dbUpdate stamps it). A re-save for a re-clean updates
+  // this while created_at stays at the original save — freshness
+  // checks must read updated_at first (H5).
+  updated_at?: string | null;
 };
 
 export type ClientEntryView = {
@@ -263,25 +267,46 @@ export function clientEntryView(row: AccessRow | null, available: boolean): Clie
  */
 export function cleanerEntryView(
   row: AccessRow | null,
-  visit: { status: string; report_status: string; cleaner_id: string | null },
+  visit: {
+    status: string; report_status: string; cleaner_id: string | null;
+    // H5: a scheduled re-clean reopens entry for the re-clean cleaner.
+    reclean?: { status: string | null; cleanerId: string | null; arrangedAt: string | null } | null;
+  },
   confirmed: boolean,
   events?: Array<{ event: string; created_at: string }>,
 ): { method: EntryMethod | null; note: string; secret: string | null } | null {
   if (!row || !confirmed) return null;
   if (visit.status === "cancelled") return null;
-  if (visit.report_status === "submitted" || visit.report_status === "sent") return null;
+  // H5: once the cleaner has finished the job (report submitted/sent),
+  // entry details are never shown again — EXCEPT for a scheduled
+  // re-clean, where the cleaner needs the code again. The access row
+  // must be FRESH: saved after the re-clean was arranged. A leftover
+  // row from the original visit (saved before the arrangement, or a
+  // delete that failed) never re-exposes the old secret.
+  const reclean = visit.reclean ?? null;
+  const lastSavedAt = row.updated_at ?? row.created_at ?? "";
+  const recleanOpen = Boolean(
+    reclean && reclean.status === "scheduled" && reclean.arrangedAt
+      && lastSavedAt && lastSavedAt >= reclean.arrangedAt,
+  );
+  if ((visit.report_status === "submitted" || visit.report_status === "sent") && !recleanOpen) return null;
   if (isAccessExpired(row)) return null;
   // N09: even if a cleanup delete failed, a cancel or a Finish
-  // journaled AFTER this access row was created still revokes it:
-  // the view gate, not only the delete, protects the secret.
-  if (events && row.created_at) {
+  // journaled AFTER this access row was last saved still revokes it:
+  // the view gate, not only the delete, protects the secret. The
+  // last-save time (not created_at) is the anchor: a re-save for a
+  // re-clean must not be revoked by the ORIGINAL report submission.
+  if (events && lastSavedAt) {
     const revoked = events.some(
       (e) => (e.event === "visit_cancelled" || e.event === "report_submitted")
-        && e.created_at >= row.created_at!,
+        && e.created_at >= lastSavedAt,
     );
     if (revoked) return null;
   }
-  if (!visit.cleaner_id || !row.assigned_cleaner_id || visit.cleaner_id !== row.assigned_cleaner_id) return null;
+  // The entry belongs to the cleaner who does the work: the re-clean
+  // cleaner for a scheduled re-clean, else the assigned cleaner.
+  const effectiveCleanerId = recleanOpen && reclean!.cleanerId ? reclean!.cleanerId : visit.cleaner_id;
+  if (!effectiveCleanerId || !row.assigned_cleaner_id || effectiveCleanerId !== row.assigned_cleaner_id) return null;
   return {
     method: row.entry_method,
     note: row.entry_note ?? "",

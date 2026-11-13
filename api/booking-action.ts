@@ -43,7 +43,7 @@ import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
-import { deleteAccess, revokeAccessForCleanerChange, saveAccessNote } from "./_visit_access.js";
+import { deleteAccess, revokeAccessForCleanerChange, saveAccess, saveAccessNote } from "./_visit_access.js";
 import {
   cleanerLinkExpiry, cleanerLinkSecretCandidates, cleanerLinkPrimarySecret,
   cleanerLinkUrl, mintCleanerLinkV2, newIssuanceId,
@@ -128,7 +128,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "resend_owner_notification", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "resend_owner_notification", "send_report", "decline_date", "set_cleaner", "set_access_notes", "set_access_secret", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -159,6 +159,10 @@ const ActionSchema = z.object({
   client_phone: z.string().max(50).optional(),
   // set_access_notes: owner's correction of the visit's entry instructions.
   access_notes: z.string().max(1000).optional(),
+  // set_access_secret: the entry code the owner received from the
+  // client (by phone/text) for a re-clean. Encrypted at rest, never
+  // logged or mirrored to Stripe metadata.
+  secret: z.string().max(1000).optional(),
   // send_report: explicit owner decision to resolve an open customer
   // issue together with the re-send (C3 — never silently).
   resolve_issue: z.boolean().optional(),
@@ -663,6 +667,46 @@ async function clearV2Fields(visitId: string): Promise<void> {
     cleaner_link_version: null,
     cleaner_link_issuance: null,
   });
+}
+
+// H2: rotate the cleaner link to a NEW visit date — but only when the
+// current link would expire before the new date (+2 days, the same
+// horizon cleanerLinkExpiry uses). A still-valid link is left untouched
+// so the cleaner keeps working on the URL the owner already sent. A
+// missing or already-expired link rotates too (the cleaner needs a
+// working one). Returns the new link, or null when no rotation was
+// needed / the write failed (the caller then falls back to the current
+// link, if any).
+async function rotateCleanerLinkForDate(
+  visitId: string,
+  bookingId: string,
+  newDate: string,
+  currentExpires: string | null,
+  reason: string,
+): Promise<{ url: string; expires: string; reusable: boolean } | null> {
+  const needByMs = Date.parse(`${newDate}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
+  const currentExpiresMs = currentExpires ? Date.parse(currentExpires) : NaN;
+  if (Number.isFinite(needByMs) && Number.isFinite(currentExpiresMs) && currentExpiresMs >= needByMs) return null;
+  const v2 = mintV2Link(visitId, newDate);
+  if (v2 && (await writeV2Link(visitId, v2))) {
+    await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason, expires: v2.expires });
+    return { url: v2.url, expires: v2.expires, reusable: true };
+  }
+  const leg = mintLegacyLink(newDate);
+  const okLeg = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
+    cleaner_token_hash: hashToken(leg.token),
+    cleaner_token_expires: leg.expires,
+  });
+  if (okLeg) {
+    await clearV2Fields(visitId);
+    await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason, expires: leg.expires });
+    return { url: leg.url, expires: leg.expires, reusable: false };
+  }
+  await logEvent(visitId, bookingId, "owner", "cleaner_link_legacy_fallback", {
+    reason: !v2 ? "v2_mint_null" : "v2_write_failed",
+    legacy_saved: false,
+  });
+  return null;
 }
 
 // Task 4 (12.11.2026): record an arranged re-clean on the visit row —
@@ -1825,6 +1869,14 @@ export default async function handler(req: Req, res: Res) {
       const already = row
         ? row.status === "confirmed" && row.visit_date === date && (row.window ?? "") === win
         : metaAlready;
+      // P9: a visit whose report is already sent must never be
+      // re-confirmed to a new date — the sent report would be orphaned
+      // (status confirmed, report_status sent → chargeVisit blocks
+      // forever with report_not_current; neither send_report nor a
+      // re-submission can fix it). An exact repeat stays a no-op.
+      if (wasConfirmed && reportStatus === "sent" && !already) {
+        return json(409, { ok: false, error: "report_already_sent" });
+      }
       // Metadata refresh (idempotent): the client page reads confirmation
       // from metadata, and the shared customer record may currently carry
       // another booking's values.
@@ -1860,6 +1912,13 @@ export default async function handler(req: Req, res: Res) {
         if (!rowOk) {
           logErr("confirm", "visit row update failed");
           return json(502, { ok: false, error: "db_error" });
+        }
+        // H2: the cleaner link was minted from the OLD visit date — a
+        // reschedule can leave it expiring before the visit. Rotate it
+        // to the new date when a link exists and does not cover it.
+        const linkExpires = (row as unknown as CleanerRow).cleaner_token_expires ?? null;
+        if (linkExpires) {
+          await rotateCleanerLinkForDate(row.id, bookingId, date, linkExpires, "visit_rescheduled");
         }
       }
       // Email second: a failed send keeps the confirmation and surfaces
@@ -1950,6 +2009,13 @@ export default async function handler(req: Req, res: Res) {
         row.visit_date === date &&
         (row.window ?? "") === win &&
         (rowCleanerId === cleanerId || (!rowCleanerId && prevCleaner === name));
+      // P9: a visit whose report is already sent must never be
+      // re-confirmed to a new date — the sent report would be orphaned
+      // (status confirmed, report_status sent → chargeVisit blocks
+      // forever with report_not_current). An exact repeat stays a no-op.
+      if (wasConfirmed && reportStatus === "sent" && !already) {
+        return json(409, { ok: false, error: "report_already_sent" });
+      }
       // Metadata refresh (idempotent): the client page reads
       // confirmation from metadata, and the shared customer record may
       // currently carry another booking's values.
@@ -2016,11 +2082,14 @@ export default async function handler(req: Req, res: Res) {
       // dies); the same person keeps the current link.
       let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
       if (changed || firstAssignment) {
-        const v2 = mintV2Link(row.id, row.visit_date);
+        // H2: mint from the NEW confirmed date, not the row snapshot
+        // taken before the update — a link minted from the old date can
+        // expire before a rescheduled visit.
+        const v2 = mintV2Link(row.id, date);
         if (v2 && (await writeV2Link(row.id, v2))) {
           linkOut = { url: v2.url, expires: v2.expires, reusable: true };
         } else {
-          const leg = mintLegacyLink(row.visit_date);
+          const leg = mintLegacyLink(date);
           const okLeg = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
             cleaner_token_hash: hashToken(leg.token),
             cleaner_token_expires: leg.expires,
@@ -2041,8 +2110,17 @@ export default async function handler(req: Req, res: Res) {
           await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
         }
       } else {
-        const recomputed = recomputeV2Link(row as unknown as CleanerRow);
-        if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
+        // H2: the same person keeps the current link — unless the visit
+        // moved to a date the link does not cover, in which case rotate
+        // it to the new date (the old URL dies; the panel shows the new
+        // one). A still-valid link is left untouched.
+        const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, (row as unknown as CleanerRow).cleaner_token_expires ?? null, "visit_rescheduled");
+        if (rotated) {
+          linkOut = rotated;
+        } else {
+          const recomputed = recomputeV2Link(row as unknown as CleanerRow);
+          if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
+        }
       }
       if (changed || firstAssignment) {
         await logEvent(row.id, bookingId, "owner", "cleaner_assigned", { cleaner_id: cleanerId, cleaner_name: name });
@@ -2344,6 +2422,7 @@ export default async function handler(req: Req, res: Res) {
                   `Our response: ${text}`,
                   "We'll send you an updated report after the re-clean.",
                   "Nothing will be charged unless you approve the report.",
+                  "Please make sure your entry arrangement is up to date on your visit page — the cleaner will need it again for the re-clean.",
                 ]
               : [
                   "We've reviewed your concern about your cleaning.",
@@ -2407,6 +2486,15 @@ export default async function handler(req: Req, res: Res) {
       if (!issueIsOpen) {
         logErr("issue_decision", `blocked: no open issue (decision=${decision})`);
         return json(409, { ok: false, error: "nothing_to_resolve" });
+      }
+      // P7: a waive promises "No charge will be made" — but a charge
+      // already in flight (payment_pending) can still complete after
+      // the waive, and the in-flight intent would then be adopted as
+      // paid. Refuse while a charge is in flight; the owner retries
+      // once the charge settles (paid → already_paid, failed → the
+      // waive proceeds).
+      if (decision === "waived" && row.status === "payment_pending") {
+        return json(409, { ok: false, error: "payment_in_flight" });
       }
       // Request payment and Arrange re-clean must say what the
       // decision IS — the text is what the client reads as "Our
@@ -3196,6 +3284,26 @@ export default async function handler(req: Req, res: Res) {
       // operator's alternative dates. The client picks one (or proposes
       // their own) from the /visit page — no form to refill, and the
       // saved card stays attached to the same request.
+      // P8: declining the date after the report is sent (or the visit
+      // is paid / a charge is in flight) breaks the visit: the client
+      // page moves to date_declined, and accept_alt_date can then move
+      // the visit date while the sent report — and its 24h charge
+      // timer — still point at the old one. Declines are only for
+      // unconfirmed, unreported requests.
+      const declineReportStatus = row?.report_status ?? "";
+      if (
+        declineReportStatus === "submitted" || declineReportStatus === "sent" || declineReportStatus === "returned" ||
+        row?.report_sent_at || meta["gh_report_sent_at"] ||
+        state === "report_sent" || state === "approved"
+      ) {
+        return json(409, { ok: false, error: "report_already_sent" });
+      }
+      if (
+        row?.status === "paid" || row?.status === "payment_pending" || row?.status === "refunded" || row?.status === "cancelled" ||
+        state === "paid" || state === "payment_pending" || state === "refunded" || state === "cancelled"
+      ) {
+        return json(409, { ok: false, error: "invalid_transition", status: row?.status ?? state });
+      }
       const alts = (parsed.data.alt_dates ?? []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "date_declined",
@@ -3424,6 +3532,47 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(row.id, bookingId, "owner", "access_notes_updated", { length: value.length });
       log("set_access_notes", { booking: bookingId });
       return json(200, { ok: true, access_notes: value });
+    }
+
+    if (action === "set_access_secret") {
+      // H5: the owner sets the entry code for a SCHEDULED re-clean —
+      // the code the client gave them by phone/text when the client
+      // cannot re-save it themselves on /visit. The original access
+      // row was deleted when the report was sent, so without this the
+      // re-clean cleaner has no lock code. Encrypted at rest via
+      // saveAccess (AES-256-GCM); the secret is never logged, never
+      // mirrored to Stripe metadata, never returned in a response.
+      // Only for a scheduled re-clean: the original visit's entry is
+      // the client's to save on /visit.
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const recleanScheduled = row.reclean_status === "scheduled"
+        || latestIssueDecision(events)?.decision === "reclean"
+        || (typeof latestEvent(events, "issue_resolved")?.detail?.["reclean_date"] === "string");
+      if (!recleanScheduled) {
+        return json(409, { ok: false, error: "no_reclean_scheduled" });
+      }
+      const secret = (parsed.data.secret ?? "").trim();
+      if (!secret) return json(400, { ok: false, error: "secret_required" });
+      const note = (parsed.data.note ?? "").trim().slice(0, 500);
+      const recleanCleanerId = (row as unknown as { reclean_cleaner_id?: string | null }).reclean_cleaner_id
+        ?? (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null;
+      const recleanDate = (row as unknown as { reclean_date?: string | null }).reclean_date
+        ?? (typeof latestEvent(events, "issue_resolved")?.detail?.["reclean_date"] === "string"
+          ? (latestEvent(events, "issue_resolved")!.detail!["reclean_date"] as string)
+          : null)
+        ?? row.visit_date ?? null;
+      const saved = await saveAccess({
+        visitId: row.id, bookingId, method: "arrange",
+        note, secret, secretAction: "replace",
+        cleanerId: recleanCleanerId,
+        visitDate: recleanDate,
+      });
+      if (!saved.ok) {
+        return json(502, { ok: false, error: saved.error ?? "db_error" });
+      }
+      await logEvent(row.id, bookingId, "owner", "entry_secret_set", { reclean_date: recleanDate ?? "" });
+      log("set_access_secret", { booking: bookingId });
+      return json(200, { ok: true, entry_saved: true, expires_at: saved.row?.expires_at ?? null });
     }
 
     if (action === "charge_fee") {
@@ -3668,8 +3817,16 @@ export default async function handler(req: Req, res: Res) {
     if (action === "delete_card") {
       // Remove the saved card (e.g. the client cancelled and asked for
       // the card to be deleted). Detach at Stripe and clear our pointer.
-      const pm = meta["gh_payment_method"] ?? "";
-      if (pm) {
+      // P10: the card to detach is THIS booking's card — its own
+      // card_confirmed journal event — never the shared customer's
+      // metadata pointer, which may describe another booking's card.
+      // Detaching the wrong card would unbind a card that belongs to a
+      // different visit.
+      const pm = confirmedPaymentMethodId(events) ?? "";
+      if (!pm) {
+        return json(409, { ok: false, error: "no_card_for_booking" });
+      }
+      {
         const det = await stripePost(STRIPE_SECRET_KEY, `/payment_methods/${pm}/detach`, {});
         if (!det.ok) {
           logErr("delete_card", `stripe ${det.status}`);
@@ -3680,8 +3837,10 @@ export default async function handler(req: Req, res: Res) {
       // keeps showing — drop that state back to awaiting_card. Any
       // other state (approved, paid, ...) is left alone: detaching a
       // card must never silently erase an approval or a payment.
+      // The shared pointer is cleared only when it names THIS card —
+      // another booking's pointer must survive untouched.
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
-        "metadata[gh_payment_method]": "",
+        ...(meta["gh_payment_method"] === pm ? { "metadata[gh_payment_method]": "" } : {}),
         ...(state === "card_ready" ? { "metadata[gh_state]": "awaiting_card" } : {}),
       });
       log("delete_card", { booking: bookingId });
@@ -3833,6 +3992,13 @@ export default async function handler(req: Req, res: Res) {
         || (visit.report_status === "sent" && issueIsOpen);
       if (!returnable) {
         return json(409, { ok: false, error: "report_not_submitted", report_status: visit.report_status });
+      }
+      // P7: returning the report must not race a charge in flight — a
+      // stuck intent adopted as paid after the return would charge for
+      // a report the owner just sent back. Refuse while a charge is in
+      // flight; the owner retries once the charge settles.
+      if (visit.status === "payment_pending") {
+        return json(409, { ok: false, error: "payment_in_flight" });
       }
       const noteText = (parsed.data.note ?? "").trim();
       const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, { report_status: "returned" });

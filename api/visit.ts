@@ -21,7 +21,7 @@ import { emailDocument } from "./_email_copy.js";
 // collected later by the operator (booking-action charge_fee).
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 import { issueStateFrom, everWaivedDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
@@ -95,25 +95,70 @@ function rowCleanerPhoto(row: BookingRow | null): string {
   return "";
 }
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
-async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
-  if (!dbConfigured()) return null;
-  const rows = await dbSelect<BookingRow>(
-    "gh_visits",
-    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
-  );
-  return rows[0] ?? null;
-}
-async function bookingEvents(bookingId: string): Promise<BookingEvent[]> {
-  if (!dbConfigured()) return [];
-  return dbSelect<BookingEvent>(
+// H7: strict journal loader — a failed read is a 502, never an
+// empty journal (an empty journal would look like "no confirmation",
+// "no issue", "no report").
+async function bookingEventsStrict(bookingId: string): Promise<{ ok: boolean; events: BookingEvent[] }> {
+  if (!dbConfigured()) return { ok: true, events: [] };
+  const r = await dbSelectStrict<BookingEvent>(
     "gh_events",
     `booking_id=eq.${encodeURIComponent(bookingId)}&order=created_at.desc&limit=60`,
   );
+  if (!r.ok) return { ok: false, events: [] };
+  return { ok: true, events: r.rows };
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+// H5: a scheduled re-clean, from the row (authority) or the journal
+// (fallback until migration 20261112_reclean_fields). A re-clean
+// report submitted/sent AFTER the arrangement means the re-clean is
+// already reported — entry stays closed. A newer decision that
+// supersedes the re-clean (waived / payment requested) cancels it.
+// Without a journal anchor the row's "scheduled" stands on its own.
+function recleanState(
+  row: BookingRow | null,
+  events: BookingEvent[],
+): { scheduled: boolean; date: string | null; cleanerId: string | null; arrangedAt: string | null } {
+  const none = { scheduled: false, date: null, cleanerId: null, arrangedAt: null };
+  const rowWide = row as unknown as { reclean_status?: string | null; reclean_date?: string | null; reclean_cleaner_id?: string | null } | null;
+  const decision = latestEvent(events, "issue_decision");
+  const resolved = latestEvent(events, "issue_resolved");
+  const latestDecision = decision?.detail?.["decision"];
+  if (latestDecision === "waived" || latestDecision === "payment_requested") return none;
+  const journalDate = typeof resolved?.detail?.["reclean_date"] === "string" ? (resolved.detail["reclean_date"] as string) : null;
+  const arrangedAt =
+    latestDecision === "reclean" ? decision!.created_at
+    : journalDate ? resolved!.created_at
+    : null;
+  const scheduled = rowWide?.reclean_status === "scheduled" || arrangedAt !== null;
+  if (!scheduled) return none;
+  if (arrangedAt) {
+    const reportedAfter = events.some(
+      (e) => (e.event === "report_submitted" || e.event === "report_sent") && e.created_at > arrangedAt,
+    );
+    if (reportedAfter) return { ...none, arrangedAt };
+  }
+  return {
+    scheduled: true,
+    date: rowWide?.reclean_date ?? journalDate ?? null,
+    cleanerId: rowWide?.reclean_cleaner_id ?? (row as unknown as { cleaner_id?: string | null } | null)?.cleaner_id ?? null,
+    arrangedAt,
+  };
+}
+// H7: strict loader that tells "no row" apart from "the DB could not
+// be read". The GET view must fail closed on a read error, never show
+// a wrong empty state (card_needed for a visit that exists).
+async function latestBookingRowStrict(bookingId: string): Promise<{ ok: boolean; row: BookingRow | null }> {
+  if (!dbConfigured()) return { ok: true, row: null };
+  const r = await dbSelectStrict<BookingRow>(
+    "gh_visits",
+    `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
+  );
+  if (!r.ok) return { ok: false, row: null };
+  return { ok: true, row: r.rows[0] ?? null };
+}
 // Confirmation deadline promised to the customer: 6:00 PM Atlanta time on
 // the next business day (Mon-Fri). Mirrors confirmDeadlineLabel in
 // send-contact-email.ts so every surface quotes the same moment.
@@ -668,8 +713,24 @@ export default async function handler(req: Req, res: Res) {
     }
     const payload = verified.payload;
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
-    const row = await latestBookingRow(payload.bid);
-    const events = row ? await bookingEvents(payload.bid) : [];
+    // H7: a DB read error must be a 502, never a wrong empty state
+    // (card_needed for a visit that exists, an empty journal that
+    // looks like "no confirmation / no issue / no report").
+    const rowRes = await latestBookingRowStrict(payload.bid);
+    if (!rowRes.ok) {
+      res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
+      return;
+    }
+    const row = rowRes.row;
+    let events: BookingEvent[] = [];
+    if (row) {
+      const evRes = await bookingEventsStrict(payload.bid);
+      if (!evRes.ok) {
+        res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
+        return;
+      }
+      events = evRes.events;
+    }
     let customer = boundCustomer;
     // C13: the visit row's own stripe_customer_id, where present, is
     // the strongest binding — resolve it directly and verify its
@@ -767,14 +828,21 @@ export default async function handler(req: Req, res: Res) {
     // AND a cleaner is assigned, and only while the visit is not done.
     // The secret itself never enters this view — only has_secret.
     const entryConfirmed = Boolean(latestEvent(events, "visit_confirmed"));
+    // H5: entry reopens for a scheduled re-clean — the original access
+    // row was deleted when the report was sent, so the cleaner has no
+    // lock code for the re-clean until the client re-saves it (or the
+    // owner sets it).
+    const reclean = recleanState(row, events);
     // N10: entry closes when the cleaner finishes (report
     // submitted/sent), not only when the owner publishes it. Before
     // that change, a finished-but-unpublished report still accepted
     // new secrets.
     const entryAvailable = Boolean(
       row && entryConfirmed && (meta["gh_cleaner_name"] ?? "").trim() !== ""
-        && row.status !== "cancelled" && !row.report_sent_at
-        && row.report_status !== "submitted" && row.report_status !== "sent",
+        && row.status !== "cancelled" && (
+          (!row.report_sent_at && row.report_status !== "submitted" && row.report_status !== "sent")
+          || reclean.scheduled
+        ),
     );
     let entryView: ClientEntryView = { available: entryAvailable, method: null, note: "", has_secret: false, expires_at: null };
     if (entryAvailable && row) {
@@ -926,6 +994,15 @@ export default async function handler(req: Req, res: Res) {
       const alreadyConfirmed = Boolean(
         row && row.visit_date === date && priorConfirm?.detail?.["date"] === date,
       );
+      // P8: a sent report pins the visit date — moving it afterwards
+      // orphans the report (status confirmed, report_status sent) and
+      // its 24h charge timer still points at the old date. The
+      // idempotent replay (the row already has THIS date) is not a
+      // move and still heals the shared metadata.
+      if (!alreadyConfirmed && (row?.report_sent_at || meta["gh_report_sent_at"])) {
+        res.status(409).json({ requestId, ok: false, error: "report_already_sent" });
+        return;
+      }
       if (!alreadyConfirmed) {
         if (state !== "date_declined" || !alts.includes(date)) {
           res.status(409).json({ requestId, ok: false, error: "date_not_offered" });
@@ -1130,12 +1207,17 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ requestId, ok: false, error: "secret_not_needed" });
         return;
       }
+      // H5: entry saved for a re-clean binds to the re-clean cleaner
+      // and date, not the original visit — the code must open the door
+      // for the re-clean, and must expire with it.
       const saved = await saveAccess({
         visitId: row.id, bookingId: payload.bid, method: method as EntryMethod,
         note, secret: method === "arrange" ? secret : "",
         secretAction: method === "arrange" ? secretAction : "delete",
-        cleanerId: (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
-        visitDate: row.visit_date ?? null,
+        cleanerId: reclean.scheduled
+          ? (reclean.cleanerId ?? (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null)
+          : ((row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null),
+        visitDate: reclean.scheduled ? (reclean.date ?? row.visit_date ?? null) : (row.visit_date ?? null),
       });
       if (!saved.ok) {
         res.status(502).json({ requestId, ok: false, error: saved.error ?? "db_error" });

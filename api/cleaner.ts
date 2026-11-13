@@ -16,6 +16,7 @@ import { ownerNotificationEmail } from "./_owner_email.js";
 import {
   dbConfigured,
   dbSelect,
+  dbSelectStrict,
   dbInsert,
   dbUpdate,
   dbUpdateCount,
@@ -151,11 +152,14 @@ async function resolveVisit(
       if (verified) break;
     }
     if (!verified) return { error: "invalid_link", status: 200 };
-    const rows = await dbSelect<VisitRow>(
+    // H7: a DB read error is a 502, never "invalid link" — a dead
+    // database must not tell the cleaner their link is bad.
+    const v2Rows = await dbSelectStrict<VisitRow>(
       "gh_visits",
       `id=eq.${verified.visitId}&limit=1`,
     );
-    const visit = rows[0];
+    if (!v2Rows.ok) return { error: "db_unavailable", status: 502 };
+    const visit = v2Rows.rows[0];
     if (!visit) return { error: "invalid_link", status: 200 };
     if (
       visit.cleaner_link_version !== "v2" ||
@@ -176,11 +180,14 @@ async function resolveVisit(
     // address, no entry, no phone, no photos (see view()).
     return { visit, restricted: visit.status === "paid" || visit.status === "cancelled" || visit.status === "refunded" };
   }
-  const rows = await dbSelect<VisitRow>(
+  // H7: a DB read error is a 502, never "invalid link" — a dead
+  // database must not tell the cleaner their link is bad.
+  const legacyRows = await dbSelectStrict<VisitRow>(
     "gh_visits",
     `cleaner_token_hash=eq.${hashToken(token)}&limit=1`,
   );
-  const visit = rows[0];
+  if (!legacyRows.ok) return { error: "db_unavailable", status: 502 };
+  const visit = legacyRows.rows[0];
   if (!visit) return { error: "invalid_link", status: 200 };
   if (visit.cleaner_token_expires && Date.parse(visit.cleaner_token_expires) < Date.now()) {
     return { error: "link_expired", status: 410 };
@@ -297,11 +304,11 @@ async function view(visit: VisitRow, restricted = false) {
   // original complaint — the cleaner needs both to target a re-clean.
   // The re-clean date lives on the issue_resolved event; the decision
   // event carries the decision + resolution text.
-  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string } | null }>(
+  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_decision&order=created_at.desc&limit=1`,
   );
-  const resolvedEvents = await dbSelect<{ detail: { reclean_date?: string } | null }>(
+  const resolvedEvents = await dbSelect<{ detail: { reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
   );
@@ -324,6 +331,30 @@ async function view(visit: VisitRow, restricted = false) {
   const recleanCleanerName = typeof visit.reclean_cleaner_name === "string" && visit.reclean_cleaner_name
     ? visit.reclean_cleaner_name
     : (visit as unknown as { cleaner_name?: string | null }).cleaner_name ?? "";
+  // H5: the re-clean arrangement time — the freshness anchor for
+  // entry: only an access row saved AFTER this moment may be shown
+  // to the re-clean cleaner. A re-clean report submitted after the
+  // arrangement closes entry again (the N09 gate handles that).
+  // Fallback anchor: the original report publication. Entry was
+  // closed between the send and the arrangement, so any save after
+  // the send is necessarily for the re-clean.
+  const recleanArrangedAt = recleanDecision
+    ? (decisionEvents[0]?.created_at ?? null)
+    : journalRecleanDate
+      ? (resolvedEvents[0]?.created_at ?? null)
+      : null;
+  const recleanForEntry = recleanStatus === "scheduled" || recleanDecision
+    ? {
+        status: recleanStatus || "scheduled",
+        cleanerId: typeof visit.reclean_cleaner_id === "string" && visit.reclean_cleaner_id
+          ? visit.reclean_cleaner_id
+          : ((visit as unknown as { cleaner_id?: string | null }).cleaner_id ?? null),
+        arrangedAt: recleanArrangedAt
+          ?? (typeof (visit as unknown as { report_sent_at?: string | null }).report_sent_at === "string"
+            ? (visit as unknown as { report_sent_at?: string | null }).report_sent_at
+            : null),
+      }
+    : null;
   const issueEv = issueEvents[0] ?? null;
   // C10 (mirrored from /report): only a client-filed issue (actor
   // "client", not via the report-email auto-issue) is the client's own
@@ -365,6 +396,7 @@ async function view(visit: VisitRow, restricted = false) {
       entry: cleanerEntryView(await loadAccess(visit.id), {
         status: visit.status, report_status: visit.report_status,
         cleaner_id: (visit as unknown as { cleaner_id?: string | null }).cleaner_id ?? null,
+        reclean: recleanForEntry,
       }, await visitConfirmed(visit.id), revokeEvents),
       client_notes: noteEvents[0]?.detail?.text ?? null,
       no_photo_zones: visit.no_photo_zones,

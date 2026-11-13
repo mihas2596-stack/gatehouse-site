@@ -226,21 +226,43 @@ export async function findSucceededCleaningIntent(
   return r.state === "succeeded" ? r.intent.id : null;
 }
 
+// Payment #14: findLiveIntent verifies every candidate before
+// returning it — an unverified live intent must never be adopted.
+// With an obligation, the full check applies (amount, currency,
+// customer, booking binding, kind). Without one, booking binding +
+// kind are still verified (amount/currency/customer fall back to the
+// candidate's own values, so an unbound or kind-mismatched intent
+// still fails). Candidates that fail are skipped, never returned.
+export type LiveIntentObligation = {
+  amountCents: number;
+  currency: string;
+  customerId: string;
+};
+
 export async function findLiveIntent(
   secretKey: string,
   bookingId: string,
   _version: number | string,
+  obligation?: LiveIntentObligation,
 ): Promise<FoundIntent | null> {
   const searched = await searchIntents(secretKey, bookingId);
   if (searched.status === "error") return null;
-  const hit = searched.intents
-    .filter(
-      (p) =>
-        LIVE_STATUSES.includes(p.status) &&
-        p.metadata?.["gh_kind"] !== "cancellation_fee",
-    )
-    .sort((a, b) => b.created - a.created)[0];
-  return hit ?? null;
+  const candidates = searched.intents
+    .filter((p) => LIVE_STATUSES.includes(p.status))
+    .sort((a, b) => b.created - a.created);
+  for (const candidate of candidates) {
+    // A cancellation-fee intent is a different obligation: never a
+    // cleaning payment, skipped here, not returned.
+    if (candidate.metadata?.["gh_kind"] === "cancellation_fee") continue;
+    const check = obligation ?? {
+      amountCents: candidate.amount,
+      currency: candidate.currency || "usd",
+      customerId: candidate.customer ?? "",
+    };
+    if (verifyIntentForObligation(candidate, { ...check, bookingId })) continue;
+    return candidate;
+  }
+  return null;
 }
 
 // Confirm an existing intent with a (possibly new) payment method.

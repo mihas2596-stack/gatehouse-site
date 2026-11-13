@@ -610,7 +610,9 @@ export default async function handler(req: Req, res: Res) {
     const payload = verified.payload;
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
     const rowRes = await latestBookingRowStrict(payload.bid);
-    if (!rowRes.ok && req.method === "POST") {
+    // H7: a DB read error is a 502 on GET too, never a wrong empty
+    // state (an empty report for a report that exists).
+    if (!rowRes.ok) {
       res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
       return;
     }
@@ -618,7 +620,7 @@ export default async function handler(req: Req, res: Res) {
     let events: BookingEvent[] = [];
     if (row) {
       const evRes = await bookingEventsStrict(payload.bid);
-      if (!evRes.ok && req.method === "POST") {
+      if (!evRes.ok) {
         res.status(502).json({ requestId, ok: false, error: "db_unreadable" });
         return;
       }

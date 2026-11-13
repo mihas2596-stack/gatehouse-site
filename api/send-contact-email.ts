@@ -1014,6 +1014,7 @@ export default async function handler(req: Req, res: Res) {
           ${entry_notes ? row("Entry notes (parking/building)", escapeHtml(entry_notes)) : ""}
           ${bedrooms ? row("Bedrooms", escapeHtml(bedrooms)) : ""}
           ${bathrooms ? row("Bathrooms", escapeHtml(bathrooms)) : ""}
+          ${parsed.data.half_baths ? row("Half bathrooms", escapeHtml(parsed.data.half_baths)) : ""}
           ${serverFirst ? row("Server-verified estimate", `$${escapeHtml(serverFirst)}`) : price ? row("Client-side estimate — verify", `$${escapeHtml(price)}`) : ""}
           ${serverFirst && price && parseFloat(String(price).replace(/[^0-9.]/g, "")) !== parseFloat(serverFirst) ? row("Browser showed (replaced)", `$${escapeHtml(price)} — the browser tab priced differently; the server price above is the one that counts`) : ""}
           ${date ? row("Preferred Date", escapeHtml(date)) : ""}

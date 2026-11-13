@@ -724,8 +724,13 @@ export default async function handler(req: Req, res: Res) {
             if (boundCust.metadata["gh_confirmed_date"]) booking.confirmed_date = boundCust.metadata["gh_confirmed_date"];
             if (boundCust.metadata["gh_confirmed_window"]) booking.confirmed_window = boundCust.metadata["gh_confirmed_window"];
           }
-          if (!booking.has_card && boundCust?.metadata["gh_state"]) {
-            booking.card_state = boundCust.metadata["gh_state"];
+          if (!booking.has_card) {
+            // Payment #12: the live Stripe payment-method list is
+            // authoritative. A card removed via delete_card leaves
+            // stale gh_state=card_ready / gh_payment_method on the
+            // shared customer, so an empty live list must report
+            // no_card instead of echoing the cached metadata state.
+            booking.card_state = "no_card";
           }
         } catch { res.status(503).json({ requestId, ok: false, verified: false, status: "unknown", booking: null }); return; }
       }

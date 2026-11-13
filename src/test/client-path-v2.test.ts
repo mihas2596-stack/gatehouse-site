@@ -426,6 +426,17 @@ describe("operator: decline_date / set_cleaner / charge_fee / delete_card", () =
   });
 
   it("delete_card detaches the payment method at Stripe", async () => {
+    // P10: the card to detach comes from THIS booking's
+    // card_confirmed event, not the shared gh_payment_method.
+    vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "sb_test");
+    dbRows = [{
+      id: "row-del-1", booking_id: "bid-v", visit_no: 1, status: "confirmed",
+      report_status: "none", amount_cents: 18900, client_email: "client@example.com",
+    }];
+    dbEvents = [
+      { visit_id: "row-del-1", booking_id: "bid-v", event: "card_confirmed", detail: { payment_method_id: "pm_test_1", brand: "visa", last4: "4242" }, created_at: new Date(Date.now() - 3600 * 1000).toISOString() },
+    ];
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await adminHandler(adminReq({ action: "delete_card", booking_id: "bid-v" }) as any, res as any);

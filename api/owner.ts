@@ -7,7 +7,7 @@
 // stay in booking-action (confirm, set_cleaner, cleaner_link,
 // return_report, send_report, charge) — this endpoint never mutates.
 
-import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { confirmedDateOf, effectiveVisitDate, autoChargeDeadlineMs } from "./_visit_date.js";
@@ -127,17 +127,21 @@ export default async function handler(req: Req, res: Res) {
     if (viewName === "roster") {
       // The cleaner directory: only owner-selected people, never the
       // raw Indeed applicant pool. No client data lives here.
-      const cleaners = await dbSelect(
+      // H7: a DB read error is a 502, never an empty directory — an
+      // empty roster used to claim there were no cleaners.
+      const cleanersRes = await dbSelectStrict(
         "gh_cleaners",
         "order=name.asc&limit=200",
       );
-      return json(200, { ok: true, cleaners });
+      if (!cleanersRes.ok) return json(502, { ok: false, error: "db_error" });
+      return json(200, { ok: true, cleaners: cleanersRes.rows });
     }
     if (viewName === "detail") {
       const visitId = typeof req.query?.["visit_id"] === "string" ? (req.query["visit_id"] as string) : "";
       if (!/^[0-9a-f-]{36}$/i.test(visitId)) return json(400, { ok: false, error: "invalid_visit" });
-      const visits = await dbSelect<VisitRow>("gh_visits", `id=eq.${visitId}&limit=1`);
-      const visit = visits[0];
+      const visitsRes = await dbSelectStrict<VisitRow>("gh_visits", `id=eq.${visitId}&limit=1`);
+      if (!visitsRes.ok) return json(502, { ok: false, error: "db_error" });
+      const visit = visitsRes.rows[0];
       if (!visit) return json(404, { ok: false, error: "visit_not_found" });
       const photos = await dbSelect<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
         "gh_photos",
@@ -285,7 +289,11 @@ export default async function handler(req: Req, res: Res) {
     // list
     const offsetRaw = typeof req.query?.offset === "string" ? req.query.offset : "0";
     const offset = /^\d{1,7}$/.test(offsetRaw) ? Number(offsetRaw) : 0;
-    const page = await dbSelect<VisitRow>("gh_visits", `order=created_at.desc,id.desc&offset=${offset}&limit=101`);
+    // H7: a DB read error is a 502, never an empty list — an empty
+    // list used to claim there were no visits.
+    const pageRes = await dbSelectStrict<VisitRow>("gh_visits", `order=created_at.desc,id.desc&offset=${offset}&limit=101`);
+    if (!pageRes.ok) return json(502, { ok: false, error: "db_error" });
+    const page = pageRes.rows;
     const visits = page.slice(0, 100);
     const ids = visits.map((v) => v.id);
     const counts = new Map<string, number>();

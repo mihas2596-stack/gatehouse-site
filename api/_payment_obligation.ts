@@ -687,7 +687,58 @@ export async function chargeVisit(input: {
     await logEvent(row.id, bookingId, "system", "payment_failed", {
       via: source, status, detail: errMsg.slice(0, 200), payment_intent: piId || undefined,
     });
+    // H4: resolve-and-pay is not atomic — the owner may have resolved
+    // the dispute (closing it) and the charge then fails. The client
+    // cannot reopen it: the 24h complaint window runs from
+    // report_sent_at and may have expired. Reopen the dispute on a
+    // terminal charge failure so the owner sees it again and the
+    // client gets a fresh path to report. Requires_action is NOT a
+    // failure (the client can still complete 3DS and re-approve) and
+    // unknown outcomes are NOT reopened (the money may have moved;
+    // reconciliation decides) — this branch only runs for terminal
+    // failures.
+    await reopenIssueAfterFailedCharge();
     await deps.sendPaymentFailedEmail(row.id);
     return { outcome: "failed", error: "payment_failed", detail: errMsg, status };
+  }
+
+  // H4: reopen a resolved dispute when the charge that was supposed to
+  // settle it fails. Reads FRESH journal state: an issue that opened
+  // during the charge (after the create) is already open and needs no
+  // reopen, and a visit that was never disputed has nothing to reopen.
+  // The row update is verified by changed-row count; a lost race (the
+  // owner or client reopened it first) is a no-op.
+  async function reopenIssueAfterFailedCharge(): Promise<void> {
+    const freshEv = await loadEvents(bookingId);
+    if (!freshEv.ok) return;
+    const freshEvents = freshEv.events;
+    const freshRow = await loadRow(bookingId);
+    if (!freshRow.ok || !freshRow.row) return;
+    const issue = issueStateFrom(
+      freshEvents,
+      freshRow.row.issue_open ?? null,
+      freshRow.row.issue_ever ?? null,
+    );
+    if (!issue.ever || issue.open) return;
+    // Only a RESOLVED dispute reopens: an issue_resolved event newer
+    // than the latest issue_opened proves the owner closed it.
+    let openedAt = "";
+    let resolvedAt = "";
+    for (const e of freshEvents) {
+      if (e.event === "issue_opened" && e.created_at > openedAt) openedAt = e.created_at;
+      if (e.event === "issue_resolved" && e.created_at > resolvedAt) resolvedAt = e.created_at;
+    }
+    if (!openedAt || !resolvedAt || resolvedAt < openedAt) return;
+    const reopened = await dbUpdateCount(
+      "gh_visits",
+      `id=eq.${freshRow.row.id}&issue_open=neq.true`,
+      { issue_open: true },
+    );
+    if (reopened === 1) {
+      await logEvent(freshRow.row.id, bookingId, "system", "issue_opened", {
+        reason: "payment_failed_after_resolve",
+        via: source,
+      });
+    }
   }
 }

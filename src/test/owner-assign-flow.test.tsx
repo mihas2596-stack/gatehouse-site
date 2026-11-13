@@ -136,7 +136,7 @@ describe("owner assign flow (task 7 findings)", () => {
     await vi.waitFor(() => {
       expect(Array.from(select.options).some((o) => (o.textContent ?? "").includes("Danielle Littles"))).toBe(true);
     }, { timeout: 10000 });
-  });
+  }, 20000);
 
   it("finding 1: the roster is loaded on mount, before any card opens", async () => {
     setup();

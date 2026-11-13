@@ -49,10 +49,11 @@ type CleanerView = {
   confirmed: boolean;
   cancelled?: boolean;
   owner_note: string | null;
-  // A re-clean the owner agreed (date + the decision text), and the
-  // client's original complaint (room + text + source) — null when
-  // no re-clean was agreed / no issue was filed.
-  reclean?: { date: string; note: string } | null;
+  // A re-clean the owner agreed (date + the decision text + the
+  // assigned cleaner), and the client's original complaint (room +
+  // text + source) — null when no re-clean was agreed / no issue
+  // was filed. Task 4: the re-clean has its own cleaner and status.
+  reclean?: { date: string; note: string; cleaner_name?: string; status?: string } | null;
   client_issue?: { reason: string; room: string; source: string } | null;
   error?: string;
 };
@@ -377,15 +378,22 @@ const Cleaner = () => {
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
         <AlertTriangle className="w-14 h-14 text-destructive mx-auto mb-4" strokeWidth={1.5} />
         <h1 className="font-heading text-2xl font-bold mb-3">
-          {error === "link_expired" ? "This link has expired" : "This link doesn't work"}
+          {error === "link_expired" ? "This link has expired" : error === "db_unavailable" ? "We couldn't load this visit" : "This link doesn't work"}
         </h1>
         <p className="text-muted-foreground max-w-sm mx-auto">
           {error === "link_expired"
             ? "Ask the office for a fresh link to this visit."
             : error === "db_not_configured"
               ? "The visit system isn't set up yet. Please contact the office."
-              : "The link may be incomplete or no longer active. Ask the office for a fresh link."}
+              : error === "db_unavailable"
+                ? "Something went wrong on our side — your link is fine. Please try again in a moment."
+                : "The link may be incomplete or no longer active. Ask the office for a fresh link."}
         </p>
+        {error === "db_unavailable" && (
+          <button type="button" onClick={() => window.location.reload()} className="mt-6 px-5 py-3 rounded-lg border border-border bg-background font-semibold min-h-[44px]">
+            Try again
+          </button>
+        )}
       </div>
     );
   }
@@ -454,7 +462,7 @@ const Cleaner = () => {
 
         {data.reclean && (
           <div className="rounded-xl border border-primary/40 bg-primary/5 p-4 mt-4" role="status">
-            <p className="text-base font-semibold">Re-clean agreed{data.reclean.date ? <> for {fmtDate(data.reclean.date)}</> : null}</p>
+            <p className="text-base font-semibold">Re-clean agreed{data.reclean.date ? <> for {fmtDate(data.reclean.date)}</> : null}{data.reclean.cleaner_name ? <> — {data.reclean.cleaner_name}</> : null}</p>
             {data.reclean.note && <p className="text-base text-muted-foreground">{data.reclean.note}</p>}
             <p className="text-base text-muted-foreground">The owner will confirm the details with you — check the rooms below for what needs a second look.</p>
           </div>

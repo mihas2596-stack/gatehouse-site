@@ -723,9 +723,15 @@ const Owner = () => {
         await reloadOpenVisit();
       } else {
         if (onError && (await onError(j))) return;
-        setActionMsg(j["issue_blocked"] === true
-          ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
-          : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+        // H3: the report email went out but saving its delivery
+        // record failed — that is a recoverable state, not a failure.
+        // Tell the owner the email was sent and a retry only completes
+        // the record (no second email goes out); never "failed".
+        setActionMsg(j["email_sent"] === true
+          ? `${label}: the email was sent, but saving its delivery record failed. Retry the action to complete the record — no second email will go out.`
+          : j["issue_blocked"] === true
+            ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
+            : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
         await reloadOpenVisit();
       }
     } catch {

@@ -282,35 +282,61 @@ export default async function handler(req: Req, res: Res) {
             } else if (mirrorFailed) {
               // DB unreadable: fall through to the 500 below.
             } else {
-            await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-              "metadata[gh_fee_charged]": "1",
-              "metadata[gh_fee_last_payment]": piId,
-              "metadata[gh_fee_paid_at]": new Date().toISOString(),
-            });
+            // P13: the fee mirror claims the row ATOMICALLY before
+            // journaling — a double webhook delivery used to journal
+            // cancellation_fee_paid twice (check-then-act on the
+            // gh_fee_last_payment marker: both deliveries read before
+            // either writes). The conditional row transition (fee not
+            // yet paid → fee_paid) is the claim: exactly one delivery
+            // wins it and journals; the loser sees the paid row and
+            // skips. A failed claim read fails closed (500, Stripe
+            // retries the delivery).
+            let claimedFee = true; // no DB = no claim to lose
+            let feeRowId: string | null = null;
             if (dbConfigured()) {
               try {
-                const rows = await dbSelect<{ id: string }>(
+                const claimRows = await dbSelectStrict<{ id: string }>(
                   "gh_visits",
                   `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
                 );
-                if (rows[0]) {
-                  const journaled = await logEventStrict(rows[0].id, bookingId, "system", "cancellation_fee_paid", {
-                    payment_intent: piId, amount_cents: feeCents,
-                  });
-                  const marked = journaled
-                    ? await dbUpdateCount("gh_visits", `id=eq.${rows[0].id}`, { fee_status: "fee_paid", fee_intent_id: piId })
-                    : -1;
-                  if (!journaled || marked < 0) mirrorFailed = true;
+                if (!claimRows.ok) {
+                  mirrorFailed = true;
+                } else if (claimRows.rows[0]) {
+                  feeRowId = claimRows.rows[0].id;
+                  const claimed = await dbUpdateCount(
+                    "gh_visits",
+                    `id=eq.${feeRowId}&or=(fee_status.is.null,fee_status.eq.fee_failed,fee_status.eq.fee_pending)`,
+                    { fee_status: "fee_paid", fee_intent_id: piId },
+                  );
+                  if (claimed < 0) {
+                    mirrorFailed = true;
+                  } else if (claimed === 0) {
+                    claimedFee = false;
+                    log("fee", { state: "already_recorded", booking: bookingId, pi: piId });
+                  }
                 }
               } catch (err) {
                 logErr("db_mirror_fee", err);
                 mirrorFailed = true;
               }
             }
-            try {
-              await sendFeeReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, bookingId, piId, feeCents);
-            } catch { /* best-effort */ }
-            log("fee", { state: eventType, booking: bookingId, amount_cents: feeCents });
+            if (!mirrorFailed && claimedFee) {
+              await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
+                "metadata[gh_fee_charged]": "1",
+                "metadata[gh_fee_last_payment]": piId,
+                "metadata[gh_fee_paid_at]": new Date().toISOString(),
+              });
+              if (dbConfigured() && feeRowId) {
+                const journaled = await logEventStrict(feeRowId, bookingId, "system", "cancellation_fee_paid", {
+                  payment_intent: piId, amount_cents: feeCents,
+                });
+                if (!journaled) mirrorFailed = true;
+              }
+              try {
+                await sendFeeReceiptEmailOnce(STRIPE_SECRET_KEY, customerId, bookingId, piId, feeCents);
+              } catch { /* best-effort */ }
+              log("fee", { state: eventType, booking: bookingId, amount_cents: feeCents });
+            }
           }
           }
         } else {

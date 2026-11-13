@@ -17,6 +17,7 @@ import {
   MAX_INTERIOR_WINDOWS,
   BEDROOM_CHOICES,
   FULL_BATH_CHOICES,
+  HALF_BATH_CHOICES,
   FREQUENCY_OPTIONS,
   FREQUENCY_LABEL,
   SERVICE_OPTIONS,
@@ -58,6 +59,7 @@ type QuoteDraft = {
   zip: string;
   bedrooms: number;
   fullBaths: number;
+  halfBaths: number;
   frequency: FrequencyKey;
   service: CalcServiceKey;
   addons: {
@@ -119,6 +121,7 @@ const Quote = () => {
   const [draft] = useState(() => readQuoteDraft(draftKey));
   const [bedrooms, setBedrooms] = useState<number>(draft.bedrooms ?? 3);
   const [fullBaths, setFullBaths] = useState<number>(draft.fullBaths ?? 2);
+  const [halfBaths, setHalfBaths] = useState<number>(draft.halfBaths ?? 0);
   const [frequency, setFrequency] = useState<FrequencyKey>(draft.frequency ?? initialFrequency);
   const [service, setService] = useState<CalcServiceKey>(draft.service ?? initialService);
   const [zip, setZip] = useState(draft.zip ?? "");
@@ -266,7 +269,7 @@ const Quote = () => {
     if (!draftKey) return;
     const current: QuoteDraft = {
       savedAt: Date.now(),
-      zip, bedrooms, fullBaths, frequency, service, addons,
+      zip, bedrooms, fullBaths, halfBaths, frequency, service, addons,
       step,
       contact: {
         name: booking.name, email: booking.email, phone: booking.phone,
@@ -278,7 +281,7 @@ const Quote = () => {
     try {
       sessionStorage.setItem(draftKey, JSON.stringify(current));
     } catch { /* A browser that blocks storage can still request a visit. */ }
-  }, [draftKey, zip, bedrooms, fullBaths, frequency, service, addons, step, booking, entryMethod, entryDetail, entryNotes]);
+  }, [draftKey, zip, bedrooms, fullBaths, halfBaths, frequency, service, addons, step, booking, entryMethod, entryDetail, entryNotes]);
   // Extras start collapsed so the price form stays short; the summary
   // line always shows what is selected, even while collapsed.
   const [extrasOpen, setExtrasOpen] = useState(false);
@@ -306,7 +309,7 @@ const Quote = () => {
   useEffect(() => {
     requestRef.current = null;
     setSubmitError("");
-  }, [bedrooms, fullBaths, frequency, service, zip, addons]);
+  }, [bedrooms, fullBaths, halfBaths, frequency, service, zip, addons]);
   const refs = {
     name: useRef<HTMLInputElement>(null),
     email: useRef<HTMLInputElement>(null),
@@ -474,6 +477,7 @@ const Quote = () => {
       const summary = [
         `${bedrooms} BR`,
         `${fullBaths} full BA`,
+        ...(halfBaths > 0 ? [`${halfBaths} half BA`] : []),
         `Tier ${tier}`,
         SERVICE_LABEL_CALC[service],
         service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time",
@@ -494,7 +498,7 @@ const Quote = () => {
       // the server reproduces the same booking instead of a duplicate. The id
       // rotates when the booking content changes or after a successful send.
       if (!requestRef.current) {
-        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, zip, frequency, mainPrice, entryMethod, entryDetail, entryNotes, booking.city, booking.state, booking.apt]);
+        const sig = JSON.stringify([booking.email, booking.date, service, bedrooms, fullBaths, halfBaths, zip, frequency, mainPrice, entryMethod, entryDetail, entryNotes, booking.city, booking.state, booking.apt]);
         let id: string | null = null;
         try {
           if (sessionStorage.getItem("gh_request_sig") === sig) id = sessionStorage.getItem("gh_request_id");
@@ -527,6 +531,7 @@ const Quote = () => {
         bedrooms: String(bedrooms),
         bathrooms: String(fullBaths),
         full_baths: String(fullBaths),
+        half_baths: String(halfBaths),
         zip: zip || "",
         address: fullAddress,
         city: booking.city.trim(),
@@ -763,6 +768,15 @@ const Quote = () => {
                 </select>
               </div>
 
+              <div>
+                <label htmlFor="q-halfba" className="block text-sm font-medium mb-1.5">Half bathrooms</label>
+                <select id="q-halfba" value={halfBaths} onChange={(e) => setHalfBaths(Number(e.target.value))} className={selectClass}>
+                  {HALF_BATH_CHOICES.map((n) => (
+                    <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className="md:col-span-2">
                 <p id="service-label" className="block text-sm font-medium mb-2">Type of cleaning</p>
                 <div role="radiogroup" aria-labelledby="service-label" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -961,7 +975,7 @@ const Quote = () => {
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
                 <p><strong>Price so far:</strong> {priceSummaryText}</p>
-                <p className="text-muted-foreground mt-1">{bedrooms} bed, {fullBaths} full bath · ZIP {zip || "—"}</p>
+                <p className="text-muted-foreground mt-1">{bedrooms} bed, {fullBaths} full bath{halfBaths > 0 ? `, ${halfBaths} half bath` : ""} · ZIP {zip || "—"}</p>
                 <Link to="/whats-included" className="inline-flex min-h-[44px] items-center text-primary underline">See the full room-by-room list</Link>
               </div>
 
@@ -992,7 +1006,7 @@ const Quote = () => {
                   <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 break-words">
                     <dt className="font-semibold">Address</dt><dd className="min-w-0">{fullAddress || "—"}</dd>
-                    <dt className="font-semibold">Home</dt><dd>{bedrooms} bedrooms · {fullBaths} full bathrooms</dd>
+                    <dt className="font-semibold">Home</dt><dd>{bedrooms} bedrooms · {fullBaths} full bathrooms{halfBaths > 0 ? ` · ${halfBaths} half bathroom${halfBaths > 1 ? "s" : ""}` : ""}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{booking.name} · {booking.email} · {booking.phone}</dd>
                     <dt className="font-semibold">Entry</dt><dd>{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd>
                   </dl>
