@@ -368,6 +368,7 @@ const Owner = () => {
   // Cleaner directory (roster) state.
   const [roster, setRoster] = useState<RosterCleaner[]>([]);
   const [rosterLoaded, setRosterLoaded] = useState(false);
+  const [rosterFailed, setRosterFailed] = useState(false);
   const [rosterMsg, setRosterMsg] = useState("");
   const [rosterName, setRosterName] = useState("");
   const [rosterPhone, setRosterPhone] = useState("");
@@ -426,14 +427,17 @@ const Owner = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadList = useCallback(async () => {
-    if (!token) return;
+  // Task 7: returns the fetched list (null on failure) so a card
+  // action can re-open the visit from post-action data instead of
+  // the pre-action snapshot — see reloadOpenVisit below.
+  const loadList = useCallback(async (): Promise<Visit[] | null> => {
+    if (!token) return null;
     setLoading(true);
     setError("");
     try {
       const r = await fetch("/api/owner?view=list", { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string; next_offset?: number | null };
-      if (tokenRef.current !== token) return;
+      if (tokenRef.current !== token) return null;
       if (!j.ok) {
         if (j.error === "unauthorized") {
           try { localStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
@@ -448,15 +452,19 @@ const Owner = () => {
         }
         setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
         setVisits([]);
+        return null;
       } else {
         setVisits(j.visits ?? []);
         setNextOffset(j.next_offset ?? null);
+        return j.visits ?? [];
       }
     } catch {
-      if (tokenRef.current !== token) return;
+      if (tokenRef.current !== token) return null;
       setError("Network error while loading visits.");
+      return null;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [token, headers]);
 
   // A3: re-read ONLY the open visit's detail (status, report, photos,
@@ -521,11 +529,28 @@ const Owner = () => {
       if (j.ok) {
         setRoster(j.cleaners ?? []);
         setRosterLoaded(true);
+        setRosterFailed(false);
+      } else {
+        setRosterFailed(true);
       }
     } catch {
-      /* the directory section reports the failure on use */
+      // Task 7: a failed roster load used to look identical to an
+      // empty directory (rosterLoaded stayed false, roster stayed []),
+      // so the assign dropdown claimed there were no cleaners. The
+      // directory section reports the failure on use; the dropdowns
+      // now show a retry instead of the false empty state.
+      setRosterFailed(true);
     }
   }, [token, headers]);
+
+  // Task 7: the assign / change-cleaner dropdowns read the roster, so
+  // load it with the visit list — not only when the directory section
+  // is expanded. By the time a card opens, the roster is (usually)
+  // already there; the dropdowns still show a loading line while the
+  // fetch is in flight, instead of a false "no cleaners" message.
+  useEffect(() => {
+    if (!rosterLoaded) void loadRoster();
+  }, [loadRoster, rosterLoaded]);
 
   // Opening a card scrolls to its top and focuses its title; a
   // Needs-attention deep link scrolls to the block that needs the
@@ -653,6 +678,28 @@ const Owner = () => {
     return (await r.json()) as Record<string, unknown> & { ok: boolean; error?: string };
   };
 
+  // Task 7: re-read the open visit after a card action and show the
+  // fresh state — without a manual Refresh. The old code fired a
+  // fire-and-forget list reload and re-opened the visit from the
+  // PRE-action list snapshot, so the card flashed (and on a slow
+  // connection stuck on) "Requested / not assigned" after Assign &
+  // confirm. Awaiting the list reload first means the re-open starts
+  // from post-action data (status confirmed, cleaner set); the detail
+  // fetch inside openVisit then confirms photos/events. If the list
+  // reload fails, fall back to re-reading the detail directly. This
+  // is the shared path for every card action (assign, confirm,
+  // cancel, return report, charge, ...), so the same fix covers all
+  // of them — unlike openVisit, refreshSelected does not reset the
+  // cleaner-edit form, so it is only the fallback here.
+  const reloadOpenVisit = async () => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    const list = await loadList();
+    const fresh = list?.find((x) => x.id === id) ?? visits.find((x) => x.id === id);
+    if (fresh) await openVisit(fresh);
+    else await refreshSelected();
+  };
+
   // G5: busy state always resets (finally), a failed fetch or bad JSON
   // yields a readable message instead of a stuck spinner, and on an
   // unknown outcome the panel re-reads state before any retry, so a
@@ -673,27 +720,18 @@ const Owner = () => {
       if (j.ok) {
         setActionMsg(j.email_sent === false ? `${label}: saved, but the email could not be sent. You can retry the status email below.` : `${label}: done.`);
         after?.(j);
-        void loadList();
-        if (selected) {
-          const fresh = visits.find((x) => x.id === selected.id);
-          if (fresh) void openVisit(fresh);
-        }
+        await reloadOpenVisit();
       } else {
         if (onError && (await onError(j))) return;
         setActionMsg(j["issue_blocked"] === true
           ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
           : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
-        void loadList();
-        if (selected) void openVisit(selected);
+        await reloadOpenVisit();
       }
     } catch {
       if (!isCurrentVisit(actionVisitId, actionEpoch)) return;
       setActionMsg(`${label}: couldn't reach the server — the action may or may not have run. Reloading the visit before you retry.`);
-      void loadList();
-      if (selected) {
-        const fresh = visits.find((x) => x.id === selected.id);
-        if (fresh) void openVisit(fresh);
-      }
+      await reloadOpenVisit();
     } finally {
       if (operationSeqRef.current === operation) setActing("");
     }
@@ -1220,7 +1258,11 @@ const Owner = () => {
               or by pasting their exported list below — there is no automatic sync.
             </p>
             {roster.length === 0 ? (
-              <p className="text-sm text-muted-foreground mt-2">No cleaners in the directory yet.</p>
+              rosterLoaded ? (
+                <p className="text-sm text-muted-foreground mt-2">No cleaners in the directory yet.</p>
+              ) : (
+                <p className="text-sm text-muted-foreground mt-2">Loading cleaners…</p>
+              )
             ) : (
               <ul className="space-y-2 mt-3">
                 {roster.map((c) => (
@@ -1640,7 +1682,15 @@ const Owner = () => {
                 <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} compact /></div>
                 {/* C: "Update client phone" lives in "More actions"
                     below, not as a standalone disclosure on the card. */}
-                {v.status === "requested" && !v.request_approved && (
+                {/* Task 7: "Approve request" is for taking a request
+                    into the pipeline — once the visit is confirmed it
+                    no longer applies (the server would even log a
+                    redundant request_approved event). The visit_confirmed
+                    guard matches nextActionFor, which already gates the
+                    same step on it — so the button also hides in the
+                    stale window where the row status still reads
+                    "requested" but the confirmation already landed. */}
+                {v.status === "requested" && !v.request_approved && !v.visit_confirmed && (
                   <div className="mt-3">
                     <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Approve request", { action: "approve_request", booking_id: v.booking_id })}>
                       Approve request
@@ -1648,7 +1698,7 @@ const Owner = () => {
                     <p className="text-xs text-muted-foreground mt-1">Approving takes the request into your pipeline. It does not assign a cleaner or confirm the date — those come next.</p>
                   </div>
                 )}
-                {v.request_approved && v.status === "requested" && (
+                {v.request_approved && v.status === "requested" && !v.visit_confirmed && (
                   <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
                 )}
                 {/* Extension bug #4: the owner-notification status for
@@ -1839,6 +1889,7 @@ const Owner = () => {
                           <option key={r.id} value={r.id}>{r.name}{r.phone ? ` · ${r.phone}` : ""}</option>
                         ))}
                       </select>
+                      {!rosterLoaded && !rosterFailed && <p className="text-xs text-muted-foreground">Loading cleaners…</p>}
                       {formError && <p className="text-sm text-destructive" role="alert">{formError}</p>}
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -2061,7 +2112,14 @@ const Owner = () => {
                             <option key={r.id} value={r.id}>{r.name}{r.phone ? ` · ${r.phone}` : ""}</option>
                           ))}
                         </select>
-                        {roster.length === 0 && <p className="text-xs text-muted-foreground mt-1">No cleaners in the directory yet — add one in the Cleaners section on the visits list.</p>}
+                        {!rosterLoaded && !rosterFailed && <p className="text-xs text-muted-foreground mt-1">Loading cleaners…</p>}
+                        {rosterFailed && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Couldn&apos;t load the cleaner list.{" "}
+                            <button type="button" className="underline" onClick={() => { setRosterFailed(false); void loadRoster(); }}>Retry</button>
+                          </p>
+                        )}
+                        {rosterLoaded && roster.length === 0 && <p className="text-xs text-muted-foreground mt-1">No cleaners in the directory yet — add one in the Cleaners section on the visits list.</p>}
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">

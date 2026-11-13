@@ -345,7 +345,7 @@ const Quote = () => {
       return value.trim().toUpperCase() === "GA" ? "" : "We currently serve Georgia only — please enter GA.";
     }
     if (field === "date") {
-      if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${minDate}.`;
+      if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${fmtDate(minDate)}.`;
       return "";
     }
     const digits = value.replace(/\D/g, "");
