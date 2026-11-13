@@ -193,3 +193,67 @@ describe("visit-scoped client contact", () => {
     expect(JSON.stringify(r.body)).not.toContain("7705550123");
   });
 });
+
+// Extension bug #1: the owner saw \"Auto-charge at <sent + 24h>\"
+// even when the report went out BEFORE the visit date — the same
+// wrong deadline the client saw on /visit and /report. The list now
+// returns auto_charge_deadline = max(visit-date start NY, sent + 24h),
+// the same server-side value /api/report returns to the client.
+describe("auto-charge deadline matches the client deadline", () => {
+  const atlantaToday = (nowMs = Date.now()): string =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date(nowMs));
+  const shiftDate = (iso: string, days: number): string => {
+    const d = new Date(`${iso}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const nyDateHour = (ms: number) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(ms));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value;
+    return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")), minute: Number(get("minute")) };
+  };
+
+  it("report sent before the visit date -> deadline is the visit date", async () => {
+    const visitDate = shiftDate(atlantaToday(), 5);
+    rows = [makeRow({ visit_date: visitDate, report_sent_at: hoursAgo(30) })];
+    events = [];
+    const r = await list();
+    const visits = r.body["visits"] as Row[];
+    expect(visits).toHaveLength(1);
+    const deadline = visits[0]["auto_charge_deadline"] as string | null;
+    expect(deadline).not.toBeNull();
+    const sentMs = Date.parse(String(visits[0]["report_sent_at"]));
+    const deadlineMs = Date.parse(deadline as string);
+    // The bug: deadline was sent + 24h, days before the visit.
+    expect(deadlineMs).toBeGreaterThan(sentMs + 24 * 3600 * 1000);
+    const p = nyDateHour(deadlineMs);
+    expect(p.date).toBe(visitDate);
+    expect(p.hour).toBe(0);
+    expect(p.minute).toBe(0);
+  });
+
+  it("report sent after the visit date -> deadline is sent + 24h", async () => {
+    const visitDate = shiftDate(atlantaToday(), -5);
+    rows = [makeRow({ visit_date: visitDate, report_sent_at: hoursAgo(30) })];
+    events = [];
+    const r = await list();
+    const visits = r.body["visits"] as Row[];
+    const sentMs = Date.parse(String(visits[0]["report_sent_at"]));
+    const deadlineMs = Date.parse(String(visits[0]["auto_charge_deadline"]));
+    expect(Math.abs(deadlineMs - (sentMs + 24 * 3600 * 1000))).toBeLessThan(2000);
+  });
+
+  it("no sent report -> no deadline", async () => {
+    rows = [makeRow({ report_sent_at: null, report_status: "none" })];
+    events = [];
+    const r = await list();
+    const visits = r.body["visits"] as Row[];
+    expect(visits[0]["auto_charge_deadline"]).toBeNull();
+  });
+});

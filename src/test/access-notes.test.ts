@@ -25,8 +25,11 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { method?: string }) => {
     const u = String(url);
     // GET select finds no existing row (fresh booking); POST upsert returns it.
+    // GET gh_events likewise finds no prior events — a dummy row here would
+    // make the existence guards (client_contact / client_note /
+    // scope_review) wrongly conclude the event is already journaled.
     if (u.includes("gh_visits")) return resp(init?.method === "POST" ? [{ id: "visit-1" }] : []);
-    if (u.includes("gh_events")) return resp([{ id: "ev-1" }]);
+    if (u.includes("gh_events")) return resp(init?.method === "POST" ? [{ id: "ev-1" }] : []);
     if (u.includes("api.stripe.com")) return resp({});
     return resp({ id: "email-1" });
   }));

@@ -403,6 +403,9 @@ describe("operator: decline_date / set_cleaner / charge_fee / delete_card", () =
       fee_status: null, fee_intent_id: null, fee_amount_cents: null,
     }];
     dbEvents = [
+      // Task 1: the fee charges THIS booking's confirmed card
+      // (card_confirmed event), never the shared gh_payment_method.
+      { visit_id: "row-fee-1", booking_id: "bid-v", event: "card_confirmed", detail: { payment_method_id: "pm_test_1", brand: "visa", last4: "4242" }, created_at: new Date(Date.now() - 3600 * 1000).toISOString() },
       { visit_id: "row-fee-1", booking_id: "bid-v", event: "visit_cancelled", detail: { scope: "stop", fee_cents: 2500 }, created_at: new Date().toISOString() },
     ];
     const res = response();

@@ -3,6 +3,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { photoBlocked } from "@/lib/photoPolicy";
 import { cleanerJobMessage } from "@/lib/cleanerMessage";
@@ -55,6 +65,11 @@ type Visit = {
   issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
   report_bounced: boolean;
   report_sent_at?: string | null;
+  // Extension bug #1: the auto-charge deadline, computed server-side
+  // by /api/owner (max of visit-date start NY and report_sent_at +
+  // 24h) — the same value /api/report returns to the client, so the
+  // owner and the client see one deadline.
+  auto_charge_deadline?: string | null;
   payment_failed?: boolean;
   // C3: journal view of the card (latest `card_confirmed` event), batched
   // by the list endpoint — see api/owner.ts. Not live Stripe state: a
@@ -71,6 +86,10 @@ type Visit = {
   proposed_date?: string;
   proposed_pending?: boolean;
   confirmation_email?: string | null;
+  // Extension bug #4: the owner-notification status for a new request
+  // ("sent" / "failed" / null) — the detail view derives it from the
+  // owner_notification / owner_notification_failed journal events.
+  owner_notification?: string | null;
   paid_at: string | null;
   is_test: boolean;
   checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
@@ -161,24 +180,30 @@ const fmtDateTimeET = (iso: string | null | undefined): string => {
   return `${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(d)} ET`;
 };
 
-// Noon in America/New_York for a YYYY-MM-DD date — the same rule the
-// server's 48h cancel clock uses. A fixed -04:00/-05:00 offset is
-// wrong across EST/EDT, so the noon wall-clock reading is converted
-// via Intl. Used only for the owner's cancel-fee hint; the server
-// decides the real fee.
-const visitNoonETMs = (d: string): number => {
+// The visit moment in America/New_York for a YYYY-MM-DD date — the
+// START of the confirmed arrival window (morning 7 AM, midday 11 AM,
+// afternoon 2 PM), the same rule the server's 48h cancel clock uses
+// (api/visit.ts visitMomentMs). A fixed -04:00/-05:00 offset is wrong
+// across EST/EDT, so the wall-clock reading is converted via Intl.
+// An unknown window (flexible / not yet confirmed) falls back to
+// midday, like the server. Used only for the owner's cancel-fee hint;
+// the server decides the real fee.
+const WINDOW_START_HOUR: Record<string, number> = { morning: 7, midday: 11, afternoon: 14 };
+
+const visitWindowStartETMs = (d: string, window: string | null | undefined): number => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
+  const hour = WINDOW_START_HOUR[window ?? ""] ?? 12;
   const [y, m, day] = d.split("-").map(Number);
-  const noonGuess = Date.UTC(y, m - 1, day, 12, 0, 0);
+  const guess = Date.UTC(y, m - 1, day, hour, 0, 0);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour12: false,
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(new Date(noonGuess));
+  }).formatToParts(new Date(guess));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
   const wallAsUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
   if (!Number.isFinite(wallAsUTC)) return NaN;
-  return noonGuess + (noonGuess - wallAsUTC);
+  return guess + (guess - wallAsUTC);
 };
 
 const initials = (name: string): string => {
@@ -213,6 +238,8 @@ const EVENT_LABELS: Record<string, string> = {
   date_proposed: "Another date proposed",
   client_note: "Customer note",
   scope_review: "Scope review",
+  owner_notification: "Owner notified of new request",
+  owner_notification_failed: "Owner notification failed — resend available",
 };
 
 // Detail keys that must never render in Activity (defense in depth —
@@ -266,6 +293,9 @@ const Owner = () => {
   // TASK 1 (fix6): the owner's decision text for the open issue —
   // shown to the client as "Our response".
   const [decisionResolution, setDecisionResolution] = useState("");
+  // Task 4: the re-clean date for "Arrange re-clean" (optional —
+  // empty keeps the old behaviour, a re-clean with no date).
+  const [recleanDate, setRecleanDate] = useState("");
   const [stripeState, setStripeState] = useState("");
   // A2: the status action returns the live card state as
   // payment_method ("saved" / "none") — the "Card:" line in the
@@ -293,6 +323,25 @@ const Owner = () => {
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
   const [acting, setActing] = useState("");
+  // B3 (extension audit): the owner panel used native window.confirm
+  // for every dangerous action — in the user's real Chrome that blocks
+  // the tab (the extension could not dismiss it and the tab hung).
+  // All confirms now go through one in-page AlertDialog: askConfirm
+  // resolves true only when the owner clicks the dialog's confirm
+  // button, false on Back / dismiss. Nothing on this page calls
+  // window.confirm anymore.
+  type ConfirmDialog = { title: string; message: string; confirmLabel: string; destructive?: boolean };
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
+  const confirmResolveRef = useRef<(ok: boolean) => void>(() => {});
+  const askConfirm = (title: string, message: string, confirmLabel: string, destructive = false): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      confirmResolveRef.current = resolve;
+      setConfirmDialog({ title, message, confirmLabel, destructive });
+    });
+  const closeConfirm = (ok: boolean) => {
+    setConfirmDialog(null);
+    confirmResolveRef.current(ok);
+  };
   const [publishMsg, setPublishMsg] = useState("");
   const [ownerRoom, setOwnerRoom] = useState("Kitchen");
   const [ownerKind, setOwnerKind] = useState<"before" | "after">("after");
@@ -655,7 +704,7 @@ const Owner = () => {
   // nothing to re-open — runAction's re-open would resurrect the stale
   // card from its pre-delete list snapshot.
   const deleteVisit = async (v: Visit) => {
-    if (!window.confirm("Delete this visit permanently? This removes the visit, its activity record, its report photos and its entry arrangement. It does not touch Stripe — payments, customers and payouts stay as they are. This cannot be undone.")) return;
+    if (!(await askConfirm("Delete visit", "Delete this visit permanently? This removes the visit, its activity record, its report photos and its entry arrangement. It does not touch Stripe — payments, customers and payouts stay as they are. This cannot be undone.", "Delete visit", true))) return;
     const operation = ++operationSeqRef.current;
     setActing("Delete visit");
     setActionMsg("Delete visit: working…");
@@ -890,9 +939,9 @@ const Owner = () => {
     }
   };
 
-  const replaceCleanerLink = () => {
+  const replaceCleanerLink = async () => {
     if (!selected) return;
-    if (selected.cleaner_link_issued && !window.confirm("This will disable the previous link. Send the new link to your cleaner.")) return;
+    if (selected.cleaner_link_issued && !(await askConfirm("Replace access link", "This will disable the previous link. Send the new link to your cleaner.", "Replace link"))) return;
     const visitId = selected.id;
     const seq = linkSeqRef.current + 1;
     linkSeqRef.current = seq;
@@ -1354,20 +1403,28 @@ const Owner = () => {
           const linkActive = Boolean(v.cleaner_link_active);
           const linkReusable = Boolean(v.cleaner_link_reusable);
           const rooms = v.checklist?.rooms ?? [];
-          // C4: the 24h auto-charge deadline is report_sent_at + 24h —
-          // shown only while a charge could still happen (report sent,
-          // no open issue, not bounced, not terminal).
+          // C4: the 24h auto-charge deadline — computed server-side
+          // (/api/owner, max of visit-date start NY and report_sent_at
+          // + 24h), the same value /api/report returns to the client.
+          // Shown only while a charge could still happen (report sent,
+          // no open issue, not bounced, not terminal). Extension bug
+          // #1: the old client-side report_sent_at + 24h told the
+          // owner (and, via /api/report, the client) the charge would
+          // fire days before a future visit date. The server is the
+          // single source of truth — no client-side fallback, so a
+          // missing value shows nothing rather than a wrong date.
           const autoChargeAt = v.report_status === "sent" && v.report_sent_at && !v.issue_open && !v.report_bounced && v.status !== "paid" && v.status !== "cancelled"
-            ? new Date(Date.parse(v.report_sent_at) + 24 * 3600 * 1000).toISOString()
+            ? (v.auto_charge_deadline ?? null)
             : null;
           // C5: UI hint for the cancel confirm — true only when the
-          // visit is live and inside 48h. A past date is free (the
-          // server decides the real fee either way).
+          // visit is live and inside 48h of the WINDOW START (the
+          // same rule the server owner_cancel uses). A past date is
+          // free (the server decides the real fee either way).
           const cancelLate = (() => {
             if (!v.visit_date) return false;
-            const noon = visitNoonETMs(v.visit_date);
-            if (!Number.isFinite(noon)) return false;
-            const delta = noon - Date.now();
+            const start = visitWindowStartETMs(v.visit_date, v.window);
+            if (!Number.isFinite(start)) return false;
+            const delta = start - Date.now();
             return delta > 0 && delta < 48 * 3600 * 1000;
           })();
           // Cancel gating — mirrors the server owner_cancel rule
@@ -1516,14 +1573,25 @@ const Owner = () => {
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     />
                     <p className="text-xs text-muted-foreground mt-1">The client reads this as “Our response”. Request payment does not charge the card — the client approves the report to pay.</p>
+                    <label htmlFor="issue-reclean-date" className="block text-sm font-medium mt-3 mb-1">Re-clean date (optional)</label>
+                    <input
+                      id="issue-reclean-date"
+                      type="date"
+                      value={recleanDate}
+                      onChange={(e) => setRecleanDate(e.target.value)}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">The cleaner’s report can only be submitted on or after this date, and the cleaner’s link stays valid until two days after it. Leave empty for a re-clean with no date.</p>
                     <div className="flex flex-wrap gap-2 mt-3">
                       <Button
                         variant="hero"
                         size="sm"
                         disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
-                          if (!window.confirm(`Ask the client to approve and pay ${money(v.amount_cents)}? Nothing is charged now — the client approves the report to pay.`)) return;
-                          void runAction("Request payment", { action: "issue_request_payment", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                          void (async () => {
+                            if (!(await askConfirm("Request payment", `Ask the client to approve and pay ${money(v.amount_cents)}? Nothing is charged now — the client approves the report to pay.`, "Request payment"))) return;
+                            void runAction("Request payment", { action: "issue_request_payment", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                          })();
                         }}
                       >
                         Request payment
@@ -1533,7 +1601,7 @@ const Owner = () => {
                         size="sm"
                         disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
-                          void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                          void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
                         }}
                       >
                         Arrange re-clean
@@ -1543,8 +1611,10 @@ const Owner = () => {
                         size="sm"
                         disabled={acting !== ""}
                         onClick={() => {
-                          if (!window.confirm("Waive the charge for this visit? The visit closes without payment and can never be charged.")) return;
-                          void runAction("Waive charge", { action: "issue_waive_charge", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                          void (async () => {
+                            if (!(await askConfirm("Waive charge", "Waive the charge for this visit? The visit closes without payment and can never be charged.", "Waive charge", true))) return;
+                            void runAction("Waive charge", { action: "issue_waive_charge", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
+                          })();
                         }}
                       >
                         Waive charge
@@ -1581,6 +1651,25 @@ const Owner = () => {
                 {v.request_approved && v.status === "requested" && (
                   <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
                 )}
+                {/* Extension bug #4: the owner-notification status for
+                    a new request. A failed (or missing) notification is
+                    visible here, with a resend action — the owner must
+                    never silently miss a request. */}
+                {v.status === "requested" && (
+                  <div className="mt-2">
+                    {v.owner_notification === "sent" && <p className="text-sm text-muted-foreground">Owner notification: sent.</p>}
+                    {v.owner_notification !== "sent" && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {v.owner_notification === "failed" && <p className="text-sm text-destructive">Owner notification failed — the request email did not go out.</p>}
+                        <Button variant="outline" size="sm" disabled={acting !== ""} onClick={() => void runAction("Resend owner notification", { action: "resend_owner_notification", booking_id: v.booking_id }, (j) => {
+                          setActionMsg(j["email_sent"] === true ? "Owner notification sent." : (j["already"] === true ? "Owner notification was already sent." : "Owner notification failed again — check the address and retry."));
+                        })}>
+                          Resend owner notification
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Card-level More actions — the rarely-used
                     controls live here so the card leads with the
                     next step: copy the client link, open an issue
@@ -1615,10 +1704,11 @@ const Owner = () => {
                         size="sm"
                         disabled={acting !== ""}
                         onClick={() => {
-                          if (!window.confirm((v.report_status === "sent" || v.report_status === "submitted")
-                            ? "Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email."
-                            : "Open an issue for this visit? It blocks any future automatic charge for this visit — including after the report is sent — and never resumes on its own, and the client gets a confirmation email.")) return;
-                          void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
+                          void (async () => {
+                            if (!(await askConfirm("Open issue", (v.report_status === "sent" || v.report_status === "submitted")
+                              ? "Open an issue for this visit? Automatic charging stops at once for this visit and never resumes on its own, and the client gets a confirmation email."
+                              : "Open an issue for this visit? It blocks any future automatic charge for this visit — including after the report is sent — and never resumes on its own, and the client gets a confirmation email.", "Open issue"))) return;
+                            void runAction("Open issue from email", { action: "dispute", booking_id: v.booking_id, reason: issueReason }, (j) => {
                             setIssueReason("");
                             setActionMsg(j["already_open"] === true
                               ? "Issue was already open — nothing changed, no second email sent."
@@ -1626,6 +1716,7 @@ const Owner = () => {
                                 ? "Issue opened — automatic charging is blocked for this visit. The confirmation email was accepted for sending; delivery is not yet confirmed."
                                 : "Issue opened — automatic charging is blocked for this visit, but the confirmation email could not be sent — contact the client manually.");
                           });
+                          })();
                         }}
                       >
                         Open issue from email
@@ -1645,16 +1736,18 @@ const Owner = () => {
                       size="sm"
                       disabled={acting !== ""}
                       onClick={() => {
-                        if (!window.confirm(cancelLate
-                          ? "Cancel this visit? The visit is within 48 hours, so the $25 late-cancellation fee from the Terms applies and will be charged to the saved card. This cannot be undone."
-                          : "Cancel this visit? No fee — the visit is more than 48 hours away. This cannot be undone.")) return;
-                        void runAction("Cancel visit", { action: "owner_cancel", booking_id: v.booking_id }, (j) => {
-                          const fee = typeof j["fee_cents"] === "number" ? (j["fee_cents"] as number) : null;
-                          setActionMsg(fee !== null && fee > 0
-                            ? `Visit cancelled. Late-cancellation fee: $${(fee / 100).toFixed(2)} — recorded on the booking.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`
-                            : `Visit cancelled. No fee.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`);
-                          if (v.cleaner_name) setTellCleaner({ kind: "cancelled", date: v.visit_date ?? "" });
-                        });
+                        void (async () => {
+                          if (!(await askConfirm("Cancel visit", cancelLate
+                            ? "Cancel this visit? The visit is within 48 hours, so the $25 late-cancellation fee from the Terms applies and will be charged to the saved card. This cannot be undone."
+                            : "Cancel this visit? No fee — the visit is more than 48 hours away. This cannot be undone.", "Cancel visit", true))) return;
+                          void runAction("Cancel visit", { action: "owner_cancel", booking_id: v.booking_id }, (j) => {
+                            const fee = typeof j["fee_cents"] === "number" ? (j["fee_cents"] as number) : null;
+                            setActionMsg(fee !== null && fee > 0
+                              ? `Visit cancelled. Late-cancellation fee: $${(fee / 100).toFixed(2)} — recorded on the booking.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`
+                              : `Visit cancelled. No fee.${j["email_sent"] === true ? " The client was emailed." : " The client email could not be sent — contact the client manually."}`);
+                            if (v.cleaner_name) setTellCleaner({ kind: "cancelled", date: v.visit_date ?? "" });
+                          });
+                        })();
                       }}
                     >
                       Cancel visit
@@ -2089,8 +2182,10 @@ const Owner = () => {
                                 // B5: deleting a report photo is
                                 // irreversible — it is evidence for the
                                 // report — so it needs a confirm.
-                                if (!window.confirm("Delete this report photo? This cannot be undone.")) return;
-                                void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id });
+                                void (async () => {
+                                  if (!(await askConfirm("Delete photo", "Delete this report photo? This cannot be undone.", "Delete photo", true))) return;
+                                  void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id });
+                                })();
                               }}
                             >
                               ✕
@@ -2108,14 +2203,16 @@ const Owner = () => {
                         variant="hero"
                         disabled={acting !== ""}
                         onClick={() => {
-                          if (v.issue_open && !window.confirm("This booking has an OPEN customer issue. Re-sending the report will mark the issue RESOLVED and restart the 24-hour review clock. Continue?")) return;
-                          void runAction("Publish & notify customer", { action: "send_report", booking_id: v.booking_id, ...(v.issue_open ? { resolve_issue: true } : {}) }, (j) => {
+                          void (async () => {
+                            if (v.issue_open && !(await askConfirm("Publish report", "This booking has an OPEN customer issue. Re-sending the report will mark the issue RESOLVED and restart the 24-hour review clock. Continue?", "Publish report"))) return;
+                            void runAction("Publish & notify customer", { action: "send_report", booking_id: v.booking_id, ...(v.issue_open ? { resolve_issue: true } : {}) }, (j) => {
                             setPublishMsg(
                               j["email_sent"] === true
                                 ? "Published. The customer email was sent — the 24-hour review period is running from the send time."
                                 : "Published and saved, but the customer email could not be sent — the review period is paused. Check the report email status and publish again to retry.",
                             );
                           });
+                          })();
                         }}
                       >
                         Publish & notify customer
@@ -2158,7 +2255,9 @@ const Owner = () => {
                           variant="outline"
                           disabled={acting !== ""}
                           onClick={() => void runAction("Re-send report email", { action: "send_report", booking_id: v.booking_id }, (j) => {
-                            setPublishMsg(j["email_sent"] === true ? "Report email re-sent." : "Report email failed again — check the address and retry.");
+                            setPublishMsg(j["journal_repaired"] === true
+                              ? "Report email confirmed sent — the review period is running from the original send time. No duplicate email was sent."
+                              : j["email_sent"] === true ? "Report email re-sent." : "Report email failed again — check the address and retry.");
                           })}
                         >
                           Re-send report email
@@ -2246,8 +2345,10 @@ const Owner = () => {
                     // B5: flipping the test flag hides/shows the
                     // booking in every filter — a fat-finger tap must
                     // not do it silently.
-                    if (!window.confirm(v.is_test ? "Mark as a real booking? It will show in the normal visit list." : "Mark as a test booking? It will be hidden by the “Hide test bookings” filter.")) return;
-                    void runAction("Update test flag", { action: "set_test_booking", booking_id: v.booking_id, is_test: !v.is_test });
+                    void (async () => {
+                      if (!(await askConfirm("Mark booking", v.is_test ? "Mark as a real booking? It will show in the normal visit list." : "Mark as a test booking? It will be hidden by the “Hide test bookings” filter.", v.is_test ? "Mark as real booking" : "Mark as test booking"))) return;
+                      void runAction("Update test flag", { action: "set_test_booking", booking_id: v.booking_id, is_test: !v.is_test });
+                    })();
                   }}>{v.is_test ? "Mark as real booking" : "Mark as test booking"}</Button>
                   {/* C6: detach the saved card — the existing
                       delete_card action, now reachable from the panel.
@@ -2255,10 +2356,12 @@ const Owner = () => {
                       by runAction, never swallowed. */}
                   {!noStripeCustomer && stripeState === "card_ready" && (
                     <Button variant="outline" size="sm" className="mt-3 ml-2" disabled={!!acting} onClick={() => {
-                      if (!window.confirm("Detach the saved card for this booking? The client will need to save a new card before any charge.")) return;
-                      void runAction("Detach card", { action: "delete_card", booking_id: v.booking_id }, (j) => {
-                        if (j["card_deleted"] === true) { setStripeState(""); setCardBrand(""); setCardLast4(""); }
-                      });
+                      void (async () => {
+                        if (!(await askConfirm("Detach card", "Detach the saved card for this booking? The client will need to save a new card before any charge.", "Detach card"))) return;
+                        void runAction("Detach card", { action: "delete_card", booking_id: v.booking_id }, (j) => {
+                          if (j["card_deleted"] === true) { setStripeState(""); setCardBrand(""); setCardLast4(""); }
+                        });
+                      })();
                     }}>Detach card</Button>
                   )}
 
@@ -2270,18 +2373,20 @@ const Owner = () => {
                         // B5: Charge is a real charge — one click must
                         // never fire it. Amount + client name in the
                         // confirm, like the other dangerous actions.
-                        if (!window.confirm(`Charge ${money(v.amount_cents)} to ${v.client_name ?? "this client"} now? This charges the saved card right away.`)) return;
-                        void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined }, undefined, async (j) => {
-                          // C16: the server refuses a timer-basis charge
-                          // with no delivered reminder (409
-                          // needs_reminder_confirm) until the operator
-                          // confirms — with the server's own hint text.
-                          if (j.error !== "needs_reminder_confirm") return false;
-                          const hint = typeof j.hint === "string" && j.hint ? j.hint : "No reminder was sent for this report yet. Confirm to charge without a reminder.";
-                          if (!window.confirm(`${hint} Charge anyway?`)) return false;
-                          void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined, confirm_no_reminder: true });
-                          return true;
-                        });
+                        void (async () => {
+                          if (!(await askConfirm("Charge now", `Charge ${money(v.amount_cents)} to ${v.client_name ?? "this client"} now? This charges the saved card right away.`, "Charge now", true))) return;
+                          void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined }, undefined, async (j) => {
+                            // C16: the server refuses a timer-basis charge
+                            // with no delivered reminder (409
+                            // needs_reminder_confirm) until the operator
+                            // confirms — with the server's own hint text.
+                            if (j.error !== "needs_reminder_confirm") return false;
+                            const hint = typeof j.hint === "string" && j.hint ? j.hint : "No reminder was sent for this report yet. Confirm to charge without a reminder.";
+                            if (!(await askConfirm("Charge without reminder", `${hint} Charge anyway?`, "Charge anyway", true))) return false;
+                            void runAction("Charge", { action: "charge", booking_id: v.booking_id, amount_cents: v.amount_cents ?? undefined, confirm_no_reminder: true });
+                            return true;
+                          });
+                        })();
                       }}
                     >
                       Charge {money(v.amount_cents)}
@@ -2333,6 +2438,27 @@ const Owner = () => {
         })()}
         </div>
       </div>
+      {/* B3: in-page confirm dialog — replaces native window.confirm
+          for every dangerous owner action. Rendered once; askConfirm
+          resolves it. Radix AlertDialog never blocks the tab and
+          requires an explicit button tap. */}
+      <AlertDialog open={confirmDialog !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmDialog?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmDialog?.message}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => closeConfirm(false)}>Back</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => closeConfirm(true)}
+              className={confirmDialog?.destructive ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+            >
+              {confirmDialog?.confirmLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

@@ -27,6 +27,7 @@ import { ownerNotificationEmail } from "./_owner_email.js";
 
 import { chargeVisit } from "./_payment_obligation.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
+import { autoChargeDeadlineMs } from "./_visit_date.js";
 
 // Booking-scoped truth: the Stripe customer is shared by every booking of
 // one email, so its metadata may describe a different booking. gh_visits
@@ -46,6 +47,14 @@ type BookingRow = {
   // (migration 20261112_charge_waived). Absent (not yet migrated) =
   // undefined at runtime, which reads as "not waived".
   charge_waived?: boolean | null;
+  // Re-clean durability (task 4, 12.11.2026): the `reclean_*` columns
+  // (migration 20261112_reclean_fields). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "no re-clean arranged" and
+  // the journal (issue_resolved / issue_decision) is the fallback.
+  reclean_date?: string | null;
+  reclean_cleaner_id?: string | null;
+  reclean_cleaner_name?: string | null;
+  reclean_status?: string | null;
   checklist?: Checklist | null;
   stripe_customer_id?: string | null;
   cleaner_profile?: unknown;
@@ -214,7 +223,18 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
         : "operator",
     gh_issue_room: issueOpen ? evStr(opened, "room") : "",
     gh_issue_resolved_at: resolved && !issueOpen ? resolved.created_at : "",
-    gh_reclean_date: resolved && !issueOpen ? evStr(resolved, "reclean_date") : "",
+    // Task 4: the re-clean date lives on the row now — prefer it over
+    // the journal (which caps at 60 events). The journal is the
+    // fallback until migration 20261112_reclean_fields is applied.
+    // (Still gated on resolved && !issueOpen like before: this field
+    // feeds the "resolved" record; the live re-clean date for an open
+    // issue is surfaced separately as reclean_date in the view.)
+    gh_reclean_date:
+      typeof row.reclean_date === "string" && row.reclean_date
+        ? row.reclean_date
+        : resolved && !issueOpen
+          ? evStr(resolved, "reclean_date")
+          : "",
   };
 }
 async function hydrateCustomerMeta(
@@ -726,9 +746,15 @@ export default async function handler(req: Req, res: Res) {
       // N20: a bounced report never starts the 24h clock (the timer
       // is blocked), so there is no deadline to show — a deadline
       // computed from the stale report_sent_at would be a dead one.
-      const deadline = sentAt && !timerBounced
-        ? new Date(Date.parse(sentAt) + 24 * 3600 * 1000).toISOString()
+      // Extension bug #1: the deadline is NOT sent + 24h when the
+      // report went out before the visit date — the charge gate opens
+      // only at midnight NY on the visit date, so showing sent + 24h
+      // tells the client they will be charged days before the visit.
+      // autoChargeDeadlineMs is max(visit-date start NY, sent + 24h).
+      const deadlineMs = sentAt && !timerBounced
+        ? autoChargeDeadlineMs(sentAt, meta["gh_confirmed_date"] || row?.visit_date || "")
         : null;
+      const deadline = deadlineMs !== null ? new Date(deadlineMs).toISOString() : null;
       const items = dbPhotoItems ?? readPhotoItems(meta);
       const amountCents = parseInt(
         meta["gh_report_amount_cents"] ? meta["gh_report_amount_cents"] : meta["gh_first_price_cents"] ?? "",
@@ -814,6 +840,20 @@ export default async function handler(req: Req, res: Res) {
               reclean_date: meta["gh_reclean_date"] ?? "",
             }
           : null,
+        // Task 4: the live re-clean (date + cleaner) for the client —
+        // visible while the issue is still open, not only after it is
+        // resolved. Row first, then the decision journal, then the
+        // effective metadata (which is resolution-gated).
+        reclean_date: (() => {
+          if (typeof row?.reclean_date === "string" && row.reclean_date) return row.reclean_date;
+          const dec = events.find((e) => e.event === "issue_decision" && e.detail?.["decision"] === "reclean");
+          if (dec && typeof dec.detail?.["reclean_date"] === "string") return dec.detail["reclean_date"] as string;
+          return meta["gh_reclean_date"] ?? "";
+        })(),
+        reclean_cleaner_name:
+          (typeof row?.reclean_cleaner_name === "string" && row.reclean_cleaner_name) ||
+          (typeof row?.cleaner_name === "string" ? row.cleaner_name : "") ||
+          "",
       };
     };
 
@@ -1135,9 +1175,24 @@ export default async function handler(req: Req, res: Res) {
         }
         if (outcome.outcome === "failed") {
           meta["gh_state"] = "payment_failed";
+          const requiresAction = outcome.error === "payment_requires_action";
+          // 3DS (H1): hand the client what Stripe.js needs to complete
+          // the cardholder challenge — the PaymentIntent's client_secret
+          // and the account's publishable key. The publishable key is
+          // public by design (it ships in client code); it comes from
+          // STRIPE_PUBLISHABLE_KEY in the server env — the owner must
+          // set it in Vercel for 3DS to work. Without it the client
+          // shows a "contact us" message instead of a dead button.
           res.status(402).json({
             ...view(),
-            error: outcome.error === "payment_requires_action" ? "payment_requires_action" : "payment_failed",
+            error: requiresAction ? "payment_requires_action" : "payment_failed",
+            ...(requiresAction
+              ? {
+                  client_secret: outcome.client_secret ?? "",
+                  payment_intent: outcome.payment_intent ?? "",
+                  publishable_key: process.env["STRIPE_PUBLISHABLE_KEY"] ?? "",
+                }
+              : {}),
           });
           return;
         }

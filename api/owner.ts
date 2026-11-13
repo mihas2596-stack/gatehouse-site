@@ -10,7 +10,7 @@
 import { dbConfigured, dbSelect, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
-import { confirmedDateOf, effectiveVisitDate } from "./_visit_date.js";
+import { confirmedDateOf, effectiveVisitDate, autoChargeDeadlineMs } from "./_visit_date.js";
 import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 
@@ -218,6 +218,12 @@ export default async function handler(req: Req, res: Res) {
       const confirmEmailEvents = (events as { event: string; created_at: string }[])
         .filter((e) => e.event === "confirmation_email_sent" || e.event === "confirmation_email_failed")
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      // Owner-notification status after the latest request: the owner
+      // panel shows it next to the request, with a resend action when
+      // delivery failed. Event names only — no addresses.
+      const ownerNotifEvents = (events as { event: string; created_at: string }[])
+        .filter((e) => e.event === "owner_notification" || e.event === "owner_notification_failed")
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       const entryRow = await loadAccess(visitId);
       const entryReminderSent = journalEvents.some((e) => e.event === "entry_reminder_sent");
       return json(200, {
@@ -263,6 +269,11 @@ export default async function handler(req: Req, res: Res) {
           confirmation_email: confirmEmailEvents[0]?.event === "confirmation_email_sent"
             ? "sent"
             : confirmEmailEvents[0]?.event === "confirmation_email_failed"
+              ? "failed"
+              : null,
+          owner_notification: ownerNotifEvents[0]?.event === "owner_notification"
+            ? "sent"
+            : ownerNotifEvents[0]?.event === "owner_notification_failed"
               ? "failed"
               : null,
         },
@@ -430,20 +441,33 @@ export default async function handler(req: Req, res: Res) {
     return json(200, {
       ok: true,
       next_offset: page.length > 100 ? offset + 100 : null,
-      visits: visits.map((v) => ({
-        ...annotateVisit(v, opened.get(v.id) ?? null),
-        photo_count: counts.get(v.id) ?? 0,
-        payment_failed: failed.has(v.id),
-        visit_confirmed: confirmed.has(v.id),
-        request_approved: approved.has(v.id),
-        entry_agreed: entryAgreed.has(v.id),
-        card_confirmed: cardConfirmed.has(v.id),
-        client_phone: clientPhone.get(v.id) ?? null,
-        issue_opened_at: issueOpened.get(v.id)?.opened_at ?? null,
-        issue_reason: issueOpened.get(v.id)?.reason ?? null,
-        issue_room: issueOpened.get(v.id)?.room ?? null,
-        issue_decision: issueDecisions.get(v.id) ?? null,
-      })),
+      visits: visits.map((v) => {
+        // Extension bug #1: the auto-charge deadline is max(visit-date
+        // start NY, report_sent_at + 24h) — the same server-side
+        // computation as /api/report, so the owner and the client see
+        // one deadline. The row's visit_date is the effective date
+        // (confirm writes it there); a missing date falls back to
+        // sent + 24h inside autoChargeDeadlineMs.
+        const deadlineMs = autoChargeDeadlineMs(
+          typeof v["report_sent_at"] === "string" ? (v["report_sent_at"] as string) : null,
+          typeof v["visit_date"] === "string" ? (v["visit_date"] as string) : null,
+        );
+        return {
+          ...annotateVisit(v, opened.get(v.id) ?? null),
+          photo_count: counts.get(v.id) ?? 0,
+          payment_failed: failed.has(v.id),
+          visit_confirmed: confirmed.has(v.id),
+          request_approved: approved.has(v.id),
+          entry_agreed: entryAgreed.has(v.id),
+          card_confirmed: cardConfirmed.has(v.id),
+          client_phone: clientPhone.get(v.id) ?? null,
+          issue_opened_at: issueOpened.get(v.id)?.opened_at ?? null,
+          issue_reason: issueOpened.get(v.id)?.reason ?? null,
+          issue_room: issueOpened.get(v.id)?.room ?? null,
+          issue_decision: issueDecisions.get(v.id) ?? null,
+          auto_charge_deadline: deadlineMs !== null ? new Date(deadlineMs).toISOString() : null,
+        };
+      }),
     });
   } catch (err) {
     console.error(JSON.stringify({ requestId, step: "owner", error: err instanceof Error ? err.message : String(err) }));

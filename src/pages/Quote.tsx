@@ -928,6 +928,12 @@ const Quote = () => {
               )}
 
               {showPrice && <p className="mt-4 border-t border-border pt-3 text-[1.125rem] font-bold text-sage-foreground sm:text-[1.25rem]">Due today: $0</p>}
+              {showPrice && (
+                <div className="mx-auto mt-3 max-w-[52ch]">
+                  <p className="text-[1.125rem] font-bold leading-snug text-sage-foreground">$0 today. See your cleaning report before you pay.</p>
+                  <p className="mt-1 text-base leading-relaxed text-foreground">After your cleaning, we&apos;ll send a private photo report. Approve it to pay. If you don&apos;t report an issue within 24 hours, we&apos;ll charge the agreed price automatically.</p>
+                </div>
+              )}
               {showPrice && <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request.</p>}
               <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 
@@ -1222,6 +1228,10 @@ const Quote = () => {
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
               <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
+              <div className="mt-5 rounded-xl border border-border bg-sage/10 p-4 sm:p-5">
+                <p className="text-[1.25rem] font-bold leading-snug text-sage-foreground sm:text-[1.375rem]">$0 today. See your cleaning report before you pay.</p>
+                <p className="mt-2 text-[1.125rem] leading-relaxed text-foreground sm:text-[1.25rem]">After your cleaning, we&apos;ll send a private photo report. Approve it to pay. If you don&apos;t report an issue within 24 hours, we&apos;ll charge the agreed price automatically.</p>
+              </div>
               <div className="mt-5">
                 <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="h-auto min-h-[48px] w-full whitespace-normal py-3">
                   {isSubmitting

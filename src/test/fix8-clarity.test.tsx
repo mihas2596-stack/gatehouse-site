@@ -67,6 +67,16 @@ describe("fix8 — clarity: tier wording", () => {
     expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
+  it("hero links the sample photo report right under the first See My Price", () => {
+    renderPage(<Index />);
+    // Sample starts closed.
+    expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hide sample report" })).not.toBeInTheDocument();
+    // The hero link opens it.
+    fireEvent.click(screen.getByRole("button", { name: "See a sample photo report" }));
+    expect(screen.getByRole("button", { name: "Hide sample report" })).toBeInTheDocument();
+  });
+
   it("services page states the same tier rule", () => {
     renderPage(<Services />);
     expect(screen.getByText(/Your price is set by the larger of your two counts: up to 2 is Small, 3 is Medium, 4–5 is Large\./)).toBeInTheDocument();

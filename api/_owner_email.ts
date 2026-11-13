@@ -14,6 +14,50 @@ export function ownerNotificationEmail(): string {
   return env || FALLBACK_OWNER_EMAIL;
 }
 
+// Concise owner-request notice (used by the owner-panel resend action,
+// and mirroring the creation email in api/send-contact-email.ts): the
+// same facts — date, service, address, amount — rebuilt from the stored
+// visit row, with an "Open request" action that opens the owner panel
+// (a plain link, no login token — C20).
+export type OwnerRequestNotice = {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  service?: string | null;
+  date?: string | null;
+  window?: string | null;
+  address?: string | null;
+  amountCents?: number | null;
+  bookingId?: string | null;
+  isTest?: boolean | null;
+};
+
+export function ownerRequestEmailBody(n: OwnerRequestNotice): { subject: string; html: string; text: string } {
+  const heading = n.isTest ? "Test request — new cleaning request" : "New cleaning request";
+  const details = [
+    n.name && `Client: ${n.name}`,
+    n.email && `Email: ${n.email}`,
+    n.phone && `Phone: ${n.phone}`,
+    n.service && `Service: ${n.service}`,
+    n.date && `Requested date: ${emailDate(n.date)}`,
+    n.window && `Arrival preference: ${emailArrivalWindow(n.window)}`,
+    n.address && `Address: ${n.address}`,
+    n.amountCents != null && `Visit price: $${(n.amountCents / 100).toFixed(2)}`,
+    n.bookingId && `Booking ID: ${n.bookingId}`,
+  ].filter(Boolean).join("\n");
+  const url = "https://www.gatehousehomecleaning.com/owner";
+  const text = `${heading}\n\n${details}\n\nOpen the request in the owner panel:\n${url}\n\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`;
+  const html = emailDocument({
+    firstName: "Gatehouse",
+    heading,
+    paragraphs: ["A new cleaning request is waiting in the owner panel.", details],
+    action: { url, label: "Open request" },
+    linkNote: false,
+  });
+  const subject = `New quote request — ${n.name}${n.date ? `, ${emailDate(n.date)}` : ""}`;
+  return { subject, html, text };
+}
+
 type ReadyVisit = {
   id: string; booking_id: string; status: string | null;
   client_name?: string | null; service: string | null; visit_date: string | null;

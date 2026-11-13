@@ -43,6 +43,20 @@ let dbRows: Record<string, unknown>[];
 let dbEvents: Record<string, unknown>[];
 let failEventPost = false;
 let failPiCreate = false;
+let piRequiresAction = false;
+// 3DS (H1): the mock Stripe keeps the created intent's live status, so
+// a test can flip it to "succeeded" (the cardholder completed the
+// challenge in the browser) and the next approve must adopt it instead
+// of minting a second intent.
+let piStore: Record<string, { id: string; status: string; client_secret?: string; amount: number; currency: string; customer: string; metadata: Record<string, string>; created: number }>;
+const piFull = (partial: { id: string; status: string; client_secret?: string }) => ({
+  ...partial,
+  amount: 18900,
+  currency: "usd",
+  customer: CUSTOMER.id,
+  metadata: { gh_booking_id: BID },
+  created: Math.floor(Date.now() / 1000),
+});
 function matchCond(row: Record<string, unknown>, field: string, op: string, val: string): boolean {
   const v = row[field];
   const dec = decodeURIComponent(val);
@@ -96,7 +110,7 @@ beforeEach(() => {
   currentMeta = { ...CUSTOMER.metadata };
   resendCalls = [];
   piCalls = [];
-  dbRows = []; dbEvents = []; failEventPost = false; failPiCreate = false;
+  dbRows = []; dbEvents = []; failEventPost = false; failPiCreate = false; piRequiresAction = false; piStore = {};
   bt = signBooking("link-secret", {
     bid: BID, email: CUSTOMER.email, name: CUSTOMER.name,
   }).token;
@@ -143,8 +157,35 @@ beforeEach(() => {
       if (failPiCreate && (init?.method ?? "GET").toUpperCase() === "POST") {
         throw new Error("stripe unreachable");
       }
-      piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: undefined });
-      return { ok: true, status: 200, json: async () => ({ id: "pi_test_1", status: "succeeded" }) };
+      const method = (init?.method ?? "GET").toUpperCase();
+      // GET /payment_intents/{id} — direct read (reconcile): return the
+      // stored live status, so a test can flip a 3DS intent to
+      // succeeded and the next approve adopts it.
+      const getM = /\/payment_intents\/(pi_[A-Za-z0-9_]+)$/.exec(u);
+      if (method === "GET" && getM) {
+        const found = piStore[getM[1]];
+        if (!found) return { ok: false, status: 404, json: async () => ({ error: { message: "not found" } }) };
+        return { ok: true, status: 200, json: async () => ({ ...found }) };
+      }
+      // POST /payment_intents/{id}/confirm — re-confirm a live intent:
+      // return its stored status (a requires_action intent stays
+      // requires_action; the client completes it with Stripe.js).
+      if (method === "POST" && u.includes("/confirm")) {
+        const cM = /\/payment_intents\/(pi_[A-Za-z0-9_]+)\/confirm/.exec(u);
+        const found = cM ? piStore[cM[1]] : undefined;
+        if (!found) return { ok: false, status: 404, json: async () => ({ error: { message: "not found" } }) };
+        return { ok: true, status: 200, json: async () => ({ ...found }) };
+      }
+      if (method === "POST") {
+        piCalls.push({ body: new URLSearchParams(String(init?.body)), idem: init?.headers?.["Idempotency-Key"] });
+        if (piRequiresAction) {
+          piStore["pi_test_1"] = piFull({ id: "pi_test_1", status: "requires_action", client_secret: "pi_test_1_secret_abc" });
+          return { ok: true, status: 200, json: async () => ({ ...piStore["pi_test_1"] }) };
+        }
+        piStore["pi_test_1"] = piFull({ id: "pi_test_1", status: "succeeded" });
+        return { ok: true, status: 200, json: async () => ({ id: "pi_test_1", status: "succeeded" }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
     }
     if (u.includes("/payment_methods")) {
       return { ok: true, status: 200, json: async () => ({ data: [{ id: "pm_test_1" }] }) };
@@ -189,6 +230,19 @@ async function sendReport(photos: string[] = PHOTOS) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await adminHandler(adminReq({ action: "send_report", booking_id: BID, photos }) as any, res as any);
   return res;
+}
+
+// Dates relative to \"today\" in Atlanta time, so the deadline tests
+// are stable no matter when the suite runs.
+function atlantaToday(nowMs = Date.now()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(nowMs));
+}
+function shiftDate(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 describe("report portal", () => {
@@ -237,6 +291,49 @@ describe("report portal", () => {
     await reportHandler(getReq(bt) as any, view as any);
     expect(view.body["state"]).toBe("awaiting");
     expect(view.body["photos"]).toEqual(PHOTOS);
+    const sentMs = Date.parse(String(view.body["report_sent_at"]));
+    const deadlineMs = Date.parse(String(view.body["deadline"]));
+    expect(Math.abs(deadlineMs - (sentMs + 24 * 3600 * 1000))).toBeLessThan(2000);
+  });
+
+  // Extension bug #1: the deadline was sent + 24h even when the report
+  // went out BEFORE the visit date, telling the client they would be
+  // charged days before the visit. The deadline is max(visit-date
+  // start NY, sent + 24h).
+  it("deadline is the visit date (not sent + 24h) when the report went out before the visit", async () => {
+    await sendReport();
+    // Legacy report sent before the visit date (or a reschedule after
+    // sending): the confirmed date is 5 days out, so sent + 24h is
+    // still before the visit. The deadline must be the visit date.
+    const visitDate = shiftDate(atlantaToday(), 5);
+    currentMeta["gh_confirmed_date"] = visitDate;
+    const view = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, view as any);
+    expect(view.body["state"]).toBe("awaiting");
+    const sentMs = Date.parse(String(view.body["report_sent_at"]));
+    const deadlineMs = Date.parse(String(view.body["deadline"]));
+    // The bug: deadline was sent + 24h, days before the visit.
+    expect(deadlineMs).toBeGreaterThan(sentMs + 24 * 3600 * 1000);
+    // The deadline is midnight NY on the visit date.
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(deadlineMs));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value;
+    expect(`${get("year")}-${get("month")}-${get("day")}`).toBe(visitDate);
+    expect(Number(get("hour"))).toBe(0);
+    expect(Number(get("minute"))).toBe(0);
+  });
+
+  it("deadline is sent + 24h when the visit date already passed", async () => {
+    await sendReport();
+    const visitDate = shiftDate(atlantaToday(), -5);
+    currentMeta["gh_confirmed_date"] = visitDate;
+    const view = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, view as any);
     const sentMs = Date.parse(String(view.body["report_sent_at"]));
     const deadlineMs = Date.parse(String(view.body["deadline"]));
     expect(Math.abs(deadlineMs - (sentMs + 24 * 3600 * 1000))).toBeLessThan(2000);
@@ -441,6 +538,93 @@ describe("report portal", () => {
     expect(retry.body["state"]).toBe("paid");
     expect(piCalls).toHaveLength(1);
     expect(dbRows[0]["status"]).toBe("paid");
+  });
+
+  it("3DS (H1): approve with a card that needs authentication returns 402 with client_secret + publishable_key; after the challenge the re-approve adopts the same intent, no second charge", async () => {
+    vi.stubEnv("STRIPE_PUBLISHABLE_KEY", "pk_test_3ds");
+    piRequiresAction = true;
+    await sendReport();
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-3ds", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-3ds", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    const viewBefore = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, viewBefore as any);
+    expect(viewBefore.body["state"]).toBe("awaiting");
+
+    // First approve: the card needs 3DS. The server must hand the
+    // client the PaymentIntent's client_secret and the publishable key
+    // — without them the card is unpayable (the server cannot do 3DS).
+    const approve = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, approve as any);
+    expect(approve.code).toBe(402);
+    expect(approve.body["error"]).toBe("payment_requires_action");
+    expect(approve.body["client_secret"]).toBe("pi_test_1_secret_abc");
+    expect(approve.body["payment_intent"]).toBe("pi_test_1");
+    expect(approve.body["publishable_key"]).toBe("pk_test_3ds");
+    expect(piCalls).toHaveLength(1);
+    // The claim is released so the client can retry after the challenge.
+    expect(dbRows[0]["status"]).toBe("report_sent");
+    // The intent is journaled, so a later reconcile can find it.
+    expect(dbEvents.some((e) => e.event === "payment_requires_action" && (e.detail as Record<string, unknown>)?.["payment_intent"] === "pi_test_1")).toBe(true);
+
+    // The cardholder completes the 3DS challenge in the browser: the
+    // intent becomes succeeded in Stripe. The re-approve must adopt
+    // that same intent (not mint a second one) and mark the visit paid.
+    piStore["pi_test_1"] = { ...piStore["pi_test_1"], status: "succeeded" };
+    const retry = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, retry as any);
+    expect(retry.code).toBe(200);
+    expect(retry.body["state"]).toBe("paid");
+    expect(piCalls).toHaveLength(1);
+    expect(dbRows[0]["status"]).toBe("paid");
+    expect(dbRows[0]["payment_intent_id"]).toBe("pi_test_1");
+  });
+
+  it("3DS (H1): a retry before the challenge still replays the same create key — no second intent", async () => {
+    vi.stubEnv("STRIPE_PUBLISHABLE_KEY", "pk_test_3ds");
+    piRequiresAction = true;
+    await sendReport();
+    enableDb();
+    const sentAt = currentMeta["gh_report_sent_at"]!;
+    dbRows = [{
+      id: "row-report-3ds2", booking_id: BID, visit_no: 1, status: "report_sent",
+      report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
+      report_sent_at: sentAt, issue_open: false, issue_ever: false,
+      report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+    }];
+    dbEvents = [
+      { visit_id: "row-report-3ds2", booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    const viewBefore = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(getReq(bt) as any, viewBefore as any);
+    const approve = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, approve as any);
+    expect(approve.code).toBe(402);
+    expect(approve.body["error"]).toBe("payment_requires_action");
+    // The client taps Approve again before finishing 3DS: the server
+    // re-confirms the same live intent (no new create) and answers
+    // requires_action again with the same client_secret — in production
+    // a fresh create would replay the same idempotency key anyway.
+    const again = response();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await reportHandler(postReq({ bt, action: "approve", seen_publication_id: viewBefore.body["publication_id"] }) as any, again as any);
+    expect(again.code).toBe(402);
+    expect(again.body["error"]).toBe("payment_requires_action");
+    expect(again.body["client_secret"]).toBe("pi_test_1_secret_abc");
+    expect(piCalls).toHaveLength(1);
   });
 
   it("operator approve is closed: it is not client payment approval (G3)", async () => {

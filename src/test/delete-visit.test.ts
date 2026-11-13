@@ -11,6 +11,13 @@
 //   - the gh_visit_access row (entry arrangement, secret included).
 // Idempotent: deleting an already-deleted visit succeeds with
 // deleted: false, already_deleted: true.
+//
+// Task 4 (12.11.2026): the visit history is protected — a PAID or
+// REFUNDED visit, or one with an open or EVER-filed issue, is never
+// deleted. delete_visit answers 409 visit_protected and deletes
+// NOTHING (row, journal, photos and access all stay). Only a
+// requested/confirmed visit with no payment and no complaint may
+// still be deleted.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import bookingAction from "../../api/booking-action";
 
@@ -210,12 +217,66 @@ describe("booking-action delete_visit", () => {
     expect(stripeCalls).toHaveLength(0);
   });
 
-  it("deletes a paid visit too — the paid proof is the owner's decision, not an API guard", async () => {
+  it("refuses a paid visit (409 visit_protected) and deletes NOTHING — row, journal, photos and entry all stay", async () => {
     visits = [makeVisit({ status: "paid" })];
+    const r = await callOwner({ action: "delete_visit", booking_id: BID });
+    expect(r.code).toBe(409);
+    expect(r.body["ok"]).toBe(false);
+    expect(r.body["error"]).toBe("visit_protected");
+    expect(r.body["reason"]).toBe("paid");
+    expect(r.body["visit_id"]).toBe(VISIT_ID);
+    expect(visits).toHaveLength(1);
+    expect(events).toHaveLength(2);
+    expect(photos).toHaveLength(1);
+    expect(access).toHaveLength(1);
+    expect(storageRemoved).toHaveLength(0);
+    expect(stripeCalls).toHaveLength(0);
+  });
+
+  it("refuses a refunded visit (409 visit_protected) and deletes nothing", async () => {
+    visits = [makeVisit({ status: "refunded" })];
+    const r = await callOwner({ action: "delete_visit", booking_id: BID });
+    expect(r.code).toBe(409);
+    expect(r.body["error"]).toBe("visit_protected");
+    expect(r.body["reason"]).toBe("refunded");
+    expect(visits).toHaveLength(1);
+    expect(events).toHaveLength(2);
+    expect(photos).toHaveLength(1);
+    expect(storageRemoved).toHaveLength(0);
+  });
+
+  it("refuses a visit with an open issue (409 visit_protected) and deletes nothing", async () => {
+    visits = [makeVisit({ status: "report_submitted", issue_open: true })];
+    const r = await callOwner({ action: "delete_visit", booking_id: BID });
+    expect(r.code).toBe(409);
+    expect(r.body["error"]).toBe("visit_protected");
+    expect(r.body["reason"]).toBe("issue_open");
+    expect(visits).toHaveLength(1);
+    expect(events).toHaveLength(2);
+    expect(photos).toHaveLength(1);
+    expect(storageRemoved).toHaveLength(0);
+  });
+
+  it("refuses a visit with a past (resolved) issue (409 visit_protected) and deletes nothing", async () => {
+    visits = [makeVisit({ status: "report_submitted", issue_open: false, issue_ever: true })];
+    const r = await callOwner({ action: "delete_visit", booking_id: BID });
+    expect(r.code).toBe(409);
+    expect(r.body["error"]).toBe("visit_protected");
+    expect(r.body["reason"]).toBe("issue_ever");
+    expect(visits).toHaveLength(1);
+    expect(events).toHaveLength(2);
+    expect(photos).toHaveLength(1);
+    expect(storageRemoved).toHaveLength(0);
+  });
+
+  it("still deletes a requested visit with no payment and no complaint", async () => {
+    visits = [makeVisit({ status: "requested", issue_open: false, issue_ever: false })];
     const r = await callOwner({ action: "delete_visit", booking_id: BID });
     expect(r.code).toBe(200);
     expect(r.body["deleted"]).toBe(true);
     expect(visits).toHaveLength(0);
-    expect(stripeCalls).toHaveLength(0);
+    expect(events).toHaveLength(0);
+    expect(photos).toHaveLength(0);
+    expect(access).toHaveLength(0);
   });
 });

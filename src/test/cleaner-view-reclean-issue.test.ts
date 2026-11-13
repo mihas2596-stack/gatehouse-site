@@ -141,7 +141,9 @@ describe("cleaner view: re-clean + client issue", () => {
     const r = await callCleanerGet(token);
     expect(r.code).toBe(200);
     expect(r.body["ok"]).toBe(true);
-    expect(r.body["reclean"]).toEqual({ date: "2026-11-18", note: "We'll come back to re-clean the kitchen." });
+    // Task 4: the re-clean now carries its own cleaner (the row's
+    // cleaner when no re-clean cleaner was set) and its status.
+    expect(r.body["reclean"]).toEqual({ date: "2026-11-18", note: "We'll come back to re-clean the kitchen.", cleaner_name: "Ana", status: "scheduled" });
     expect(r.body["client_issue"]).toEqual({ reason: "Streaks on the floor", room: "Kitchen", source: "client" });
   });
 

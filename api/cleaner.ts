@@ -77,6 +77,14 @@ type VisitRow = {
   cleaner_link_version?: string | null;
   cleaner_link_issuance?: string | null;
   status: string;
+  // Re-clean (task 4, 12.11.2026): the `reclean_*` columns
+  // (migration 20261112_reclean_fields). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "no re-clean arranged" and
+  // the journal (issue_resolved / issue_decision) is the fallback.
+  reclean_date?: string | null;
+  reclean_cleaner_id?: string | null;
+  reclean_cleaner_name?: string | null;
+  reclean_status?: string | null;
 };
 
 type PhotoRow = {
@@ -302,7 +310,20 @@ async function view(visit: VisitRow, restricted = false) {
     `visit_id=eq.${visit.id}&event=eq.issue_opened&order=created_at.desc&limit=1`,
   );
   const recleanDecision = decisionEvents[0]?.detail?.decision === "reclean" ? decisionEvents[0] : null;
-  const recleanDate = typeof resolvedEvents[0]?.detail?.reclean_date === "string" ? (resolvedEvents[0].detail.reclean_date as string) : "";
+  // Task 4 (12.11.2026): the re-clean lives on the row now (its own
+  // date, cleaner, status) — the journal is only the fallback until
+  // migration 20261112_reclean_fields is applied. A row re-clean
+  // shows even when the decision event rotated out of the journal.
+  const journalRecleanDate = typeof resolvedEvents[0]?.detail?.reclean_date === "string" ? (resolvedEvents[0].detail.reclean_date as string) : "";
+  const recleanDate = typeof visit.reclean_date === "string" && visit.reclean_date ? visit.reclean_date : journalRecleanDate;
+  const recleanStatus = typeof visit.reclean_status === "string" && visit.reclean_status
+    ? visit.reclean_status
+    : recleanDecision
+      ? "scheduled"
+      : "";
+  const recleanCleanerName = typeof visit.reclean_cleaner_name === "string" && visit.reclean_cleaner_name
+    ? visit.reclean_cleaner_name
+    : (visit as unknown as { cleaner_name?: string | null }).cleaner_name ?? "";
   const issueEv = issueEvents[0] ?? null;
   // C10 (mirrored from /report): only a client-filed issue (actor
   // "client", not via the report-email auto-issue) is the client's own
@@ -375,10 +396,14 @@ async function view(visit: VisitRow, restricted = false) {
     // A re-clean the owner agreed (date + the decision text), and the
     // client's original complaint — the cleaner needs both to target
     // the re-clean. Null when no re-clean was agreed / no issue filed.
-    reclean: recleanDecision
+    // The row is the authority; the journal decision is the fallback
+    // for rows arranged before the reclean columns existed.
+    reclean: recleanDecision || recleanDate
       ? {
           date: recleanDate,
-          note: typeof recleanDecision.detail?.resolution === "string" ? recleanDecision.detail.resolution : "",
+          note: typeof recleanDecision?.detail?.resolution === "string" ? recleanDecision.detail.resolution : "",
+          cleaner_name: recleanCleanerName,
+          status: recleanStatus,
         }
       : null,
     client_issue: clientIssue,
@@ -469,11 +494,15 @@ function encryptBookingPayload(secret: string, payload: BookingPayload): string 
  * NOT start the clock: the report is marked bounced, auto-charge skips
  * it, and the owner re-sends from the panel. Returns ok:false when the
  * publish itself cannot happen (no customer, no pinned amount, an open
- * issue) — the caller then falls back to the owner review queue. */
+ * issue) — the caller then falls back to the owner review queue.
+ * When the email DID go out but only the tracking write failed, the
+ * failure carries email_sent: true: the client already has the report
+ * link, and the owner's re-send reconciles the delivery record
+ * (booking-action's N07 repair) instead of sending a duplicate. */
 async function publishReportToClient(
   visit: VisitRow,
   photos: PhotoRow[],
-): Promise<{ status: "published"; email_sent: boolean; version: number; sent_at: string } | { status: "already_published" } | { status: "failed"; error: string }> {
+): Promise<{ status: "published"; email_sent: boolean; version: number; sent_at: string } | { status: "already_published" } | { status: "failed"; error: string; email_sent?: boolean }> {
   const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
   if (!STRIPE_SECRET_KEY) return { status: "failed", error: "stripe_not_configured" };
   const customer = await findCustomerByBooking(STRIPE_SECRET_KEY, visit.booking_id);
@@ -595,11 +624,17 @@ async function publishReportToClient(
     });
   }
   if (emailSent) {
-    if (!reportEmailId) return { status: "failed", error: "report_email_tracking_failed" };
+    // Resend accepted the email (resp.ok) but its message id could
+    // not be captured — there is nothing to reconcile a retry by, so
+    // this is a distinct error, not the tracking failure below. The
+    // email went out (email_sent: true); the timer stays blocked
+    // until the owner re-sends, which may duplicate it — the owner
+    // is told so, instead of a silent duplicate or a silent block.
+    if (!reportEmailId) return { status: "failed", error: "report_email_id_missing", email_sent: true };
     const tracked = await dbUpdateCount("gh_visits",
       `id=eq.${visit.id}&report_sent_at=eq.${encodeURIComponent(sentAt)}&report_status=eq.sent`,
       { report_email_id: reportEmailId, report_bounced: false });
-    if (tracked !== 1) return { status: "failed", error: "report_email_tracking_failed" };
+    if (tracked !== 1) return { status: "failed", error: "report_email_tracking_failed", email_sent: true };
   }
   await logEvent(visit.id, visit.booking_id, "cleaner", "report_sent", {
     version, email_sent: emailSent, photos: photos.length, auto: true,
@@ -768,8 +803,17 @@ export default async function handler(req: Req, res: Res) {
       // Payment-date gate (B): the visit has not happened yet — no
       // report may be submitted for a future date. The cleaner can
       // send the report on or after the visit date, never before.
-      if (isFutureVisitDate(visit.visit_date)) {
-        return json(400, { ok: false, error: "report_too_early", visit_date: visit.visit_date });
+      // Task 4: when a re-clean is scheduled, the gate is the
+      // RE-CLEAN date, not the original visit date — the original
+      // date is already past, so gating on it would let the cleaner
+      // submit days before the re-clean happens.
+      const recleanScheduled =
+        visit.reclean_status === "scheduled" &&
+        typeof visit.reclean_date === "string" &&
+        !!visit.reclean_date;
+      const gateDate = recleanScheduled ? (visit.reclean_date as string) : visit.visit_date;
+      if (isFutureVisitDate(gateDate)) {
+        return json(400, { ok: false, error: "report_too_early", visit_date: gateDate, ...(recleanScheduled ? { reclean: true } : {}) });
       }
       if (!EDITABLE.has(visit.report_status)) {
         return json(409, { ok: false, error: "report_locked", report_status: visit.report_status });
@@ -797,6 +841,13 @@ export default async function handler(req: Req, res: Res) {
       );
       if (changed === 0) return json(200, { ok: true, already: true });
       if (changed < 0) return json(502, { ok: false, error: "db_error" });
+      // Task 4: a submitted re-clean report moves the re-clean to
+      // "submitted" (best-effort, separate from the CAS above — the
+      // column does not exist until migration 20261112_reclean_fields,
+      // and a failed write must never fail the submission itself).
+      if (recleanScheduled) {
+        await dbUpdate("gh_visits", `id=eq.${visit.id}`, { reclean_status: "submitted" });
+      }
       await logEvent(visit.id, visit.booking_id, "cleaner", "report_submitted", {
         photos: photos.length,
         problem_note: checklist.problem_note ?? null,
@@ -839,16 +890,21 @@ export default async function handler(req: Req, res: Res) {
         await logEvent(visit.id, visit.booking_id, "system", "report_publish_failed", {
           error: published.error,
         });
+        // A tracking-only failure means the client may already have
+        // the report email: say so in the owner email, so the owner
+        // re-sends to reconcile (no duplicate) instead of assuming
+        // the client never got it.
+        const emailMayHaveGoneOut = published.email_sent === true;
         const emailed = await sendOwnerEmail(
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
-          `The cleaner submitted the photo report, but automatic publishing failed (${published.error}). The report is waiting in the owner review queue — publish it from the owner panel.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}`,
+          `The cleaner submitted the photo report, but automatic publishing failed (${published.error}). The report is waiting in the owner review queue — publish it from the owner panel.${emailMayHaveGoneOut ? " The report email may already have reached the client — re-sending from the panel reconciles the delivery record without sending a duplicate." : ""}\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}`,
         );
         if (!emailed) {
           await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
             what: "report_submitted",
           });
         }
-        return json(200, { ok: true, published: false, publish_error: published.error });
+        return json(200, { ok: true, published: false, publish_error: published.error, email_sent: emailMayHaveGoneOut });
       }
       const emailed = await sendOwnerEmail(
         `Report published to client — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,

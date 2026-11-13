@@ -76,7 +76,12 @@ export type ChargeOutcome =
   | { outcome: "paid"; payment_intent: string; adopted: boolean; receipt_sent: boolean }
   | { outcome: "blocked"; error: string; pinned_cents?: number }
   | { outcome: "processing"; payment_intent?: string }
-  | { outcome: "failed"; error: string; detail: string; status?: string }
+  // 3DS (H1): a failed charge that needs cardholder authentication
+  // carries the PaymentIntent id and its client_secret, so the client
+  // can complete the challenge with Stripe.js (handleCardAction) and
+  // then re-approve. Without them the card is unpayable: the server
+  // cannot do 3DS, and the client has no secret to present.
+  | { outcome: "failed"; error: string; detail: string; status?: string; payment_intent?: string; client_secret?: string }
   | { outcome: "unknown"; error: string; payment_intent?: string }
   | { outcome: "mismatch"; error: string; detail: string };
 
@@ -658,7 +663,18 @@ export async function chargeVisit(input: {
     }
     if (res.ok && status === "requires_action") {
       await releaseClaim();
-      return { outcome: "failed", error: "payment_requires_action", detail: "requires_action", status };
+      // 3DS (H1): the card needs the cardholder's authentication, which
+      // only the client's browser can do. Return the PaymentIntent id
+      // and its client_secret so the caller can hand them to Stripe.js
+      // (handleCardAction). The claim is released, so the client can
+      // re-approve after the challenge and the server reconciles the
+      // same intent (no second charge: createChargeKey is unchanged).
+      const clientSecret = typeof res.data["client_secret"] === "string" ? (res.data["client_secret"] as string) : "";
+      await logEvent(row.id, bookingId, "system", "payment_requires_action", {
+        payment_intent: piId,
+        ...(clientSecret ? {} : { missing_client_secret: true }),
+      });
+      return { outcome: "failed", error: "payment_requires_action", detail: "requires_action", status, payment_intent: piId, client_secret: clientSecret };
     }
     const errMsg =
       ((res.data["error"] as { message?: string } | undefined)?.message ?? `payment ${status || res.status}`);

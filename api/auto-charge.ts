@@ -884,12 +884,18 @@ export default async function handler(req: Req, res: Res) {
         ];
         const seen = new Set<string>();
         for (const match of batches) {
-          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string } }>(
-            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at)&${match}&order=created_at.asc&limit=200`,
+          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string; issue_open?: boolean | null; issue_ever?: boolean | null } }>(
+            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at,issue_open,issue_ever)&${match}&order=created_at.asc&limit=200`,
           );
           for (const photo of photos) {
             if (seen.has(photo.id)) continue;
             seen.add(photo.id);
+            // Task 4 (12.11.2026): a disputed visit's photos are
+            // evidence for the complaint / a later chargeback — never
+            // delete them by age while the issue is open or ever
+            // existed. The 90-day retention (Privacy policy) applies
+            // to clean visits only.
+            if (photo.gh_visits?.issue_open === true || photo.gh_visits?.issue_ever === true) continue;
             if (!await storageRemove(photo.storage_path)) { retentionFailed++; continue; }
             if (!await dbDelete("gh_photos", `id=eq.${photo.id}`)) { retentionFailed++; continue; }
             retentionDeleted++;
@@ -943,12 +949,19 @@ export default async function handler(req: Req, res: Res) {
     // --- Retention pass: report photo links are deleted 90 days after
     // the report was sent (the retention the Privacy policy promises).
     // Applies to paid bookings; unpaid ones keep their evidence.
+    // Task 4 (12.11.2026): a disputed visit's report links are evidence
+    // too — never clear them while the issue is open or ever existed.
+    // (Shared-customer caveat: the flags live on the shared customer
+    // record, so they may come from another booking of the same client.
+    // Over-keeping links is the safe direction; the photos themselves
+    // are guarded per-visit by the pass above.)
     let cleaned = 0;
     try {
       const paid = await findByState(STRIPE_SECRET_KEY, "paid");
       for (const c of paid) {
         const m = c.metadata;
         if (!m["gh_rp_0"]) continue;
+        if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
         if (!Number.isFinite(sentMs)) continue;
         if (sentMs + 90 * 24 * 3600 * 1000 > now) continue;

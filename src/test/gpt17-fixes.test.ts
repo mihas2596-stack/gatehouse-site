@@ -259,7 +259,10 @@ describe("P08: the cancellation fee comes from this booking's journal", () => {
   it("a $25 cancel charges exactly $25 once; the second call reports already", async () => {
     row = { ...row, status: "cancelled" };
     storeMeta = { ...storeMeta, gh_state: "cancelled" };
-    events = [created(), ev("visit_cancelled", { fee_cents: 2500 }, hoursAgo(1))];
+    // Task 1: the fee charges THIS booking's confirmed card
+    // (card_confirmed event), never the shared gh_payment_method —
+    // the shared value may be another booking's card.
+    events = [created(), ev("card_confirmed", { payment_method_id: "pm_1", brand: "visa", last4: "4242" }, hoursAgo(2)), ev("visit_cancelled", { fee_cents: 2500 }, hoursAgo(1))];
     const r = await call({ action: "charge_fee" });
     expect(r.code).toBe(200);
     expect(r.body["fee_cents"]).toBe(2500);

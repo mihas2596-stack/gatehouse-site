@@ -54,11 +54,23 @@ type ReportData = {
   } | null;
   postpay_issue?: boolean;
   resolution?: { resolved_at: string; reclean_date: string } | null;
+  // Task 4: the live re-clean (date + cleaner) — visible while the
+  // issue is still open, not only after it is resolved.
+  reclean_date?: string;
+  reclean_cleaner_name?: string;
   // TASK 1 (fix6): the owner's latest decision on the issue —
   // payment_requested / reclean / waived, with its text. The open-
   // issue view renders its state from this.
   issue_decision?: { decision: string; resolution: string; decided_at: string } | null;
   error?: string;
+  // 3DS (H1): when the saved card needs cardholder authentication the
+  // server answers approve with 402 payment_requires_action and these
+  // fields — the PaymentIntent's client_secret and the account's
+  // publishable key — so the client can complete the challenge with
+  // Stripe.js and then re-approve. Absent on every other response.
+  client_secret?: string;
+  publishable_key?: string;
+  payment_intent?: string;
   // Follow-up on an already-open issue: the server records it and
   // returns already=true; followup_recorded confirms it was saved.
   already?: boolean;
@@ -165,26 +177,78 @@ const Report = () => {
     reader.readAsDataURL(file);
   };
 
+  // 3DS (H1): complete the cardholder authentication for a PaymentIntent
+  // the server already confirmed and left in requires_action. Returns
+  // true when the challenge finished without error; the caller then
+  // re-approves once so the server reconciles the (now succeeded)
+  // intent and marks the visit paid. Returns false (and sets the
+  // message) when the challenge cannot start or the cardholder fails
+  // or cancels it — no charge is made and nothing retries on its own.
+  // Stripe.js is loaded lazily, only when a 3DS challenge is actually
+  // needed, so the report page stays light for every other visitor.
+  const complete3DS = async (clientSecret: string, publishableKey: string): Promise<boolean> => {
+    if (!publishableKey) {
+      setActionError("Your card needs extra verification to complete this payment, and we couldn't start it — please email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    let stripe: Awaited<ReturnType<typeof import("@stripe/stripe-js").loadStripe>>;
+    try {
+      const { loadStripe } = await import("@stripe/stripe-js");
+      stripe = await loadStripe(publishableKey);
+    } catch {
+      setActionError("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    if (!stripe) {
+      setActionError("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    const { error } = await stripe.handleCardAction(clientSecret);
+    if (error) {
+      setActionError(error.message || "The card verification didn't complete — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    return true;
+  };
+
   const act = async (action: "approve" | "issue") => {
     setBusy(true);
     setActionError("");
     setNeedsCardChoice(false);
     try {
-      const r = await fetch("/api/report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bt, action,
-          // RA08: pay only for the publication this tab actually
-          // showed. The server rejects a stale tab with report_changed
-          // instead of charging for a newer report.
-          seen_publication_id: action === "approve" ? (data?.publication_id ?? undefined) : undefined,
-          reason: action === "issue" ? issueText : undefined,
-          room: action === "issue" ? issueRoom : undefined,
-          photo: action === "issue" && issuePhoto ? issuePhoto : undefined,
-        }),
-      });
-      const j = (await r.json()) as ReportData;
+      const postReport = async (): Promise<ReportData> => {
+        const r = await fetch("/api/report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bt, action,
+            // RA08: pay only for the publication this tab actually
+            // showed. The server rejects a stale tab with report_changed
+            // instead of charging for a newer report.
+            seen_publication_id: action === "approve" ? (data?.publication_id ?? undefined) : undefined,
+            reason: action === "issue" ? issueText : undefined,
+            room: action === "issue" ? issueRoom : undefined,
+            photo: action === "issue" && issuePhoto ? issuePhoto : undefined,
+          }),
+        });
+        return (await r.json()) as ReportData;
+      };
+      let j = await postReport();
+      // 3DS (H1): the saved card needs the cardholder's authentication.
+      // Complete the challenge in this browser, then approve once more
+      // so the server reconciles the same intent — the create key is
+      // bound to booking + version + card, so the re-approve cannot
+      // mint a second charge. Done at most once per tap: if the
+      // re-approve still needs action, the message below (not a loop)
+      // tells the client to try again or email us.
+      if (action === "approve" && j && j.error === "payment_requires_action" && j.client_secret) {
+        const done = await complete3DS(j.client_secret, j.publishable_key ?? "");
+        if (!done) {
+          setBusy(false);
+          return;
+        }
+        j = await postReport();
+      }
       // S13: several cards on file, none confirmed for this booking —
       // the server refuses to guess. Lead to the existing confirm_card
       // flow instead of leaving a dead Approve button; no charge made.
@@ -192,6 +256,13 @@ const Report = () => {
         if (j.state && j.state !== "invalid_link") setData(j);
         setNeedsCardChoice(true);
         setActionError("We found more than one card on file and can't tell which one is for this visit — no charge was made. Please choose which card to use for this booking.");
+      // 3DS (H1): the challenge did not finish the payment — either the
+      // first answer carried no client_secret, or the re-approve after
+      // the challenge still needs action. Say so plainly and do not
+      // loop: the client tries again or emails us. No charge was made.
+      } else if (j && j.error === "payment_requires_action") {
+        if (j.state && j.state !== "invalid_link") setData(j);
+        setActionError("Your card needs extra verification to complete this payment — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       // N26: the expired-window 409s carry no `state` (no view spread),
       // so they must be handled before the state gate below — otherwise
       // the client only gets the generic error. The form stays open so
@@ -508,8 +579,13 @@ const Report = () => {
             )}
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
               <p className="text-sm text-foreground">
-                If everything looks good, approve above
-                {data.amount ? <> — your card is then charged {data.amount}</> : null}.
+                {isFutureVisit ? (
+                  <>If everything looks good, you&apos;ll be able to approve after {booking.date ? fmtDateUS(booking.date) : "the visit"}
+                  {data.amount ? <> — your card is then charged {data.amount}</> : null}.</>
+                ) : (
+                  <>If everything looks good, approve above
+                  {data.amount ? <> — your card is then charged {data.amount}</> : null}.</>
+                )}
                 If something isn&apos;t right, report an issue and the automatic charge is blocked for this visit — it never runs on its own afterwards.
                 {data.deadline && !data.charge_timer_blocked ? (
                   <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
@@ -574,6 +650,12 @@ const Report = () => {
                   <> You told us: “{data.issue_reason}”</>
                 ) : null}
               </p>
+              {data.issue_decision?.decision === "reclean" && (data.reclean_date || data.resolution?.reclean_date) ? (
+                <p className="text-base text-foreground mb-6">
+                  Re-clean agreed for <strong>{data.reclean_date || data.resolution?.reclean_date}</strong>
+                  {data.reclean_cleaner_name ? <> — {data.reclean_cleaner_name}</> : null}.
+                </p>
+              ) : null}
               {summary}
               {actionError && (
                 <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>

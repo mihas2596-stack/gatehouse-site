@@ -46,7 +46,6 @@ beforeEach(() => {
   sessionStorage.setItem("gh_owner_session", "test-owner-session");
   window.history.replaceState({}, "", "/owner");
   window.scrollTo = vi.fn();
-  window.confirm = vi.fn(() => true);
   Element.prototype.scrollIntoView = vi.fn();
   actionCalls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
@@ -102,6 +101,7 @@ describe("owner open issues", () => {
   });
 
   it("request payment needs a decision text and a confirmation, and never charges directly", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm");
     open();
     fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
     fireEvent.click(screen.getAllByRole("button", { name: /Casey Client/ })[0]);
@@ -110,10 +110,27 @@ describe("owner open issues", () => {
     fireEvent.change(screen.getByLabelText("Your decision for the client *"), { target: { value: "The original amount stays due." } });
     expect(requestBtn).not.toBeDisabled();
     fireEvent.click(requestBtn);
-    expect(window.confirm).toHaveBeenCalled();
+    // B3: the native window.confirm is gone — an in-page dialog asks
+    // instead, and the action runs only after its confirm button.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/Ask the client to approve and pay/)).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Request payment" }));
     expect(await screen.findByText("Request payment: done.")).toBeInTheDocument();
     const call = actionCalls.find((c) => c["action"] === "issue_request_payment");
     expect(call).toMatchObject({ booking_id: "booking-issue", resolution: "The original amount stays due." });
     expect(actionCalls.some((c) => c["action"] === "charge")).toBe(false);
+  });
+
+  it("dismissing the request-payment dialog runs nothing", async () => {
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "All visits (2)" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Casey Client/ })[0]);
+    fireEvent.change(await screen.findByLabelText("Your decision for the client *"), { target: { value: "The original amount stays due." } });
+    fireEvent.click(screen.getByRole("button", { name: "Request payment" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(actionCalls.some((c) => c["action"] === "issue_request_payment")).toBe(false);
   });
 });

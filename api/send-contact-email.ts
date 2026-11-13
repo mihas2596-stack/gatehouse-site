@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
-import { dbConfigured, dbSelect, dbInsert, logEvent } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent } from "./_db.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
@@ -227,6 +227,59 @@ export function bidFromRequestId(requestId: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant.toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+// Natural-key dedup (L2): a resubmission from a NEW TAB or browser carries
+// a fresh request_id, so the bid-based dedup above cannot see it — the same
+// booking would be created twice. The natural key (email + date + service
+// + address + window + amount) catches it: an identical booking created
+// within the window is the same request, not a second visit. A cancelled
+// visit never matches (re-booking after a cancellation is a new booking),
+// and an intentional second visit sends force_new_booking to bypass this
+// check explicitly. The window is short on purpose: a genuine second visit
+// for the same home/date/service is almost always booked later, and after
+// the window it creates a new booking normally.
+export const NATURAL_DEDUP_WINDOW_MS = 60 * 60 * 1000;
+
+export type VisitDedupRow = {
+  id: string;
+  booking_id: string;
+  client_name: string | null;
+  client_email: string | null;
+  visit_date: string | null;
+  service: string | null;
+  address: string | null;
+  window: string | null;
+  amount_cents: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+export type NaturalBookingKey = {
+  email: string;
+  date: string;
+  service: string;
+  address: string;
+  window: string;
+  amountCents: number | null;
+};
+
+export function isNaturalDuplicate(
+  key: NaturalBookingKey,
+  row: VisitDedupRow,
+  nowMs: number = Date.now(),
+): boolean {
+  if ((row.status ?? "") === "cancelled") return false;
+  if ((row.client_email ?? "").trim().toLowerCase() !== key.email) return false;
+  if ((row.visit_date ?? "") !== key.date) return false;
+  if ((row.service ?? "") !== key.service) return false;
+  if ((row.address ?? "").trim().toLowerCase() !== key.address) return false;
+  if ((row.window ?? "").trim() !== key.window) return false;
+  if ((row.amount_cents ?? null) !== key.amountCents) return false;
+  const created = row.created_at ? Date.parse(row.created_at) : NaN;
+  if (!Number.isFinite(created)) return false;
+  const age = nowMs - created;
+  return age >= 0 && age < NATURAL_DEDUP_WINDOW_MS;
+}
+
 function signBooking(
   secret: string,
   payload: Omit<BookingPayload, "bid" | "ts"> & { bid?: string; ts?: number },
@@ -431,6 +484,10 @@ const ContactSchema = z.object({
   terms_consent: z.boolean().optional(),
   photo_consent: z.boolean().optional(),
   sms_consent: z.boolean().optional(),
+  // Explicit second-visit request: bypasses BOTH the request_id dedup
+  // and the natural-key dedup below. Only an intentional second visit
+  // sends this — never set by default, never implied by a retry.
+  force_new_booking: z.boolean().optional(),
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -729,6 +786,7 @@ export default async function handler(req: Req, res: Res) {
         serverFirst = String(server.first_total);
         serverRecurring = tokenRecurring;
       }
+      const forceNewBooking = parsed.data.force_new_booking === true;
       const signed = signBooking(bookingLinkSecret(signingSecret), {
         email: (email ?? "").trim(),
         name: (name ?? "").trim(),
@@ -736,7 +794,13 @@ export default async function handler(req: Req, res: Res) {
         recurring: tokenRecurring,
         service: (service ?? "").trim() || undefined,
         date: (date ?? "").trim() || undefined,
-        bid: parsed.data.request_id ? bidFromRequestId(parsed.data.request_id) : undefined,
+        // An explicit second visit bypasses the request_id dedup too:
+        // a fresh random bid makes it a fully independent booking.
+        bid: forceNewBooking
+          ? undefined
+          : parsed.data.request_id
+            ? bidFromRequestId(parsed.data.request_id)
+            : undefined,
       });
       bookingToken = signed.token;
       bookingId = signed.bid;
@@ -763,6 +827,60 @@ export default async function handler(req: Req, res: Res) {
           let visitRow = existingRows[0] ?? null;
           let createdByThisCall = false;
           if (!visitRow) {
+            // Natural-key dedup (L2): the bid above is new (fresh
+            // request_id — a new tab or browser), but the booking itself
+            // may already exist. An identical booking created within the
+            // window is the same request, not a second visit: return it
+            // instead of inserting a duplicate row. Skipped for an
+            // explicit second visit (force_new_booking).
+            if (!forceNewBooking) {
+              const dupCheck = await dbSelectStrict<VisitDedupRow>(
+                "gh_visits",
+                `visit_date=eq.${encodeURIComponent((date ?? "").trim())}&order=created_at.desc&limit=50`,
+              );
+              if (!dupCheck.ok) {
+                logErr("dedup_read", "could not check for an existing identical booking");
+                return json(503, { ok: false, error: "booking_save_failed" });
+              }
+              const naturalKey: NaturalBookingKey = {
+                email: (email ?? "").trim().toLowerCase(),
+                date: (date ?? "").trim(),
+                service: actualService,
+                address: (address ?? "").trim().toLowerCase(),
+                window: (time ?? "").trim(),
+                amountCents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
+              };
+              const duplicateRow = dupCheck.rows.find((row) => isNaturalDuplicate(naturalKey, row));
+              if (duplicateRow && duplicateRow.booking_id) {
+                // Return the existing booking: same bid, a fresh link
+                // token for it, the same server-verified totals. No new
+                // row, no new journal events, no emails — the original
+                // submission already sent the confirmation (so
+                // customerEmailSent is true: the client has it).
+                const dupSigned = signBooking(bookingLinkSecret(signingSecret), {
+                  email: (duplicateRow.client_email ?? "").trim(),
+                  name: (duplicateRow.client_name ?? "").trim(),
+                  first: duplicateRow.amount_cents != null
+                    ? String(duplicateRow.amount_cents / 100)
+                    : tokenPrice,
+                  recurring: tokenRecurring,
+                  service: (duplicateRow.service ?? "").trim() || undefined,
+                  date: (duplicateRow.visit_date ?? "").trim() || undefined,
+                  bid: duplicateRow.booking_id,
+                });
+                log("booking_duplicate", { bid: duplicateRow.booking_id });
+                return json(200, {
+                  ok: true,
+                  success: true,
+                  customerEmailSent: true,
+                  duplicate: true,
+                  ...(serverFirst ? { server_first: serverFirst } : {}),
+                  ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
+                  booking_id: duplicateRow.booking_id,
+                  bt: dupSigned.token,
+                });
+              }
+            }
             const inserted = await dbInsert<{ id: string }>("gh_visits", {
               booking_id: bookingId,
               visit_no: 1,
@@ -825,16 +943,25 @@ export default async function handler(req: Req, res: Res) {
             // Customer comments live in the journal, separate from access
             // instructions — the old build stuffed the whole composed
             // request message (summary + consent record) into access_notes.
+            // Guarded like client_contact: a retry after a lost response
+            // must not journal the same note twice.
             const noteText = (notes ?? "").trim();
             if (noteText) {
-              await logEvent(visitRow.id, bookingId, "client", "client_note", { text: noteText.slice(0, 1000) });
+              const existingNotes = await dbSelect("gh_events", `visit_id=eq.${visitRow.id}&event=eq.client_note&limit=1`);
+              if (existingNotes.length === 0) {
+                await logEvent(visitRow.id, bookingId, "client", "client_note", { text: noteText.slice(0, 1000) });
+              }
             }
             // Scope review is an internal flag with reasons; it is persisted
             // here so owner and customer surfaces read the same state.
+            // Same retry guard as client_note.
             if (scope_review) {
-              await logEvent(visitRow.id, bookingId, "system", "scope_review", {
-                reasons: (scope_reasons ?? "").slice(0, 300),
-              });
+              const existingScope = await dbSelect("gh_events", `visit_id=eq.${visitRow.id}&event=eq.scope_review&limit=1`);
+              if (existingScope.length === 0) {
+                await logEvent(visitRow.id, bookingId, "system", "scope_review", {
+                  reasons: (scope_reasons ?? "").slice(0, 300),
+                });
+              }
             }
           }
         } catch (err) {
@@ -882,6 +1009,7 @@ export default async function handler(req: Req, res: Res) {
           ${service ? row("Service Type", escapeHtml(service)) : ""}
           ${zip ? row("ZIP", escapeHtml(zip)) : ""}
           ${address ? row("Street address", escapeHtml(address)) : ""}
+          ${city ? row("City", escapeHtml(city)) : ""}
           ${entry_method ? row("Entry", escapeHtml(entryMethodLabel(entry_method, entry_detail))) : ""}
           ${entry_notes ? row("Entry notes (parking/building)", escapeHtml(entry_notes)) : ""}
           ${bedrooms ? row("Bedrooms", escapeHtml(bedrooms)) : ""}
@@ -897,30 +1025,86 @@ ${isQuote && extra_zones ? row("Extra areas to clean", escapeHtml(extra_zones)) 
 ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reasons || "check scope")}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
+        ${emailButton("https://www.gatehousehomecleaning.com/owner", "Open request")}
         <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form${bookingId ? ` · Booking ID: ${bookingId}` : ""}</p>
       </div>
     `;
 
-    // Online bookings send the owner's scheduling email after the card
-    // is ready. Inquiries, scope exceptions and legacy requests still need
-    // immediate review.
-    if (!isQuote || !visitRowId || scope_review) try {
-      const sent = await sendEmail(RESEND_API_KEY, {
-        from: FROM_OWNER,
-        to: [ownerNotificationEmail()],
-        reply_to: email || undefined,
-        subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
-        html: htmlContent,
-        text: htmlContent.replace(/<\/tr>/g, "\n").replace(/<\/td>/g, " ").replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'),
-      }, parsed.data.request_id ? `owner/${parsed.data.request_id}` : undefined);
-      if (!sent.ok) {
-        logErr("owner_notification", `provider ${sent.status}: ${sent.data?.name ?? ""} ${sent.data?.message ?? ""}`);
-        return json(500, { ok: false, error: "server_error" });
+    // Owner notification: EVERY new request gets one — including online
+    // quote bookings. The old gate skipped quotes with a visit row on
+    // the assumption that the "card ready" email would follow, but a
+    // quote whose client never saves a card then notified the owner
+    // never: the request sat in /owner as "Needs attention" while the
+    // client waited for a confirmation nobody processed (extension bug
+    // #4, "Test Client" 2026-11-20). The card-ready email
+    // (notifyOwnerCardReady) still follows separately once a card is on
+    // file — it is a different message ("ready to schedule"), not a
+    // duplicate of this one.
+    //
+    // Idempotency by booking: a retry after a lost response must not
+    // send a second owner email. The journal decides — Resend's
+    // Idempotency-Key (owner/<request_id>) only dedupes identical
+    // request_ids; a new tab gets a fresh one.
+    //
+    // Failure: a booking with a saved visit row survives a failed
+    // notification — the failure is journaled (owner_notification_failed,
+    // visible in /owner Activity with a resend action) and the submission
+    // still succeeds. Failing the whole submission would tell the client
+    // their request failed when it did not. Without a visit row (general
+    // inquiry) the email IS the record, so a failed send still fails the
+    // submission.
+    let ownerEmailSent = false;
+    {
+      let alreadyNotified = false;
+      if (visitRowId) {
+        const prior = await dbSelect<{ id: string }>(
+          "gh_events",
+          `visit_id=eq.${encodeURIComponent(visitRowId)}&event=eq.owner_notification&limit=1`,
+        );
+        alreadyNotified = prior.length > 0;
       }
-      log("owner_notification", "sent");
-    } catch (err) {
-      logErr("owner_notification", err);
-      return json(500, { ok: false, error: "server_error" });
+      if (alreadyNotified) {
+        log("owner_notification", "already_sent");
+      } else {
+        try {
+          const sent = await sendEmail(RESEND_API_KEY, {
+            from: FROM_OWNER,
+            to: [ownerNotificationEmail()],
+            reply_to: email || undefined,
+            subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
+            html: htmlContent,
+            text: htmlContent.replace(/<\/tr>/g, "\n").replace(/<\/td>/g, " ").replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'),
+          }, parsed.data.request_id ? `owner/${parsed.data.request_id}` : undefined);
+          if (!sent.ok) {
+            logErr("owner_notification", `provider ${sent.status}: ${sent.data?.name ?? ""} ${sent.data?.message ?? ""}`);
+            if (visitRowId) {
+              await logEvent(visitRowId, bookingId, "system", "owner_notification_failed", {
+                status: sent.status,
+                error: sent.data?.message ?? sent.data?.name ?? "provider_error",
+              });
+            } else {
+              return json(500, { ok: false, error: "server_error" });
+            }
+          } else {
+            ownerEmailSent = true;
+            log("owner_notification", "sent");
+            if (visitRowId) {
+              await logEvent(visitRowId, bookingId, "system", "owner_notification", {
+                email_id: (sent.data as unknown as { id?: string })?.id ?? null,
+              });
+            }
+          }
+        } catch (err) {
+          logErr("owner_notification", err);
+          if (visitRowId) {
+            await logEvent(visitRowId, bookingId, "system", "owner_notification_failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          } else {
+            return json(500, { ok: false, error: "server_error" });
+          }
+        }
+      }
     }
 
     // Step: client autoresponse (errors surface intentionally)
@@ -1051,6 +1235,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
       ok: true,
       success: true,
       customerEmailSent,
+      ownerEmailSent,
       ...(serverFirst ? { server_first: serverFirst } : {}),
       ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
       ...(bookingId ? { booking_id: bookingId } : {}),

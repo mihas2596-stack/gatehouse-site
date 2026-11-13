@@ -238,7 +238,6 @@ describe("remaining ideas: /owner", () => {
     window.history.replaceState({}, "", "/owner");
     window.scrollTo = vi.fn();
     Element.prototype.scrollIntoView = vi.fn();
-    window.confirm = vi.fn(() => true);
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const u = new URL(String(url), "https://example.com");
       if (u.pathname === "/api/owner-auth") return { ok: true, json: async () => ({ ok: true, session: "test-owner-session" }) };
@@ -259,6 +258,9 @@ describe("remaining ideas: /owner", () => {
     fireEvent.click(screen.getByRole("button", { name: /Fay Confirmed/ }));
     await screen.findByRole("heading", { name: "Fay Confirmed" });
     fireEvent.click(screen.getByText("Cancel visit"));
+    // B3: cancel now asks in an in-page dialog, not window.confirm.
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel visit" }));
     expect(await screen.findByText("Tell the cleaner")).toBeInTheDocument();
     expect(screen.getByText(/has been cancelled — no need to travel/)).toBeInTheDocument();
     // Scope to the prompt: the Cleaner section below has its own

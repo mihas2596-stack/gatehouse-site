@@ -135,8 +135,9 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
   await quoteHandler(quoteRequest({ ...home, price: "219", test_price_window: false }), confirmed as never);
   expect(confirmed.code).toBe(200);
   expect(inserts[0]?.amount_cents).toBe(21900);
-  expect(emails).toHaveLength(1);
-  expect(JSON.stringify(emails[0])).toContain("$219");
+  expect(emails).toHaveLength(2); // owner notice + customer confirmation
+  const customer = emails.find((e) => String(e.subject).startsWith("Request received"));
+  expect(JSON.stringify(customer)).toContain("$219");
  });
  it("first deep clean is explicit in the stored service and work scope",async()=>{const r=response();await quoteHandler(quoteRequest({cleaned_recently:false}),r as never);expect(r.code).toBe(200);expect(inserts[0]?.service).toMatch(/deep/i);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside oven cleaned/);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/Inside fridge cleaned/);});
  it("untrusted extra-area and scope text stays escaped in owner email",async()=>{const r=response();await quoteHandler(quoteRequest({extra_zones:'<img src="x" onerror="bad">',scope_review:true,scope_reasons:'<a href="x">fake</a>'}),r as never);expect(r.code).toBe(200);const html=String(emails.find(e=>String(e.subject).startsWith("New quote"))?.html);expect(html).not.toContain('<img src="x"');expect(html).not.toContain('<a href="x">');expect(html).toContain('&lt;img');});

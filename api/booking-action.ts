@@ -35,8 +35,9 @@ import {
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
 import { buildWorkRooms } from "./_work_scope.js";
-import { normalizeClientPhone } from "./_client_contact.js";
+import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
+import { ownerNotificationEmail, ownerRequestEmailBody } from "./_owner_email.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
 import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation } from "./_payment_intent.js";
@@ -127,7 +128,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "resend_owner_notification", "send_report", "decline_date", "set_cleaner", "set_access_notes", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -664,6 +665,64 @@ async function clearV2Fields(visitId: string): Promise<void> {
   });
 }
 
+// Task 4 (12.11.2026): record an arranged re-clean on the visit row —
+// its own date, its own cleaner, its own status — so the re-clean is
+// not journal-only (the journal caps at 60 events) and the cleaner
+// submit gate can read it. Best-effort: the columns do not exist until
+// migration 20261112_reclean_fields is applied, and a failed write
+// must never fail the arrange/resolve itself — the journal event is
+// the authority until then. Also rotates the cleaner link when the
+// current one would expire before the re-clean (H2: a link minted
+// from the ORIGINAL visit date dies before a later re-clean date);
+// a still-valid link is left untouched so the cleaner keeps working.
+async function recordReclean(
+  visitId: string,
+  bookingId: string,
+  recleanDate: string,
+  cleanerId: string | null,
+  cleanerName: string | null,
+  currentLinkExpires: string | null,
+  forceRotateLink = false,
+): Promise<{ rowWritten: boolean; linkRotated: boolean }> {
+  const rowWritten = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
+    reclean_date: recleanDate,
+    reclean_cleaner_id: cleanerId,
+    reclean_cleaner_name: cleanerName,
+    reclean_status: "scheduled",
+  });
+  if (!rowWritten) log("recordReclean", "reclean columns not set (migration 20261112 pending?)");
+  let linkRotated = false;
+  const needByMs = Date.parse(`${recleanDate}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
+  const currentExpiresMs = currentLinkExpires ? Date.parse(currentLinkExpires) : NaN;
+  // Rotate when the cleaner changed (the old link must die at once)
+  // or when the current link would expire before the re-clean (H2).
+  // A still-valid link for the same cleaner is left untouched.
+  if (forceRotateLink || (Number.isFinite(needByMs) && (!Number.isFinite(currentExpiresMs) || currentExpiresMs < needByMs))) {
+    const v2 = mintV2Link(visitId, recleanDate);
+    if (v2 && (await writeV2Link(visitId, v2))) {
+      linkRotated = true;
+    } else {
+      const leg = mintLegacyLink(recleanDate);
+      const okLeg = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
+        cleaner_token_hash: hashToken(leg.token),
+        cleaner_token_expires: leg.expires,
+      });
+      if (okLeg) {
+        await clearV2Fields(visitId);
+        linkRotated = true;
+      }
+      await logEvent(visitId, bookingId, "owner", "cleaner_link_legacy_fallback", {
+        reason: !v2 ? "v2_mint_null" : "v2_write_failed",
+        legacy_saved: Boolean(okLeg),
+      });
+    }
+    if (linkRotated) {
+      await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason: "reclean_scheduled", expires: cleanerLinkExpiry(recleanDate) });
+    }
+  }
+  return { rowWritten, linkRotated };
+}
+
 /**
  * Recompute the current v2 link for a row WITHOUT changing anything:
  * no new issuance, no expiry/hash/opened_at change, no event. Returns
@@ -760,6 +819,8 @@ type BookingRow = {
   report_bounced: boolean | null; report_status: string | null;
   visit_date: string | null; window: string | null;
   service?: string | null;
+  address?: string | null;
+  is_test?: boolean | null;
   no_photo_zones?: string | null;
   // Synced on every issue transition (client issue, dispute, resolve,
   // resend, client approval); PostgREST returns them even though the
@@ -769,6 +830,14 @@ type BookingRow = {
   // (migration 20261112_charge_waived). Absent (not yet migrated) =
   // undefined at runtime, which reads as "not waived".
   charge_waived?: boolean | null;
+  // Re-clean durability (task 4, 12.11.2026): the `reclean_*` columns
+  // (migration 20261112_reclean_fields). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "no re-clean arranged" and
+  // the journal (issue_resolved / issue_decision) is the fallback.
+  reclean_date?: string | null;
+  reclean_cleaner_id?: string | null;
+  reclean_cleaner_name?: string | null;
+  reclean_status?: string | null;
   stripe_customer_id?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
@@ -797,6 +866,40 @@ const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null 
   events.find((e) => e.event === name) ?? null;
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
+
+// Task 4 (12.11.2026) / C26 / Terms §7: the agreed re-clean date is
+// validated, not stored verbatim — YYYY-MM-DD, a real calendar date,
+// not in the past, and within 72h of the issue being reported
+// (issue_opened event). Without an issue_opened anchor (legacy rows)
+// only format/past are enforced — the 72h check cannot be computed
+// and fails open, never closed. Shared by `resolve` and
+// `issue_arrange_reclean` so both flows enforce the same window.
+function validateRecleanDate(
+  recleanRaw: string,
+  events: BookingEvent[],
+): { ok: true; date: string } | { ok: false; error: string; reclean_by?: string } {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(recleanRaw);
+  const d = dm ? new Date(Date.UTC(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]))) : null;
+  const realDate =
+    d !== null &&
+    dm !== null &&
+    d.getUTCFullYear() === Number(dm[1]) &&
+    d.getUTCMonth() === Number(dm[2]) - 1 &&
+    d.getUTCDate() === Number(dm[3]);
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
+  if (!realDate || (d !== null && d.getTime() < todayUtc.getTime())) {
+    return { ok: false, error: "invalid_reclean_date" };
+  }
+  const openedEv = latestEvent(events, "issue_opened");
+  if (openedEv && d !== null) {
+    const recleanByMs = Date.parse(openedEv.created_at) + 72 * 3600 * 1000;
+    if (Number.isFinite(recleanByMs) && d.getTime() > recleanByMs) {
+      return { ok: false, error: "reclean_date_too_late", reclean_by: new Date(recleanByMs).toISOString() };
+    }
+  }
+  return { ok: true, date: recleanRaw };
+}
 export async function bookingEmailContact(bookingId: string, email: string, name: string): Promise<{ email: string; name: string }> {
   if (!dbConfigured()) return { email, name };
   const result = await dbSelectStrict<{ client_email?: string | null; client_name?: string | null }>("gh_visits", `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`);
@@ -1183,6 +1286,82 @@ export default async function handler(req: Req, res: Res) {
       return json(200, { ok: true, email_sent: sent });
     }
 
+    if (action === "resend_owner_notification") {
+      // Explicit owner retry of the new-request notification. It never
+      // changes the booking itself: one call sends at most one email,
+      // and only when no `owner_notification` is journaled for the visit
+      // yet. The creation path (send-contact-email) journals
+      // owner_notification on success and owner_notification_failed on
+      // failure; a visit whose notification failed — or one created
+      // before that journaling existed — can be re-sent from /owner. A
+      // cancelled visit has nothing to notify about.
+      //
+      // Runs BEFORE the shared customer resolution below on purpose:
+      // a quote that never got a card has no Stripe customer, and the
+      // common path would 404 before this action ran.
+      const result = await latestBookingRowStrict(bookingId);
+      if (!result.ok) return json(502, { ok: false, error: "db_unreadable" });
+      if (!result.row) return json(404, { ok: false, error: "booking_not_found" });
+      const visit = result.row;
+      if (visit.status === "cancelled") {
+        return json(409, { ok: false, error: "invalid_transition", status: visit.status });
+      }
+      const journal = await bookingEventsStrict(bookingId);
+      if (!journal.ok) return json(503, { ok: false, error: "status_unavailable" });
+      if (journal.events.some((e) => e.event === "owner_notification")) {
+        return json(200, { ok: true, email_sent: false, already: true });
+      }
+      const RESEND_API_KEY = process.env["RESEND_API_KEY"];
+      let emailSent = false;
+      let failure = "provider_error";
+      if (!RESEND_API_KEY) {
+        failure = "unconfigured";
+      } else {
+        const phone = await loadClientPhone(visit.id);
+        const body = ownerRequestEmailBody({
+          name: visit.client_name ?? "",
+          email: visit.client_email ?? "",
+          phone: phone ?? undefined,
+          service: visit.service ?? "",
+          date: visit.visit_date ?? "",
+          window: visit.window ?? "",
+          address: visit.address ?? "",
+          amountCents: visit.amount_cents ?? null,
+          bookingId,
+          isTest: visit.is_test ?? false,
+        });
+        try {
+          const resp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${RESEND_API_KEY}`,
+              "Content-Type": "application/json",
+              "Idempotency-Key": `owner-resend/${bookingId}`,
+            },
+            body: JSON.stringify({
+              from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+              to: [ownerNotificationEmail()],
+              subject: body.subject,
+              text: body.text,
+              html: body.html,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          emailSent = resp.ok;
+          if (!resp.ok) {
+            logErr("resend_owner_notification", `provider ${resp.status}`);
+            failure = `provider_${resp.status}`;
+          }
+        } catch (err) {
+          logErr("resend_owner_notification", err);
+          failure = err instanceof Error ? err.message : String(err);
+        }
+      }
+      await logEvent(visit.id, bookingId, "owner", emailSent ? "owner_notification" : "owner_notification_failed", emailSent ? {} : { error: failure });
+      log("resend_owner_notification", { booking: bookingId, emailSent });
+      return json(200, { ok: true, email_sent: emailSent });
+    }
+
     // Owner-only repair for contacts lost by older booking versions.
     if (action === "set_client_phone") {
       const phone = normalizeClientPhone(parsed.data.client_phone);
@@ -1220,11 +1399,18 @@ export default async function handler(req: Req, res: Res) {
       // The row's visit_date is the effective visit date (confirm
       // writes it there), so it feeds the same 48h rule the client
       // cancel uses — including the free cancel for a past date.
+      // The row's window is the confirmed arrival window (confirm /
+      // assign_confirm write it there), so the 48h threshold runs to
+      // the window START, exactly like the client cancel — never to
+      // midday. Without it the owner could charge $25 when the client
+      // sees $0 (morning window: 7 AM is inside 48h while noon is
+      // not) or $0 when the client sees $25 (afternoon window: 2 PM
+      // is outside 48h while noon is not).
       const feeMeta: Record<string, string> = {
         gh_state: rowStatus,
         gh_confirmed_date: visit.visit_date ?? "",
       };
-      const fee = cancelFeeCents(feeMeta, visit.visit_date ?? "", Date.now());
+      const fee = cancelFeeCents(feeMeta, visit.visit_date ?? "", Date.now(), visit.window ?? "");
       const changed = await dbUpdateCount(
         "gh_visits",
         `id=eq.${visit.id}&status=eq.${encodeURIComponent(rowStatus)}`,
@@ -1317,14 +1503,43 @@ export default async function handler(req: Req, res: Res) {
       if (!latest.row) {
         return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: [], photos_removed: 0, photos_storage_failed: 0, events_deleted: 0 });
       }
-      const all = await dbSelectStrict<{ id: string }>(
+      // Task 4 (12.11.2026): a paid or disputed visit is evidence, not
+      // clutter. Deleting it would erase the report photos, the entry
+      // arrangement and the whole journal — the exact record a chargeback
+      // or a re-clean dispute needs. Refuse while ANY visit of the
+      // booking is paid/refunded, has an open issue, or ever had one.
+      // A requested/confirmed visit with no payment and no complaint
+      // stays deletable (test bookings, duplicates).
+      const all = await dbSelectStrict<{ id: string; status: string | null; issue_open: boolean | null; issue_ever: boolean | null }>(
         "gh_visits",
-        `select=id&booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc`,
+        `select=id,status,issue_open,issue_ever&booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc`,
       );
       if (!all.ok) return json(503, { ok: false, error: "db_unreadable" });
       const visitIds = all.rows.map((r) => r.id).filter(Boolean);
       if (visitIds.length === 0) {
         return json(200, { ok: true, booking_id: bookingId, deleted: false, already_deleted: true, visit_ids: [], photos_removed: 0, photos_storage_failed: 0, events_deleted: 0 });
+      }
+      const protectedVisit = all.rows.find(
+        (r) =>
+          r.status === "paid" ||
+          r.status === "refunded" ||
+          r.issue_open === true ||
+          r.issue_ever === true,
+      );
+      if (protectedVisit) {
+        const reason =
+          protectedVisit.status === "paid" || protectedVisit.status === "refunded"
+            ? protectedVisit.status
+            : protectedVisit.issue_open === true
+              ? "issue_open"
+              : "issue_ever";
+        return json(409, {
+          ok: false,
+          error: "visit_protected",
+          reason,
+          visit_id: protectedVisit.id,
+          message: "This visit is paid or has a complaint history, so its report, photos and journal are kept as evidence and cannot be deleted.",
+        });
       }
       // Report photos first: remove the bucket objects, then the rows.
       // A storage failure is reported, not fatal — the object is
@@ -1784,6 +1999,16 @@ export default async function handler(req: Req, res: Res) {
         logErr("assign_confirm", "visit row update failed");
         return json(502, { ok: false, error: "db_error" });
       }
+      // Task 4: a scheduled re-clean follows the cleaner — a
+      // reassignment while a re-clean is pending moves the re-clean
+      // to the new person (best-effort; the columns do not exist
+      // until migration 20261112_reclean_fields).
+      if (row.reclean_status === "scheduled") {
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          reclean_cleaner_id: cleanerId,
+          reclean_cleaner_name: name.slice(0, 80),
+        });
+      }
       if (changed) {
         await logEvent(row.id, bookingId, "owner", "entry_revoked");
       }
@@ -2028,38 +2253,14 @@ export default async function handler(req: Req, res: Res) {
       }
       // C26 / Terms §7: "We fix missed checklist items free within 72
       // hours after you report the issue." The agreed re-clean date is
-      // therefore validated, not stored verbatim: YYYY-MM-DD, a real
-      // calendar date, not in the past, and within 72h of the issue
-      // being reported (issue_opened event). Without an issue_opened
-      // anchor (legacy rows) only format/past are enforced — the 72h
-      // check cannot be computed and fails open, never closed.
+      // therefore validated, not stored verbatim (see validateRecleanDate).
       const recleanRaw = (parsed.data.reclean_date ?? "").trim();
       if (recleanRaw) {
-        const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(recleanRaw);
-        const d = dm
-          ? new Date(Date.UTC(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])))
-          : null;
-        const realDate =
-          d !== null &&
-          dm !== null &&
-          d.getUTCFullYear() === Number(dm[1]) &&
-          d.getUTCMonth() === Number(dm[2]) - 1 &&
-          d.getUTCDate() === Number(dm[3]);
-        const todayUtc = new Date();
-        todayUtc.setUTCHours(0, 0, 0, 0);
-        if (!realDate || (d !== null && d.getTime() < todayUtc.getTime())) {
-          return json(400, { ok: false, error: "invalid_reclean_date" });
-        }
-        const openedEv = latestEvent(events, "issue_opened");
-        if (openedEv && d !== null) {
-          const recleanByMs = Date.parse(openedEv.created_at) + 72 * 3600 * 1000;
-          if (Number.isFinite(recleanByMs) && d.getTime() > recleanByMs) {
-            return json(409, {
-              ok: false,
-              error: "reclean_date_too_late",
-              reclean_by: new Date(recleanByMs).toISOString(),
-            });
-          }
+        const checked = validateRecleanDate(recleanRaw, events);
+        if (!checked.ok) {
+          return checked.error === "reclean_date_too_late"
+            ? json(409, { ok: false, error: checked.error, reclean_by: checked.reclean_by })
+            : json(400, { ok: false, error: checked.error });
         }
       }
       await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -2073,6 +2274,21 @@ export default async function handler(req: Req, res: Res) {
       if (row) {
         await logEvent(row.id, bookingId, "owner", "issue_resolved", { reclean_date: parsed.data.reclean_date ?? "" });
         await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_open: false });
+        // Task 4: a re-clean gets its own durable date/cleaner/status
+        // on the row (not journal-only), and a cleaner link that stays
+        // valid through the re-clean date. Best-effort — the journal
+        // event above is the authority until the migration is applied.
+        if (recleanRaw) {
+          const rowWide = row as unknown as { cleaner_id?: string | null; cleaner_token_expires?: string | null };
+          await recordReclean(
+            row.id,
+            bookingId,
+            recleanRaw,
+            rowWide.cleaner_id ?? null,
+            row.cleaner_name ?? null,
+            rowWide.cleaner_token_expires ?? null,
+          );
+        }
       }
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
@@ -2201,6 +2417,36 @@ export default async function handler(req: Req, res: Res) {
       if (!decisionText) {
         return json(400, { ok: false, error: "resolution_required" });
       }
+      // Task 4: Arrange re-clean may carry the agreed date (and an
+      // optional different cleaner). Validated like `resolve` — same
+      // 72h window — and recorded on the row, not journal-only.
+      // Without a date the re-clean is arranged date-less, as before.
+      const recleanRaw = decision === "reclean" ? (parsed.data.reclean_date ?? "").trim() : "";
+      let recleanCleanerId: string | null = null;
+      let recleanCleanerName: string | null = null;
+      let recleanCleanerChanged = false;
+      if (recleanRaw) {
+        const checked = validateRecleanDate(recleanRaw, events);
+        if (!checked.ok) {
+          return checked.error === "reclean_date_too_late"
+            ? json(409, { ok: false, error: checked.error, reclean_by: checked.reclean_by })
+            : json(400, { ok: false, error: checked.error });
+        }
+        const recleanCleanerArg = (parsed.data.cleaner_id ?? "").trim();
+        if (recleanCleanerArg) {
+          const roster = await findRosterCleaner(recleanCleanerArg);
+          if (!roster) return json(404, { ok: false, error: "cleaner_not_found" });
+          if (!roster.active) return json(409, { ok: false, error: "cleaner_inactive" });
+          recleanCleanerId = roster.id;
+          recleanCleanerName = roster.name;
+        } else {
+          const rowWide = row as unknown as { cleaner_id?: string | null };
+          recleanCleanerId = rowWide.cleaner_id ?? null;
+          recleanCleanerName = row.cleaner_name ?? null;
+        }
+        const rowWide = row as unknown as { cleaner_id?: string | null };
+        recleanCleanerChanged = Boolean(row.cleaner_name) && (rowWide.cleaner_id ? rowWide.cleaner_id !== recleanCleanerId : row.cleaner_name !== recleanCleanerName);
+      }
       // Durable record FIRST: the decision event is the authority the
       // report page and the charge gates read. The email is best
       // effort after it — a failed send never un-records the decision.
@@ -2211,6 +2457,7 @@ export default async function handler(req: Req, res: Res) {
       if (!decisionAlreadyLogged) {
         const decisionRecorded = await logEventStrict(row.id, bookingId, "owner", "issue_decision", {
           decision, resolution: decisionText, decided_at: decidedAt,
+          ...(recleanRaw ? { reclean_date: recleanRaw } : {}),
         });
         if (!decisionRecorded) return json(502, { ok: false, error: "db_error" });
       }
@@ -2249,6 +2496,30 @@ export default async function handler(req: Req, res: Res) {
         } catch {
           /* durable state is in the DB */
         }
+      }
+      // Task 4: record the arranged re-clean on the row (date, cleaner,
+      // status) and rotate the cleaner link when the cleaner changed or
+      // the link would expire before the re-clean. A changed cleaner
+      // loses entry access first — a failed revoke aborts the arrange,
+      // like assign_confirm, so the old cleaner never keeps access.
+      if (decision === "reclean" && recleanRaw) {
+        if (recleanCleanerChanged) {
+          const revoked = await revokeAccessForCleanerChange(row.id, recleanCleanerId);
+          if (!revoked) {
+            logErr("issue_arrange_reclean", "entry revoke failed — arrange aborted");
+            return json(502, { ok: false, error: "entry_revoke_failed", decision_recorded: true });
+          }
+          await logEvent(row.id, bookingId, "owner", "entry_revoked");
+        }
+        await recordReclean(
+          row.id,
+          bookingId,
+          recleanRaw,
+          recleanCleanerId,
+          recleanCleanerName,
+          (row as unknown as { cleaner_token_expires?: string | null }).cleaner_token_expires ?? null,
+          recleanCleanerChanged,
+        );
       }
       const emailSent = await sendDecisionEmail(decision, decisionText);
       log("issue_decision", { booking: bookingId, decision, emailSent });
@@ -2419,6 +2690,17 @@ export default async function handler(req: Req, res: Res) {
       // returned report cannot be sent to the client from here.
       let finalPhotos = photos;
       const visitRow = await latestVisit(bookingId);
+      // The stable storage paths of the rebuilt photo set, for the
+      // double-send guard below. The guard must hash the SAME input
+      // the cleaner's auto-publish hashes (raw storage paths) —
+      // hashing the signed URLs instead silently broke the guard
+      // across the two publish paths: a signed URL embeds the
+      // Supabase host and bucket, so it never equals the storage
+      // path the cleaner hashed, and an owner re-send within 10
+      // minutes of a cleaner publish sent a duplicate email.
+      // (Declared here, outside the visitRow block, because the
+      // hash is computed after it.)
+      let dbPhotoPaths: string[] | null = null;
       if (visitRow) {
         // A re-send must not land while a charge is in flight: its CAS
         // would overwrite the claim's payment_pending status back to
@@ -2458,6 +2740,60 @@ export default async function handler(req: Req, res: Res) {
         if (isFutureVisitDate(effectiveDate)) {
           return json(409, { ok: false, error: "report_too_early", visit_date: effectiveDate });
         }
+        // N07 (extended) journal repair: a previous send emailed the
+        // report but lost the tracking/journal write, so the row is
+        // stuck "sent" with the timer blocked and the owner sees a
+        // failure — while the client already has the report link.
+        // Two shapes: (a) the row kept the Resend id but the
+        // report_sent journal event was lost; (b) the row tracking
+        // write itself failed (cleaner auto-publish, or this send's
+        // own tracking write) — the row id is null, but Stripe
+        // metadata carries the same publication's Resend id and
+        // sentAt. Either way the Resend id proves the email went
+        // out, so repair WITHOUT re-emailing: record the id on the
+        // row, clear the pessimistic bounce, journal report_sent.
+        // The sentAt match binds the metadata id to THIS publication
+        // — a stale id from an older version cannot repair a newer
+        // claim. The journal check is scoped to this version: an
+        // older version's report_sent event must not block repairing
+        // the current one (an unversioned event is treated as a
+        // match, conservatively). This runs BEFORE the 10-minute
+        // double-send guard below: the guard would swallow the
+        // retry as "already sent" (email_sent: false) while the
+        // timer stays blocked. A bounce that arrives later still
+        // lands: the repaired row carries the Resend id, so the
+        // webhook can match it and re-block the clock.
+        if (visitRow.report_status === "sent") {
+          const metadataEmailId = meta["gh_report_email_id"] ?? "";
+          const metadataSentAt = meta["gh_report_sent_at"] ?? "";
+          const rowEmailId = visitRow.report_email_id ?? null;
+          const repairVersion = parseInt(meta["gh_report_version"] ?? "", 10) || 1;
+          const repairId = rowEmailId && rowEmailId === metadataEmailId
+            ? rowEmailId
+            : (!rowEmailId && metadataEmailId && metadataSentAt && metadataSentAt === visitRow.report_sent_at
+              ? metadataEmailId
+              : null);
+          const sentJournaledForVersion = events.some((e) =>
+            e.event === "report_sent" &&
+            (e.detail?.["version"] === repairVersion || e.detail?.["version"] === undefined));
+          if (repairId && !sentJournaledForVersion) {
+            const repairedRow = await dbUpdateCount("gh_visits",
+              `id=eq.${visitRow.id}&report_sent_at=eq.${encodeURIComponent(visitRow.report_sent_at ?? "")}&report_status=eq.sent`,
+              { report_email_id: repairId, report_bounced: false });
+            if (repairedRow !== 1) {
+              return json(502, { ok: false, error: "journal_failed" });
+            }
+            const repaired = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
+              version: repairVersion, email_sent: true, photos: 0, journal_repaired: true,
+            });
+            if (!repaired) {
+              return json(502, { ok: false, error: "journal_failed" });
+            }
+            return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: true, journal_repaired: true });
+          }
+        }
+        // The stable storage paths of the rebuilt photo set, for the
+        // double-send guard below (see the declaration above).
         if (visitRow.report_status === "submitted" || visitRow.report_status === "sent") {
           // Also for an already-sent report: the photo set must be
           // rebuilt from storage so the double-send guard hashes the
@@ -2469,6 +2805,7 @@ export default async function handler(req: Req, res: Res) {
           if (dbPhotos.length === 0) {
             return json(409, { ok: false, error: "report_has_no_photos" });
           }
+          dbPhotoPaths = dbPhotos.map((p) => p.storage_path);
           const signed: { url: string; room?: string; note?: string }[] = [];
           for (const dp of dbPhotos) {
             const url = await storageSignDownload(dp.storage_path, 95 * 24 * 3600);
@@ -2519,9 +2856,14 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "quote_missing" });
       }
       // For DB photos the signed URLs change on every send, so the
-      // double-send guard hashes the stable storage paths instead.
-      const hashInput = rpSource
-        ? finalPhotos.map((p) => p.url.split("?")[0]).join("|")
+      // double-send guard hashes the stable storage paths instead —
+      // the same input the cleaner's auto-publish hashes, so the
+      // guard recognizes a duplicate publish across both paths.
+      // (Hashing the signed URLs here used to silently break it:
+      // the URL embeds host and bucket, so it never matched the
+      // storage-path hash the cleaner stored.)
+      const hashInput = rpSource && dbPhotoPaths
+        ? dbPhotoPaths.join("|")
         : photosJson;
       const photoHash = createHash("sha256").update(hashInput).digest("hex").slice(0, 16);
       const prevSentMs = Date.parse(meta["gh_report_sent_at"] ?? "");
@@ -2559,21 +2901,8 @@ export default async function handler(req: Req, res: Res) {
       // it, so a changed value means another send already claimed this
       // slot. The loser returns the existing result, no second email,
       // no second report_sent event. Legacy (no row) keeps the guard.
-      // N07 journal repair: a previous send emailed the report and
-      // claimed the row, but its report_sent journal event was lost.
-      // The timer requires that event, so repair it WITHOUT re-emailing
-      // (the Resend message id in metadata proves the email went out).
-      if (visitRow && visitRow.report_status === "sent" && visitRow.report_email_id
-        && visitRow.report_email_id === meta["gh_report_email_id"] && !events.some((e) => e.event === "report_sent")) {
-        const repaired = await logEventStrict(visitRow.id, bookingId, "owner", "report_sent", {
-          version: parseInt(meta["gh_report_version"] ?? "1", 10) || 1,
-          email_sent: true, photos: 0, journal_repaired: true,
-        });
-        if (repaired) {
-          return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: true, journal_repaired: true });
-        }
-        return json(502, { ok: false, error: "journal_failed" });
-      }
+      // (A stuck publication — email sent but tracking/journal lost —
+      // is repaired by the N07 check above, before the guard.)
       if (visitRow) {
         // N01: the CAS must check the PAYMENT status too, atomically.
         // The old resend CAS matched only report_sent_at, so a resend
@@ -3002,6 +3331,16 @@ export default async function handler(req: Req, res: Res) {
           cleaner_name: name.slice(0, 80),
           ...(rosterId ? { cleaner_id: rosterId } : {}),
         });
+        // Task 4: a scheduled re-clean follows the cleaner — a
+        // reassignment while a re-clean is pending moves the re-clean
+        // to the new person (best-effort; the columns do not exist
+        // until migration 20261112_reclean_fields).
+        if (changed && (row as BookingRow).reclean_status === "scheduled") {
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+            reclean_cleaner_id: rosterId ?? null,
+            reclean_cleaner_name: name.slice(0, 80),
+          });
+        }
         const visitRow = row as unknown as CleanerRow;
         if (changed || firstAssignment) {
           // A different person (or the first assignment) revokes the
@@ -3124,8 +3463,24 @@ export default async function handler(req: Req, res: Res) {
         || events.some((e) => e.event === "fee_charged" || e.event === "cancellation_fee_paid")) {
         return json(200, { ok: true, already: true, fee_cents: feeCents });
       }
-      const pm = meta["gh_payment_method"] ?? "";
-      if (!pm) return json(409, { ok: false, error: "no_payment_method" });
+      // The fee is THIS booking's obligation: charge THIS booking's
+      // card — its card_confirmed journal event (the client's explicit
+      // choice for this booking, same as chargeVisit). The shared
+      // customer's gh_payment_method is overwritten by the most recent
+      // card save of ANY booking of the same email, so charging it
+      // could take the fee from another booking's card. When this
+      // booking never confirmed a card there is no card to charge:
+      // stop and tell the owner why instead of charging a card that
+      // is not this booking's.
+      const pm = confirmedPaymentMethodId(events) ?? "";
+      if (!pm) {
+        await logEvent(row.id, bookingId, "system", "fee_no_card_for_booking", { fee_cents: feeCents });
+        return json(409, {
+          ok: false,
+          error: "no_card_for_booking",
+          detail: "This booking has no confirmed card. The fee cannot be charged to another booking's card — ask the client to confirm a card for this booking (their visit link), then retry.",
+        });
+      }
       // Claim the fee obligation: only an unpaid or previously-failed
       // fee can be claimed; a pending fee is someone else's in-flight
       // attempt and must not be double-claimed.

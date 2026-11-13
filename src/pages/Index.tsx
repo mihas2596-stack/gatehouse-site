@@ -43,6 +43,12 @@ const Index = () => {
     setSampleOpen(false);
     sampleToggleRef.current?.focus();
   };
+  // From the hero CTA: open the sample report and scroll to it, so a
+  // visitor sees what they get right after the first "See My Price".
+  const openSample = () => {
+    setSampleOpen(true);
+    document.getElementById("sample-report")?.scrollIntoView?.({ behavior: "smooth" });
+  };
   return (
   <div className="bg-background">
     <SEO
@@ -83,6 +89,15 @@ const Index = () => {
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
             <p className="mt-3 text-base text-muted-foreground">No email or card needed to see your price.</p>
+            <p className="mt-1">
+              <button
+                type="button"
+                onClick={openSample}
+                className="inline-flex min-h-[44px] items-center font-semibold text-primary underline"
+              >
+                See a sample photo report
+              </button>
+            </p>
           </div>
           <figure>
             <img
@@ -117,7 +132,7 @@ const Index = () => {
               </li>
             ))}
           </ol>
-          <div className="mt-6">
+          <div id="sample-report" className="mt-6 scroll-mt-24">
             <Button
               ref={sampleToggleRef}
               variant="outline"

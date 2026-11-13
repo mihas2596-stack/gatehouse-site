@@ -268,6 +268,26 @@ describe("quote steps", () => {
     sessionStorage.removeItem("gh_quote_draft_v1");
   });
 
+  it("explains when payment happens on step 1 and again before Stripe on step 3", () => {
+    sessionStorage.removeItem("gh_quote_draft_v1");
+    openQuote();
+    // No price yet, no explanation.
+    expect(screen.queryByText("$0 today. See your cleaning report before you pay.")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    // Step 1: next to the price, before the visitor types anything.
+    expect(screen.getByText("$0 today. See your cleaning report before you pay.")).toBeInTheDocument();
+    expect(screen.getByText("After your cleaning, we'll send a private photo report. Approve it to pay. If you don't report an issue within 24 hours, we'll charge the agreed price automatically.")).toBeInTheDocument();
+    // Step 3: repeated before the Stripe button.
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    fillStep2();
+    fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
+    expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
+    expect(screen.getByText("$0 today. See your cleaning report before you pay.")).toBeInTheDocument();
+    expect(screen.getByText("After your cleaning, we'll send a private photo report. Approve it to pay. If you don't report an issue within 24 hours, we'll charge the agreed price automatically.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
+    sessionStorage.removeItem("gh_quote_draft_v1");
+  });
+
   it("rejects a non-Georgia state on step 2", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
