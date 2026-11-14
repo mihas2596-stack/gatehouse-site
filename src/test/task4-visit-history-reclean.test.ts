@@ -204,13 +204,15 @@ function installFetch() {
         photos.push(created);
         return supRes([created]);
       }
-      // GET: the retention pass embeds the visit (issue flags) via
-      // gh_visits!inner — attach the matching row as gh_visits.
+      // GET: the retention pass embeds the visit (issue flags, status)
+      // via gh_visits!inner — attach the matching row as gh_visits.
+      // DA-04: the embedded visit carries status too — the pass
+      // deletes only paid visits, the way PostgREST returns it.
       const wantsJoin = (u.split("?")[1] ?? "").includes("gh_visits!inner");
       const out = photos.map((p) => {
         if (!wantsJoin) return p;
         const v = rows.find((r) => r["id"] === p["visit_id"]);
-        return { ...p, gh_visits: v ? { booking_id: v["booking_id"], report_sent_at: v["report_sent_at"], issue_open: v["issue_open"], issue_ever: v["issue_ever"] } : null };
+        return { ...p, gh_visits: v ? { booking_id: v["booking_id"], report_sent_at: v["report_sent_at"], issue_open: v["issue_open"], issue_ever: v["issue_ever"], status: v["status"] } : null };
       });
       return supRes(out);
     }

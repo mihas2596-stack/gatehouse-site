@@ -31,7 +31,10 @@
 // Storage listing: the list endpoint returns one level at a time —
 // entries with no id/metadata are subfolders — so the walk recurses
 // (depth ≤ 4, total ≤ 500 objects per run) instead of assuming a flat
-// prefix listing.
+// prefix listing. DA-05: each level is paged (100 per page, offset
+// loop) and a walk that hits the cap returns the partial list with
+// `truncated: true` — the run cleans what was listed and says so in
+// the log, it never drops the whole run.
 
 import { dbConfigured, dbConfig, dbSelect, dbDelete, logEvent, storageRemove, PHOTO_BUCKET } from "./_db.js";
 
@@ -51,7 +54,10 @@ type ListEntry = {
   metadata?: { size?: number; mimetype?: string } | null;
 };
 
-async function listOneLevel(prefix: string): Promise<ListEntry[] | null> {
+/** One page of one level under a prefix (DA-05: the list endpoint
+ * caps at 100 entries — callers page with `offset` until a short
+ * page). Returns null when Storage cannot be listed at all. */
+async function listOneLevel(prefix: string, offset = 0): Promise<ListEntry[] | null> {
   const cfg = dbConfig();
   if (!cfg) return null;
   try {
@@ -62,7 +68,7 @@ async function listOneLevel(prefix: string): Promise<ListEntry[] | null> {
         Authorization: `Bearer ${cfg.key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ prefix, limit: 100, offset: 0, sortBy: { column: "name", order: "asc" } }),
+      body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }),
       signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) return null;
@@ -75,22 +81,49 @@ async function listOneLevel(prefix: string): Promise<ListEntry[] | null> {
 }
 
 /**
+ * One whole level under a prefix, paged (DA-05). Returns null only
+ * when Storage cannot be listed at all; a level longer than one page
+ * is walked page by page until a short page (< 100 entries). The
+ * `truncated` flag is set when the walk stopped early because the
+ * per-level page budget (10 pages = 1000 entries) ran out — the
+ * partial page set is still returned, never dropped.
+ */
+async function listLevel(prefix: string): Promise<{ entries: ListEntry[]; truncated: boolean } | null> {
+  const entries: ListEntry[] = [];
+  let offset = 0;
+  for (let page = 0; page < 10; page++) {
+    const pageEntries = await listOneLevel(prefix, offset);
+    if (pageEntries === null) return null;
+    entries.push(...pageEntries);
+    if (pageEntries.length < 100) return { entries, truncated: false };
+    offset += pageEntries.length;
+  }
+  return { entries, truncated: true };
+}
+
+/**
  * Every object under a prefix, recursing into subfolders. Returns
  * null when Storage cannot be listed at all (callers fail open for
  * the sign cap, fail closed for deletion). Bounded: depth ≤ 4 and
  * ORPHAN_LIST_MAX objects — a run never walks an unbounded bucket.
+ * DA-05: when the walk hits the cap, the partial list is returned
+ * with `truncated: true` instead of null — the run cleans what was
+ * listed and logs the truncation, it never skips the whole run.
  */
 export async function storageListObjects(
   prefix: string,
   maxObjects: number = ORPHAN_LIST_MAX,
-): Promise<StorageObject[] | null> {
+): Promise<{ objects: StorageObject[]; truncated: boolean } | null> {
   const out: StorageObject[] = [];
+  let truncated = false;
   const walk = async (p: string, depth: number): Promise<boolean> => {
-    if (depth > 4 || out.length >= maxObjects) return false;
-    const entries = await listOneLevel(p);
-    if (entries === null) return false;
+    if (depth > 4 || out.length >= maxObjects) { truncated = true; return false; }
+    const level = await listLevel(p);
+    if (level === null) return false;
+    if (level.truncated) truncated = true;
+    const entries = level.entries;
     for (const e of entries) {
-      if (out.length >= maxObjects) return false;
+      if (out.length >= maxObjects) { truncated = true; return false; }
       const isFile = e.metadata != null && typeof e.metadata.size === "number";
       if (isFile) {
         out.push({ path: `${p}${e.name}`, updatedAt: e.updated_at ?? null });
@@ -104,7 +137,12 @@ export async function storageListObjects(
     return true;
   };
   const ok = await walk(prefix, 0);
-  return ok ? out : null;
+  // DA-05: a cap hit — or a listing failure part-way through the
+  // walk — returns the partial list (truncated: true) so the caller
+  // cleans what was listed. Only "nothing listed at all" returns
+  // null.
+  if (!ok && out.length === 0) return null;
+  return { objects: out, truncated: truncated || !ok };
 }
 
 /** Pure count: listed objects with no registered row. Exported for tests. */
@@ -143,6 +181,11 @@ export type OrphanCleanupResult = {
   deleted: number;
   failed: number;
   skipped: number;
+  /** DA-05: the listing hit the cap (or failed part-way) — the run
+   * cleaned only the listed prefix of the bucket; the rest waits for
+   * the next run. Never false-negative: false means the whole
+   * `visits/` tree was listed. */
+  truncated: boolean;
 };
 
 /**
@@ -155,10 +198,15 @@ export async function cleanupOrphanPhotos(
   opts: { nowMs?: number; prefix?: string } = {},
 ): Promise<OrphanCleanupResult> {
   const nowMs = opts.nowMs ?? Date.now();
-  const result: OrphanCleanupResult = { checked: 0, deleted: 0, failed: 0, skipped: 0 };
+  const result: OrphanCleanupResult = { checked: 0, deleted: 0, failed: 0, skipped: 0, truncated: false };
   if (!dbConfigured()) return result;
   const listed = await storageListObjects(opts.prefix ?? "visits/", ORPHAN_LIST_MAX);
   if (listed === null) return result;
+  // DA-05: a truncated listing never skips the whole run — clean
+  // what was listed; the flag tells the caller (and the next run)
+  // the bucket was not fully walked.
+  result.truncated = listed.truncated;
+  const objects = listed.objects;
   // Registered paths, oldest-first so the per-candidate check below
   // sees the same set the retention pass uses. The set is only a
   // pre-filter — every candidate is re-checked by exact path before
@@ -168,7 +216,7 @@ export async function cleanupOrphanPhotos(
     "select=storage_path&order=created_at.asc&limit=2000",
   );
   const registeredPaths = registered.map((r) => r.storage_path);
-  const candidates = selectOrphanPhotos(listed, registeredPaths, nowMs);
+  const candidates = selectOrphanPhotos(objects, registeredPaths, nowMs);
   for (const obj of candidates) {
     if (result.deleted >= ORPHAN_DELETE_MAX) break;
     result.checked++;

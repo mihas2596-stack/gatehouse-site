@@ -149,7 +149,22 @@ function recleanState(
   const resolved = latestEvent(events, "issue_resolved");
   const latestDecision = decision?.detail?.["decision"];
   if (latestDecision === "waived" || latestDecision === "payment_requested") return none;
-  const journalDate = typeof resolved?.detail?.["reclean_date"] === "string" ? (resolved.detail["reclean_date"] as string) : null;
+  // DA-01: the re-clean date lives on the issue_decision event
+  // (issue_arrange_reclean logs reclean_date there); the
+  // issue_resolved event carries it only for the legacy resolve
+  // path. When both exist, the NEWER agreement wins (see
+  // journalRecleanDate in api/cleaner.ts); a dateless newer
+  // agreement means no date is agreed.
+  const validDate = (d: unknown): string =>
+    typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const decisionDate = latestDecision === "reclean" ? validDate(decision?.detail?.["reclean_date"]) : "";
+  const resolvedDate = validDate(resolved?.detail?.["reclean_date"]);
+  const journalDate =
+    decision && resolved
+      ? resolved.created_at > decision.created_at
+        ? resolvedDate || null
+        : decisionDate || null
+      : decisionDate || resolvedDate || null;
   const arrangedAt =
     latestDecision === "reclean" ? decision!.created_at
     : journalDate ? resolved!.created_at

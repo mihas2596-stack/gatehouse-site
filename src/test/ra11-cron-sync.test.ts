@@ -21,18 +21,30 @@ let evts: Evt[];
 let customers: Cust[];
 let piCalls: string[];
 let evSeq: number;
+// DA-04: gh_photos rows (with the embedded gh_visits join the
+// retention pass selects) and the Storage paths it removed.
+let photos: Row[];
+let storageDeleted: string[];
 
 function res(code: number, body: unknown) {
   return { ok: code >= 200 && code < 300, status: code, json: async () => body, text: async () => JSON.stringify(body) };
+}
+
+function nestedVal(r: Record<string, unknown>, k: string): unknown {
+  if (!k.includes(".")) return r[k];
+  const [head, ...rest] = k.split(".");
+  const inner = r[head];
+  if (inner && typeof inner === "object") return (inner as Record<string, unknown>)[rest.join(".")];
+  return undefined;
 }
 
 function applyFilters<T extends Record<string, unknown>>(list: T[], u: URL): T[] {
   let out = [...list];
   for (const [k, v] of u.searchParams.entries()) {
     if (k === "order" || k === "limit" || k === "select") continue;
-    if (v.startsWith("eq.")) out = out.filter((r) => String(r[k] ?? "") === decodeURIComponent(v.slice(3)));
-    if (v.startsWith("neq.")) out = out.filter((r) => String(r[k] ?? "") !== decodeURIComponent(v.slice(4)));
-    if (v.startsWith("lt.")) out = out.filter((r) => String(r[k] ?? "") < decodeURIComponent(v.slice(3)));
+    if (v.startsWith("eq.")) out = out.filter((r) => String(nestedVal(r, k) ?? "") === decodeURIComponent(v.slice(3)));
+    if (v.startsWith("neq.")) out = out.filter((r) => String(nestedVal(r, k) ?? "") !== decodeURIComponent(v.slice(4)));
+    if (v.startsWith("lt.")) out = out.filter((r) => String(nestedVal(r, k) ?? "") < decodeURIComponent(v.slice(3)));
   }
   if (u.searchParams.get("order")?.startsWith("created_at.desc")) {
     out.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
@@ -90,12 +102,29 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
   if (host === "api.resend.com") return res(200, { id: "email_1" });
 
   if (host.includes("supabase")) {
+    // Storage object removal (retention pass / orphan cleanup).
+    if (u.pathname.includes("/storage/v1/object/")) {
+      if (method === "DELETE") {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        for (const p of (body.prefixes ?? [])) storageDeleted.push(p);
+        return res(200, {});
+      }
+      return res(404, { error: { message: "storage route not stubbed" } });
+    }
     const table = u.pathname.split("/").pop() ?? "";
     if (method === "GET") {
       if (table === "gh_visits") return res(200, applyFilters(rows, u));
       if (table === "gh_events") return res(200, applyFilters(evts, u));
-      if (table === "gh_photos") return res(200, []);
+      if (table === "gh_photos") return res(200, applyFilters(photos, u));
       return res(200, []);
+    }
+    if (method === "DELETE") {
+      if (table === "gh_photos") {
+        const matched = applyFilters(photos, u);
+        photos = photos.filter((p) => !matched.includes(p));
+        return res(200, {});
+      }
+      return res(404, { error: { message: "route not stubbed" } });
     }
     if (method === "POST") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
@@ -139,6 +168,7 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   rows = []; evts = []; customers = []; piCalls = []; evSeq = 0;
+  photos = []; storageDeleted = [];
   vi.stubGlobal("fetch", vi.fn(fetchMock));
 });
 
@@ -240,5 +270,130 @@ describe("RA11 cron sync recovery", () => {
     expect(r.code).toBe(200);
     expect(r.body["synced"]).toBe(0);
     expect(piCalls).toHaveLength(0);
+  });
+
+  it("DA-02: a REFUNDED row is never resurrected to paid, even though its intent still verifies as succeeded", async () => {
+    // The refund lives at Stripe; the customer's shared metadata
+    // still says paid and the refunded intent still verifies as
+    // succeeded — the old guard (skip only paid) flipped such rows
+    // back to paid. The sync pass must leave the refund alone.
+    const sentAt = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+    rows = [{
+      id: ROW_ID, booking_id: BID, status: "refunded", report_status: "sent",
+      amount_cents: 20000, visit_date: "2027-01-15", window: "midday",
+      issue_open: false, issue_ever: false, report_bounced: false,
+      report_sent_at: sentAt, payment_intent_id: "pi_sync_1",
+    }];
+    customers = [{
+      id: "cus_ra11_1",
+      metadata: {
+        gh_booking_id: BID, gh_state: "paid", gh_payment_method: "pm_ra11_1",
+        gh_first_price_cents: "20000", gh_report_sent_at: sentAt,
+        gh_report_version: "1", gh_report_amount_cents: "20000",
+        gh_last_payment: "pi_sync_1", gh_paid_at: sentAt,
+        gh_receipt_email_id: "email_receipt_1",
+      },
+    }];
+    evts = [
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents = {
+      pi_sync_1: { id: "pi_sync_1", status: "succeeded", amount: 20000, currency: "usd", customer: "cus_ra11_1", metadata: { gh_booking_id: BID } },
+    };
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["ok"]).toBe(true);
+    expect(r.body["charged"]).toBe(0);
+    expect(r.body["synced"]).toBe(0);
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["status"]).toBe("refunded");
+    expect(rows[0]["payment_intent_id"]).toBe("pi_sync_1");
+    expect(evts.some((e) => e.event === "payment_succeeded")).toBe(false);
+    delete (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents;
+  });
+
+  it("DA-02: a CANCELLED row is never flipped to paid by the sync pass", async () => {
+    const sentAt = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+    rows = [{
+      id: ROW_ID, booking_id: BID, status: "cancelled", report_status: "sent",
+      amount_cents: 20000, visit_date: "2027-01-15", window: "midday",
+      issue_open: false, issue_ever: false, report_bounced: false,
+      report_sent_at: sentAt, payment_intent_id: "pi_sync_1",
+    }];
+    customers = [{
+      id: "cus_ra11_1",
+      metadata: {
+        gh_booking_id: BID, gh_state: "paid", gh_payment_method: "pm_ra11_1",
+        gh_first_price_cents: "20000", gh_report_sent_at: sentAt,
+        gh_report_version: "1", gh_report_amount_cents: "20000",
+        gh_last_payment: "pi_sync_1", gh_paid_at: sentAt,
+        gh_receipt_email_id: "email_receipt_1",
+      },
+    }];
+    evts = [
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
+    ];
+    (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents = {
+      pi_sync_1: { id: "pi_sync_1", status: "succeeded", amount: 20000, currency: "usd", customer: "cus_ra11_1", metadata: { gh_booking_id: BID } },
+    };
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["synced"]).toBe(0);
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["status"]).toBe("cancelled");
+    expect(evts.some((e) => e.event === "payment_succeeded")).toBe(false);
+    delete (globalThis as unknown as { __ra11Intents?: Record<string, unknown> }).__ra11Intents;
+  });
+});
+
+describe("DA-04: 90-day photo retention deletes only PAID visits", () => {
+  const old = new Date(Date.now() - 100 * 24 * 3600 * 1000).toISOString();
+  const recent = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
+  const photo = (id: string, status: string, sentAt: string | null, issueEver = false) => ({
+    id, visit_id: `v-${id}`, storage_path: `visits/v-${id}/Kitchen/old.jpg`, created_at: sentAt ?? recent,
+    gh_visits: { booking_id: `b-${id}`, report_sent_at: sentAt, issue_open: false, issue_ever: issueEver, status },
+  });
+
+  it("deletes the old photo of a clean paid visit, and nothing else", async () => {
+    photos = [
+      photo("paid-old", "paid", old),
+      photo("refunded-old", "refunded", old),
+      photo("cancelled-old", "cancelled", old),
+      photo("unpaid-old", "report_sent", old),
+      photo("paid-disputed", "paid", old, true),
+      photo("paid-recent", "paid", recent),
+    ];
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["photo_retention_deleted"]).toBe(1);
+    expect(r.body["photo_retention_failed"]).toBe(0);
+    expect(storageDeleted).toEqual(["visits/v-paid-old/Kitchen/old.jpg"]);
+    expect(photos.map((p) => p["id"]).sort()).toEqual(
+      ["cancelled-old", "paid-disputed", "paid-recent", "refunded-old", "unpaid-old"],
+    );
+  });
+
+  it("a refunded visit keeps its photos even 100 days after the report", async () => {
+    photos = [photo("refunded-old", "refunded", old)];
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["photo_retention_deleted"]).toBe(0);
+    expect(r.body["photo_retention_failed"]).toBe(0);
+    expect(storageDeleted).toEqual([]);
+    expect(photos).toHaveLength(1);
+  });
+
+  it("an unpaid (report_sent, never paid) visit keeps its photos", async () => {
+    photos = [photo("unpaid-old", "report_sent", old)];
+    const r = response();
+    await autoChargeHandler({ method: "GET", headers: { authorization: AUTH } }, r as never);
+    expect(r.code).toBe(200);
+    expect(r.body["photo_retention_deleted"]).toBe(0);
+    expect(storageDeleted).toEqual([]);
+    expect(photos).toHaveLength(1);
   });
 });

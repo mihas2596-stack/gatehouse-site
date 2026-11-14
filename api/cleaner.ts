@@ -265,25 +265,36 @@ export function checklistRevisionStale(
   return storedMs !== expectedMs;
 }
 
-/** M4: the re-clean date from the journal (issue_resolved event),
- * the fallback for rows arranged before migration
- * 20261112_reclean_fields — the row's reclean_* columns may not
- * exist yet. A date counts only when the latest decision was a
- * re-clean (or no decision event survives in the journal window);
- * any other decision means no re-clean was arranged. */
+/** M4: the re-clean date from the journal, the fallback for rows
+ * arranged before migration 20261112_reclean_fields — the row's
+ * reclean_* columns may not exist yet. DA-01: the date lives on the
+ * issue_decision event (issue_arrange_reclean logs reclean_date
+ * there); the legacy resolve path logs it on issue_resolved instead.
+ * A date counts only when the latest decision was a re-clean (or no
+ * decision event survives in the journal window); any other decision
+ * means no re-clean was arranged. When both events exist, the NEWER
+ * agreement wins — the arrange path leaves the issue open, so a
+ * later legacy resolve can re-agree the date; a dateless newer
+ * agreement means no date is agreed. */
 async function journalRecleanDate(visitId: string): Promise<string> {
-  const decision = await dbSelect<{ detail: { decision?: string } | null }>(
+  const decision = await dbSelect<{ detail: { decision?: string; reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visitId}&event=eq.issue_decision&order=created_at.desc&limit=1`,
   );
   const decided = decision[0]?.detail?.decision;
   if (typeof decided === "string" && decided !== "reclean") return "";
-  const resolved = await dbSelect<{ detail: { reclean_date?: string } | null }>(
+  const resolved = await dbSelect<{ detail: { reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visitId}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
   );
-  const d = resolved[0]?.detail?.reclean_date;
-  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const valid = (d: unknown): string =>
+    typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const dValid = valid(decision[0]?.detail?.reclean_date);
+  const rValid = valid(resolved[0]?.detail?.reclean_date);
+  if (decision[0] && resolved[0]) {
+    return resolved[0].created_at > decision[0].created_at ? rValid : dValid;
+  }
+  return dValid || rValid;
 }
 
 /** Rooms that still block submission: a room needs a before photo AND an after
@@ -392,9 +403,10 @@ async function view(visit: VisitRow, restricted = false) {
   );
   // The owner's latest issue decision (a re-clean) and the client's
   // original complaint — the cleaner needs both to target a re-clean.
-  // The re-clean date lives on the issue_resolved event; the decision
-  // event carries the decision + resolution text.
-  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string } | null; created_at: string }>(
+  // DA-01: the re-clean date lives on the issue_decision event
+  // (issue_arrange_reclean logs reclean_date there); the
+  // issue_resolved event carries it only for the legacy resolve path.
+  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string; reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_decision&order=created_at.desc&limit=1`,
   );
@@ -411,7 +423,23 @@ async function view(visit: VisitRow, restricted = false) {
   // date, cleaner, status) — the journal is only the fallback until
   // migration 20261112_reclean_fields is applied. A row re-clean
   // shows even when the decision event rotated out of the journal.
-  const journalRecleanDate = typeof resolvedEvents[0]?.detail?.reclean_date === "string" ? (resolvedEvents[0].detail.reclean_date as string) : "";
+  // DA-01: when both journal events exist, the NEWER agreement wins
+  // (see journalRecleanDate); a non-reclean latest decision cancels
+  // any earlier re-clean.
+  const latestDecision = decisionEvents[0]?.detail?.decision;
+  const validDate = (d: unknown): string =>
+    typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const decisionDate =
+    latestDecision === "reclean" ? validDate(decisionEvents[0]?.detail?.reclean_date) : "";
+  const resolvedDate = validDate(resolvedEvents[0]?.detail?.reclean_date);
+  const journalRecleanDate =
+    typeof latestDecision === "string" && latestDecision !== "reclean"
+      ? ""
+      : decisionEvents[0] && resolvedEvents[0]
+        ? resolvedEvents[0].created_at > decisionEvents[0].created_at
+          ? resolvedDate
+          : decisionDate
+        : decisionDate || resolvedDate;
   const recleanDate = typeof visit.reclean_date === "string" && visit.reclean_date ? visit.reclean_date : journalRecleanDate;
   const recleanStatus = typeof visit.reclean_status === "string" && visit.reclean_status
     ? visit.reclean_status
@@ -936,7 +964,7 @@ export default async function handler(req: Req, res: Res) {
       const listed = await storageListObjects(`visits/${visit.id}/`, 200);
       if (listed !== null) {
         const registeredPaths = (await photosOf(visit.id)).map((p) => p.storage_path);
-        if (countUnregisteredObjects(listed, registeredPaths) >= MAX_UNREGISTERED_PHOTOS) {
+        if (countUnregisteredObjects(listed.objects, registeredPaths) >= MAX_UNREGISTERED_PHOTOS) {
           return json(400, { ok: false, error: "too_many_unregistered_photos" });
         }
       }
@@ -1038,8 +1066,9 @@ export default async function handler(req: Req, res: Res) {
       // date is already past, so gating on it would let the cleaner
       // submit days before the re-clean happens.
       // M4: the journal is the fallback for rows arranged before the
-      // reclean_* migration — a re-clean date that lives only on the
-      // issue_resolved event gates exactly like a row one.
+      // reclean_* migration — a re-clean date that lives only in the
+      // journal (issue_decision, or issue_resolved for the legacy
+      // resolve path) gates exactly like a row one.
       const rowRecleanScheduled =
         visit.reclean_status === "scheduled" &&
         typeof visit.reclean_date === "string" &&

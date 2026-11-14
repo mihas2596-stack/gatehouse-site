@@ -904,7 +904,15 @@ export default async function handler(req: Req, res: Res) {
             continue;
           }
           const vrow = strict.rows[0];
-          if (!vrow || vrow.status === "paid") continue;
+          // DA-02: only rows that can still become paid are repairable.
+          // A refunded (or cancelled) row must never be resurrected:
+          // the refunded intent still verifies as succeeded at Stripe,
+          // so the old guard (skip only paid) flipped refunds back to
+          // paid. The CAS below pins the exact repairable status.
+          if (!vrow || (vrow.status !== "report_sent" && vrow.status !== "payment_pending")) {
+            if (vrow) log("skip_sync_terminal", { booking: bid, status: vrow.status });
+            continue;
+          }
           // N08: shared metadata is only a HINT. Before repairing a
           // row to paid, verify the real intent at Stripe: it must
           // belong to THIS booking, THIS customer, the pinned amount,
@@ -930,9 +938,13 @@ export default async function handler(req: Req, res: Res) {
             log("skip_sync_unverified", { booking: bid, reason: mismatch ?? got.intent.status });
             continue;
           }
+          // DA-02: the CAS pins the exact repairable status read above
+          // (report_sent / payment_pending) — a refunded or cancelled
+          // row can never be flipped back to paid, even if the intent
+          // still verifies as succeeded.
           const n = await dbUpdateCount(
             "gh_visits",
-            `id=eq.${vrow.id}&status=neq.paid`,
+            `id=eq.${vrow.id}&status=eq.${vrow.status}`,
             { status: "paid", paid_at: new Date().toISOString(), payment_intent_id: lastPi },
           );
           if (n === 1) {
@@ -956,14 +968,19 @@ export default async function handler(req: Req, res: Res) {
     try {
       if (dbConfigured()) {
         const cutoff = new Date(now - 90 * 24 * 3600 * 1000).toISOString();
+        // DA-04: only PAID visits — exactly like the second pass below
+        // ("unpaid ones keep their evidence"). A refunded or cancelled
+        // visit keeps its photos: a dispute after a refund, a
+        // chargeback or a damage claim still needs them. Unpaid
+        // visits of any kind never enter this pass.
         const batches = [
-          `gh_visits.report_sent_at=lt.${encodeURIComponent(cutoff)}`,
-          `gh_visits.report_sent_at=is.null&created_at=lt.${encodeURIComponent(cutoff)}`,
+          `gh_visits.report_sent_at=lt.${encodeURIComponent(cutoff)}&gh_visits.status=eq.paid`,
+          `gh_visits.report_sent_at=is.null&created_at=lt.${encodeURIComponent(cutoff)}&gh_visits.status=eq.paid`,
         ];
         const seen = new Set<string>();
         for (const match of batches) {
-          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string; issue_open?: boolean | null; issue_ever?: boolean | null } }>(
-            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at,issue_open,issue_ever)&${match}&order=created_at.asc&limit=200`,
+          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string; issue_open?: boolean | null; issue_ever?: boolean | null; status?: string } }>(
+            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at,issue_open,issue_ever,status)&${match}&order=created_at.asc&limit=200`,
           );
           for (const photo of photos) {
             if (seen.has(photo.id)) continue;
@@ -974,6 +991,11 @@ export default async function handler(req: Req, res: Res) {
             // existed. The 90-day retention (Privacy policy) applies
             // to clean visits only.
             if (photo.gh_visits?.issue_open === true || photo.gh_visits?.issue_ever === true) continue;
+            // DA-04 defence in depth: the query already restricts to
+            // paid, but a photo whose embedded visit is not paid (or
+            // is missing) must never be deleted by this pass, whatever
+            // the query returned.
+            if (photo.gh_visits?.status !== "paid") continue;
             if (!await storageRemove(photo.storage_path)) { retentionFailed++; continue; }
             if (!await dbDelete("gh_photos", `id=eq.${photo.id}`)) { retentionFailed++; continue; }
             retentionDeleted++;
@@ -993,10 +1015,16 @@ export default async function handler(req: Req, res: Res) {
     // a route (Vercel Hobby allows 12 functions and the site has 12).
     let orphanPhotosDeleted = 0;
     let orphanPhotosFailed = 0;
+    let orphanPhotosTruncated = false;
     try {
       const orphan = await cleanupOrphanPhotos({ nowMs: now });
       orphanPhotosDeleted = orphan.deleted;
       orphanPhotosFailed = orphan.failed;
+      // DA-05: a truncated listing means the bucket was not fully
+      // walked — the rest waits for the next run, and the log says so
+      // instead of silently reporting a clean run.
+      orphanPhotosTruncated = orphan.truncated;
+      if (orphan.truncated) log("orphan_cleanup_truncated", { deleted: orphan.deleted, checked: orphan.checked });
     } catch (err) {
       logErr("orphan_cleanup", err);
     }
@@ -1182,12 +1210,12 @@ export default async function handler(req: Req, res: Res) {
       logErr("entry_reminder", err);
     }
 
-    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned, orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed });
+    log("run_complete", { checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded, entry_reminded: entryReminded, entry_cleaned: entryCleaned, orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed, orphan_photos_truncated: orphanPhotosTruncated });
     res.status(200).json({
       requestId, ok: true,
       checked: candidates.length, due: due.length, charged, skipped, failed, reminded, early_reminded: earlyReminded, cleaned, receipts, synced, sync_needed: syncNeeded,
       entry_reminded: entryReminded, entry_cleaned: entryCleaned, photo_retention_deleted: retentionDeleted, photo_retention_failed: retentionFailed,
-      orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed,
+      orphan_photos_deleted: orphanPhotosDeleted, orphan_photos_failed: orphanPhotosFailed, orphan_photos_truncated: orphanPhotosTruncated,
     });
   } catch (error: unknown) {
     logErr("unexpected", error);

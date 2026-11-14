@@ -1034,7 +1034,25 @@ async function hydrateCustomerMeta(
     gh_proposed_date: evStr(proposal, "date"),
     gh_alt_dates: declined ? evStr(proposal, "alt_dates") : "",
     gh_issue_resolved_at: resolved?.created_at ?? "",
-    gh_reclean_date: evStr(resolved, "reclean_date"),
+    // DA-01: the re-clean date lives on the issue_decision event
+    // (issue_arrange_reclean logs reclean_date there); the
+    // issue_resolved event carries it only for the legacy resolve
+    // path. When both exist, the NEWER agreement wins (see
+    // journalRecleanDate in api/cleaner.ts); a non-reclean latest
+    // decision cancels any earlier re-clean.
+    gh_reclean_date: (() => {
+      const decisionEv = latestEvent(events, "issue_decision");
+      const decided = decisionEv?.detail?.["decision"];
+      if (typeof decided === "string" && decided !== "reclean") return "";
+      const valid = (d: unknown): string =>
+        typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+      const dValid = valid(decisionEv?.detail?.["reclean_date"]);
+      const rValid = valid(resolved?.detail?.["reclean_date"]);
+      if (decisionEv && resolved) {
+        return resolved.created_at > decisionEv.created_at ? rValid : dValid;
+      }
+      return dValid || rValid;
+    })(),
     gh_cancel_scope: evStr(cancelledEv, "scope"),
     gh_cancel_fee_cents: cancelledEv?.detail?.["fee_cents"] != null ? String(cancelledEv.detail["fee_cents"]) : "",
     gh_fee_charged: latestEvent(events, "fee_charged") || latestEvent(events, "cancellation_fee_paid") ? "1" : "",
@@ -3696,9 +3714,25 @@ export default async function handler(req: Req, res: Res) {
       const recleanCleanerId = (row as unknown as { reclean_cleaner_id?: string | null }).reclean_cleaner_id
         ?? (row as unknown as { cleaner_id?: string | null }).cleaner_id ?? null;
       const recleanDate = (row as unknown as { reclean_date?: string | null }).reclean_date
-        ?? (typeof latestEvent(events, "issue_resolved")?.detail?.["reclean_date"] === "string"
-          ? (latestEvent(events, "issue_resolved")!.detail!["reclean_date"] as string)
-          : null)
+        // DA-01: the re-clean date lives on the issue_decision event
+        // (issue_arrange_reclean logs it there); the issue_resolved
+        // event carries it only for the legacy resolve path. When
+        // both exist, the NEWER agreement wins (see journalRecleanDate
+        // in api/cleaner.ts).
+        ?? (() => {
+          const decisionEv = latestEvent(events, "issue_decision");
+          const resolvedEv = latestEvent(events, "issue_resolved");
+          const valid = (d: unknown): string | null =>
+            typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+          const dValid = latestIssueDecision(events)?.decision === "reclean"
+            ? valid(decisionEv?.detail?.["reclean_date"])
+            : null;
+          const rValid = valid(resolvedEv?.detail?.["reclean_date"]);
+          if (decisionEv && resolvedEv) {
+            return resolvedEv.created_at > decisionEv.created_at ? rValid : dValid;
+          }
+          return dValid ?? rValid;
+        })()
         ?? row.visit_date ?? null;
       const saved = await saveAccess({
         visitId: row.id, bookingId, method: "arrange",

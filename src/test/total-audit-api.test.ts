@@ -55,7 +55,14 @@ beforeEach(()=>{
    }
    if(table==="gh_photos"){
     if(m==="DELETE"){deletePhotoRequests.push(u.searchParams.get("id")??"");photoRows=photoRows.filter(p=>"eq."+p.id!==u.searchParams.get("id"));return ok([]);}
-    if(u.searchParams.get("select")?.includes("gh_visits!inner")) return ok(u.searchParams.get("gh_visits.report_sent_at")==="is.null" ? [] : photoRows.filter(p=>oldVisits.some(v=>v.id===p.visit_id)));
+    if(u.searchParams.get("select")?.includes("gh_visits!inner")) {
+      // DA-04: the retention pass selects the embedded visit and
+      // deletes only paid ones — the mock embeds the visit row the
+      // way PostgREST does, and honours the status filter.
+      if (u.searchParams.get("gh_visits.report_sent_at")==="is.null") return ok([]);
+      const statusEq = u.searchParams.get("gh_visits.status");
+      return ok(photoRows.filter(p=>oldVisits.some(v=>v.id===p.visit_id && (!statusEq || !statusEq.startsWith("eq.") || v.status===statusEq.slice(3)))).map(p=>({...p, gh_visits: oldVisits.find(v=>v.id===p.visit_id)})));
+    }
     return ok(photoRows.filter(p=>"eq."+p.visit_id===u.searchParams.get("visit_id")));
    }
    return ok([]);
@@ -115,9 +122,9 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
   expect(r.code).toBe(200);expect(inserts[0]?.amount_cents).toBe(18400);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/oven/i);
  });
  it("retention reaches visit 21 after the first 20 old visits have no photos",async()=>{
-  oldVisits=Array.from({length:21},(_,i)=>({id:"old-"+i,booking_id:"old-bid-"+i}));photoRows=[{id:"photo-last",visit_id:"old-20",storage_path:"visits/old-20/photo.jpg"}];await cron();await cron();expect(deletePhotoRequests).toContain("eq.photo-last");
+  oldVisits=Array.from({length:21},(_,i)=>({id:"old-"+i,booking_id:"old-bid-"+i,status:"paid"}));photoRows=[{id:"photo-last",visit_id:"old-20",storage_path:"visits/old-20/photo.jpg"}];await cron();await cron();expect(deletePhotoRequests).toContain("eq.photo-last");
  });
- it("a storage-delete failure preserves the database row so deletion can be retried",async()=>{oldVisits=[{id:"old-1",booking_id:"old-bid-1"}];photoRows=[{id:"retry-photo",visit_id:"old-1",storage_path:"visits/old-1/photo.jpg"}];failStorage=true;await cron();expect(deletePhotoRequests).toHaveLength(0);});
+ it("a storage-delete failure preserves the database row so deletion can be retried",async()=>{oldVisits=[{id:"old-1",booking_id:"old-bid-1",status:"paid"}];photoRows=[{id:"retry-photo",visit_id:"old-1",storage_path:"visits/old-1/photo.jpg"}];failStorage=true;await cron();expect(deletePhotoRequests).toHaveLength(0);});
  it("a new requested booking does not inherit the cancelled state of an older booking with the same email",async()=>{foreignBinding=true;const r=response();await ownerActionHandler({method:"POST",headers:{authorization:"Bearer audit-owner"},body:{action:"status",booking_id:BID}},r as never);expect(r.code).toBe(200);expect(r.body.state).not.toBe("cancelled");});
  it("a cancellation does not claim success when both its visit and journal writes failed",async()=>{failVisitUpdates=true;failEventWrites=true;const r=response();await visitHandler({method:"POST",headers:{},body:{action:"cancel",scope:"once",bt:token()}},r as never);expect(r.body.ok).toBe(false);});
  it("a failed booking insert sends no success emails",async()=>{failVisitInsert=true;const r=response();await quoteHandler(quoteRequest(),r as never);expect(r.body.ok).toBe(false);expect(emails).toHaveLength(0);});

@@ -406,3 +406,89 @@ describe("M5c cleanupOrphanPhotos", () => {
   // allows 12 Serverless Functions and the site already has 12, so a
   // 13th route fails the deployment. The cron is the only trigger.
 });
+
+// ---------- DA-05: pagination + partial cleanup at the cap ----------
+
+describe("DA-05: listing pages past 100 objects, never skips a run at the 500 cap", () => {
+  // A Storage-list mock that honours the real endpoint's contract:
+  // sortBy name asc, limit + offset paging. The old mock returned
+  // the whole level at once, which hid the missing pagination.
+  function installPagedCleanupMock(fileCount: number, registeredPaths: string[]) {
+    const deleted: string[] = [];
+    const files: Record<string, ListEntry[]> = {
+      "visits/": [{ name: VISIT_ID, id: null }],
+      [`visits/${VISIT_ID}/`]: [{ name: "kitchen", id: null }],
+      [`visits/${VISIT_ID}/kitchen/`]: Array.from({ length: fileCount }, (_, i) => ({
+        name: `f${String(i).padStart(3, "0")}.jpg`, id: `f-${i}`, updated_at: hoursAgo(30), metadata: { size: 100 },
+      })),
+    };
+    const registered = new Set(registeredPaths);
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const okRes = (data: unknown, status = 200) => ({
+        ok: status >= 200 && status < 300, status,
+        json: async () => data, text: async () => JSON.stringify(data),
+        headers: { get: () => null },
+      });
+      if (u.includes("/storage/v1/object/list/")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prefix?: string; limit?: number; offset?: number };
+        const all = [...(files[body.prefix ?? ""] ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+        return okRes(all.slice(body.offset ?? 0, (body.offset ?? 0) + (body.limit ?? 100)));
+      }
+      if (u.includes("/storage/v1/object/report-photos") && method === "DELETE") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prefixes?: string[] };
+        for (const p of body.prefixes ?? []) deleted.push(p);
+        return okRes({});
+      }
+      if (u.includes("/rest/v1/gh_photos")) {
+        if (u.includes("select=storage_path")) {
+          return okRes([...registered].map((storage_path) => ({ storage_path })));
+        }
+        const m = /storage_path=eq\.([^&]+)/.exec(u);
+        if (m) return okRes(registered.has(decodeURIComponent(m[1])) ? [{ id: "x" }] : []);
+        return okRes([]);
+      }
+      if (u.includes("/rest/v1/gh_visits")) {
+        return okRes([{ id: VISIT_ID, issue_open: false, issue_ever: false }]);
+      }
+      if (u.includes("/rest/v1/gh_events") && method === "POST") {
+        return okRes([{ id: 1 }], 201);
+      }
+      return okRes(null, 404);
+    }));
+    return { deleted };
+  }
+
+  it("101 objects: pagination finds the orphan past the first 100 (all 100 first are registered)", async () => {
+    const allPaths = Array.from({ length: 101 }, (_, i) => `visits/${VISIT_ID}/kitchen/f${String(i).padStart(3, "0")}.jpg`);
+    // The first 100 (alphabetically) are registered; only the 101st
+    // is an orphan. Without paging the listing would stop at 100
+    // registered objects and the orphan would never be seen.
+    const { deleted } = installPagedCleanupMock(101, allPaths.slice(0, 100));
+    const listed = await storageListObjects("visits/", 500);
+    expect(listed).not.toBeNull();
+    expect(listed!.objects).toHaveLength(101);
+    expect(listed!.truncated).toBe(false);
+    const result = await cleanupOrphanPhotos();
+    expect(result.deleted).toBe(1);
+    expect(result.truncated).toBe(false);
+    expect(deleted).toEqual([allPaths[100]]);
+  });
+
+  it("501 objects: the run cleans the listed part instead of silently doing nothing", async () => {
+    const { deleted } = installPagedCleanupMock(501, []);
+    const listed = await storageListObjects("visits/", 500);
+    expect(listed).not.toBeNull();
+    expect(listed!.objects).toHaveLength(500);
+    expect(listed!.truncated).toBe(true);
+    const result = await cleanupOrphanPhotos();
+    // The 500-object cap truncates the listing, but the run still
+    // works through what was listed — up to the 50-deletion cap —
+    // instead of returning {checked: 0, deleted: 0} as before.
+    expect(result.truncated).toBe(true);
+    expect(result.checked).toBe(50);
+    expect(result.deleted).toBe(50);
+    expect(deleted).toHaveLength(50);
+  });
+});

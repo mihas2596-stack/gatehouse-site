@@ -129,6 +129,15 @@ type ReportData = {
   reclean_cleaner_name?: string;
   no_photo_zones?: string[];
   error?: string;
+  // 3DS (DA-03, mirrored from /report): when the saved card needs
+  // cardholder authentication the server answers approve with 402
+  // payment_requires_action and these fields — the PaymentIntent's
+  // client_secret and the account's publishable key — so the client
+  // can complete the challenge with Stripe.js and then re-approve.
+  // Absent on every other response.
+  client_secret?: string;
+  publishable_key?: string;
+  payment_intent?: string;
 };
 
 const fmtDeadline = (iso: string): string => {
@@ -190,25 +199,78 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
     reload();
   }, [reload]);
 
+  // 3DS (DA-03, mirrored from /report): complete the cardholder
+  // authentication for a PaymentIntent the server already confirmed
+  // and left in requires_action. Returns true when the challenge
+  // finished without error; the caller then re-approves once so the
+  // server reconciles the (now succeeded) intent and marks the visit
+  // paid. Returns false (and sets the message) when the challenge
+  // cannot start or the cardholder fails or cancels it — no charge is
+  // made and nothing retries on its own. Stripe.js is loaded lazily,
+  // only when a 3DS challenge is actually needed.
+  const complete3DS = async (clientSecret: string, publishableKey: string): Promise<boolean> => {
+    if (!publishableKey) {
+      setErr("Your card needs extra verification to complete this payment, and we couldn't start it — please email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    let stripe: Awaited<ReturnType<typeof import("@stripe/stripe-js").loadStripe>>;
+    try {
+      const { loadStripe } = await import("@stripe/stripe-js");
+      stripe = await loadStripe(publishableKey);
+    } catch {
+      setErr("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    if (!stripe) {
+      setErr("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    const { error } = await stripe.handleCardAction(clientSecret);
+    if (error) {
+      setErr(error.message || "The card verification didn't complete — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
+      return false;
+    }
+    return true;
+  };
+
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
     setErr("");
     setNeedsCardChoice(false);
     try {
-      const r = await fetch("/api/report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bt,
-          ...payload,
-          // RA08: pay only for the publication this tab actually
-          // showed; a stale tab gets report_changed, not a charge.
-          ...(payload.action === "approve" ? { seen_publication_id: rep?.publication_id ?? undefined } : {}),
-          // The issue photo travels with the complaint (Terms §7).
-          ...(payload.action === "issue" && issuePhoto ? { photo: issuePhoto } : {}),
-        }),
-      });
-      const j = (await r.json()) as ReportData & { ok: boolean };
+      const postReport = async (): Promise<ReportData & { ok: boolean }> => {
+        const r = await fetch("/api/report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bt,
+            ...payload,
+            // RA08: pay only for the publication this tab actually
+            // showed; a stale tab gets report_changed, not a charge.
+            ...(payload.action === "approve" ? { seen_publication_id: rep?.publication_id ?? undefined } : {}),
+            // The issue photo travels with the complaint (Terms §7).
+            ...(payload.action === "issue" && issuePhoto ? { photo: issuePhoto } : {}),
+          }),
+        });
+        return (await r.json()) as ReportData & { ok: boolean };
+      };
+      let j = await postReport();
+      // 3DS (DA-03, mirrored from /report): the saved card needs the
+      // cardholder's authentication. Complete the challenge in this
+      // browser, then approve once more so the server reconciles the
+      // same intent — the create key is bound to booking + version +
+      // card, so the re-approve cannot mint a second charge. Done at
+      // most once per tap: if the re-approve still needs action, the
+      // message below (not a loop) tells the client to try again or
+      // email us.
+      if (payload.action === "approve" && j && j.error === "payment_requires_action" && j.client_secret) {
+        const done = await complete3DS(j.client_secret, j.publishable_key ?? "");
+        if (!done) {
+          setBusy(false);
+          return;
+        }
+        j = await postReport();
+      }
       // N26 (mirrored from /report): the expired-window 409s carry no
       // `state`, so they must be handled before the state gate below —
       // otherwise the client only gets the generic error. The form
@@ -240,6 +302,14 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         }
         if (j.error === "payment_processing") {
           setErr("Processing payment — a charge for this visit is already in progress. Please wait a moment and refresh; you won't be charged twice.");
+        }
+        // 3DS (DA-03): the challenge did not finish the payment —
+        // either the first answer carried no client_secret, or the
+        // re-approve after the challenge still needs action. Say so
+        // plainly and do not loop: the client tries again or emails
+        // us. No charge was made.
+        if (j.error === "payment_requires_action") {
+          setErr("Your card needs extra verification to complete this payment — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
         }
         // H1: the charge outcome is unknown — the payment may or may
         // not have gone through. Never show this as approved; the

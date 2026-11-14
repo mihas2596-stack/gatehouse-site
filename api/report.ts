@@ -151,17 +151,28 @@ export function effectiveGateDate(
 
 /** G3: the re-clean date from the journal, mirroring
  * journalRecleanDate in api/cleaner.ts — the fallback for rows
- * arranged before migration 20261112_reclean_fields. A date counts
- * only when the latest decision was a re-clean; any other decision
- * means no re-clean was arranged. Events are newest-first, so the
- * first match is the latest. */
+ * arranged before migration 20261112_reclean_fields. DA-01: the date
+ * lives on the issue_decision event (issue_arrange_reclean logs
+ * reclean_date there); the legacy resolve path logs it on
+ * issue_resolved instead. A date counts only when the latest decision
+ * was a re-clean; any other decision means no re-clean was arranged.
+ * When both events exist, the NEWER agreement wins — the arrange
+ * path leaves the issue open, so a later legacy resolve can re-agree
+ * the date; a dateless newer agreement means no date is agreed.
+ * Events are newest-first, so the first match is the latest. */
 function journalRecleanDateFromEvents(events: BookingEvent[]): string {
   const decision = events.find((e) => e.event === "issue_decision");
   const decided = decision?.detail?.["decision"];
   if (typeof decided === "string" && decided !== "reclean") return "";
   const resolved = events.find((e) => e.event === "issue_resolved");
-  const d = resolved?.detail?.["reclean_date"];
-  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const valid = (d: unknown): string =>
+    typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
+  const dValid = valid(decision?.detail?.["reclean_date"]);
+  const rValid = valid(resolved?.detail?.["reclean_date"]);
+  if (decision && resolved) {
+    return resolved.created_at > decision.created_at ? rValid : dValid;
+  }
+  return dValid || rValid;
 }
 async function findCustomerByEmail(
   secretKey: string,
@@ -251,7 +262,7 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[]): Record<str
       typeof row.reclean_date === "string" && row.reclean_date
         ? row.reclean_date
         : resolved && !issueOpen
-          ? evStr(resolved, "reclean_date")
+          ? journalRecleanDateFromEvents(events)
           : "",
   };
 }
