@@ -31,7 +31,7 @@ import { chargeVisit } from "./_payment_obligation.js";
 import { isFutureVisitDate } from "./_visit_date.js";
 import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { loadAccess } from "./_visit_access.js";
-import { cleanupOrphanPhotos } from "./storage-cleanup.js";
+import { cleanupOrphanPhotos } from "./_storage-cleanup.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
@@ -986,10 +986,11 @@ export default async function handler(req: Req, res: Res) {
     // M5: orphan-photo cleanup — objects signed for upload but never
     // registered (the sign→register gap) are NOT covered by the 90-day
     // retention pass above (it only deletes REGISTERED photos). The
-    // admin-only /api/storage-cleanup handler does the same run on
-    // demand; the cron runs it here, best-effort. No free Vercel cron
-    // slot exists (both slots are this endpoint, 10:00 and 22:00), so
-    // this piggybacks the existing run instead of a new schedule.
+    // cron runs it here, best-effort. No free Vercel cron slot exists
+    // (both slots are this endpoint, 10:00 and 22:00), so this
+    // piggybacks the existing run instead of a new schedule. There is
+    // no on-demand endpoint: api/_storage-cleanup.ts is a helper, not
+    // a route (Vercel Hobby allows 12 functions and the site has 12).
     let orphanPhotosDeleted = 0;
     let orphanPhotosFailed = 0;
     try {

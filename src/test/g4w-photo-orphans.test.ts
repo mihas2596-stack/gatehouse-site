@@ -15,8 +15,7 @@ import {
   cleanupOrphanPhotos,
   storageListObjects,
   ORPHAN_MIN_AGE_MS,
-} from "../../api/storage-cleanup";
-import storageCleanupHandler from "../../api/storage-cleanup";
+} from "../../api/_storage-cleanup";
 import cleanerHandler from "../../api/cleaner";
 import { mintCleanerLinkV2 } from "../../api/_cleaner_link";
 import { hashToken } from "../../api/_db";
@@ -402,18 +401,8 @@ describe("M5c cleanupOrphanPhotos", () => {
     expect(deleted).not.toContain(`visits/${OTHER_VISIT}/kitchen/ghost.jpg`);
   });
 
-  it("the admin handler refuses without auth and runs with it", async () => {
-    installCleanupMock();
-    const unauth = res();
-    await storageCleanupHandler(
-      { method: "POST", headers: { authorization: "Bearer wrong" } } as never, unauth as never,
-    );
-    expect(unauth.code).toBe(401);
-    const authed = res();
-    await storageCleanupHandler(
-      { method: "POST", headers: { authorization: "Bearer " + "test-admin-token-123" } } as never, authed as never,
-    );
-    expect(authed.code).toBe(200);
-    expect(authed.body["deleted"]).toBe(1);
-  });
+  // The on-demand admin handler for this run is gone: the module is a
+  // helper (api/_storage-cleanup.ts), not a route — Vercel Hobby
+  // allows 12 Serverless Functions and the site already has 12, so a
+  // 13th route fails the deployment. The cron is the only trigger.
 });

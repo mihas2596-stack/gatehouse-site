@@ -40,7 +40,7 @@ import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit
 export { isFutureVisitDate };
 // M5: orphan accounting — objects signed for upload but never
 // registered are listed from Storage and counted against the cap.
-import { countUnregisteredObjects, storageListObjects } from "./storage-cleanup.js";
+import { countUnregisteredObjects, storageListObjects } from "./_storage-cleanup.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
 import { photoBlocked } from "./_photo_policy.js";
 import { reportEmail } from "./_email_copy.js";
@@ -118,7 +118,7 @@ const EDITABLE = new Set(["none", "draft", "returned"]);
 // M5: at most this many signed-but-unregistered uploads may pile up
 // for one visit. Each sign-then-abandon leaves an orphan object in
 // Storage; the cap bounds the pile-up, and the periodic cleanup in
-// api/storage-cleanup.ts removes the rest.
+// api/_storage-cleanup.ts removes the rest.
 const MAX_UNREGISTERED_PHOTOS = 10;
 
 const roomSlug = (room: string): string =>
