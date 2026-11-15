@@ -41,13 +41,13 @@ export const PRICES: Record<"standardOnetime" | "deep" | "moveinout" | "recurrin
 export const SERVICE_OPTIONS: { key: CalcServiceKey; label: string; tagline: string }[] = [
   { key: "standard", label: "Standard", tagline: "Every room, top to bottom" },
   { key: "deep", label: "Deep", tagline: "A detailed clean with oven, fridge, and cabinet interiors included." },
-  { key: "moveinout", label: "Move-in / Move-out", tagline: "A full clean for an empty home when you're moving in or out." },
+  { key: "moveinout", label: "Move-in / Move‑out", tagline: "A full clean for an empty home when you're moving in or out." },
 ];
 
 export const SERVICE_LABEL_CALC: Record<CalcServiceKey, string> = {
   standard: "Standard",
   deep: "Deep",
-  moveinout: "Move-in / Move-out",
+  moveinout: "Move-in / Move‑out",
 };
 
 export const FREQUENCY_OPTIONS: { key: FrequencyKey; label: string }[] = [
