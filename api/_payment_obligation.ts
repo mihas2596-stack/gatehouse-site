@@ -169,7 +169,7 @@ async function stripePost(secretKey: string, ...args: Parameters<StripePost>): R
   return { ok: res.ok, status: res.status, data };
 }
 
-export async function chargeVisit(input: {
+export type ChargeInput = {
   secretKey: string;
   bookingId: string;
   customerId: string;
@@ -181,7 +181,85 @@ export async function chargeVisit(input: {
   seenPublicationId?: string | null;
   nowMs: number;
   deps: ChargeDeps;
-}): Promise<ChargeOutcome> {
+};
+
+// MB-07/DA-16: a dispute resolved so the visit could be paid must not
+// stay closed when the charge then fails to settle. The old helper
+// reopened only on a TERMINAL charge failure; blocked/unknown outcomes
+// (basis lost between the resolve and the charge, a mismatched intent,
+// a lost Stripe response, a DB read failure) left the same hole: no
+// payment, no open issue, no timer — a closed dispute the owner never
+// sees again. Reopen on every unsettled outcome: an open issue blocks
+// future charges until it is resolved again, and a paid visit with an
+// open issue is the honest post-payment state (RA07). Never reopen
+// when the visit is paid/cancelled/refunded, when the charge was
+// waived (terminal), while a 3DS challenge is still live
+// (payment_requires_action — the client completes it and re-approves),
+// or while an intent is still processing (the money may still land).
+// Reads FRESH journal state: an issue that opened during the charge
+// is already open and needs no reopen, and a visit that was never
+// disputed has nothing to reopen. Only a RESOLVED dispute reopens:
+// an issue_resolved event newer than the latest issue_opened proves
+// the dispute was closed for this charge. The row update is verified
+// by changed-row count; a lost race (the owner or client reopened it
+// first) is a no-op.
+export async function reopenIssueAfterUnsettledCharge(
+  bookingId: string,
+  source: string,
+  outcome: ChargeOutcome,
+): Promise<void> {
+  if (outcome.outcome === "processing") return;
+  if (outcome.outcome === "failed" && outcome.error === "payment_requires_action") return;
+  const freshEv = await loadEvents(bookingId);
+  if (!freshEv.ok) return;
+  const freshEvents = freshEv.events;
+  const freshRow = await loadRow(bookingId);
+  if (!freshRow.ok || !freshRow.row) return;
+  const row = freshRow.row;
+  if (row.status === "paid" || row.status === "cancelled" || row.status === "refunded") return;
+  if (everWaivedDecision(freshEvents) || row.charge_waived === true) return;
+  const issue = issueStateFrom(
+    freshEvents,
+    row.issue_open ?? null,
+    row.issue_ever ?? null,
+  );
+  if (!issue.ever || issue.open) return;
+  let openedAt = "";
+  let resolvedAt = "";
+  for (const e of freshEvents) {
+    if (e.event === "issue_opened" && e.created_at > openedAt) openedAt = e.created_at;
+    if (e.event === "issue_resolved" && e.created_at > resolvedAt) resolvedAt = e.created_at;
+  }
+  if (!openedAt || !resolvedAt || resolvedAt < openedAt) return;
+  const reopened = await dbUpdateCount(
+    "gh_visits",
+    `id=eq.${row.id}&issue_open=neq.true`,
+    { issue_open: true },
+  );
+  if (reopened === 1) {
+    await logEvent(row.id, bookingId, "system", "issue_opened", {
+      reason: "charge_unsettled_after_resolve",
+      via: source,
+      outcome: outcome.outcome,
+      ...("error" in outcome && outcome.error ? { error: outcome.error } : {}),
+    });
+  }
+}
+
+export async function chargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
+  // MB-07: the charge is the settlement of a resolve-and-pay, so an
+  // unsettled outcome reopens the dispute it was meant to settle
+  // (see reopenIssueAfterUnsettledCharge). The timer never settles a
+  // dispute — its basis already requires "no issue ever" — so a
+  // blocked timer attempt must NOT undo an owner's resolution.
+  const outcome = await runChargeVisit(input);
+  if (outcome.outcome !== "paid" && input.source !== "timer_24h") {
+    await reopenIssueAfterUnsettledCharge(input.bookingId, input.source, outcome);
+  }
+  return outcome;
+}
+
+async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   const { secretKey, bookingId, customerId, source, deps } = input;
   const rowRes = await loadRow(bookingId);
   if (!rowRes.ok) return { outcome: "unknown", error: "db_unreadable" };
@@ -264,7 +342,7 @@ export async function chargeVisit(input: {
       if (rec.intent.status === "processing") {
         return { outcome: "processing", payment_intent: rec.intent.id };
       }
-      return confirmExisting(rec.intent.id, rec.intent.amount);
+      return confirmExisting(rec.intent.id, rec.intent.amount, input.nowMs);
     }
     if (rec.state === "mismatch") {
       return { outcome: "mismatch", error: "payment_intent_mismatch", detail: rec.reason };
@@ -416,7 +494,7 @@ export async function chargeVisit(input: {
     if (rec.intent.status === "processing") {
       return { outcome: "processing", payment_intent: rec.intent.id };
     }
-    return confirmExisting(rec.intent.id, rec.intent.amount);
+    return confirmExisting(rec.intent.id, rec.intent.amount, input.nowMs);
   }
 
   // --- C11: re-check the issue on FRESH data immediately before
@@ -551,7 +629,10 @@ export async function chargeVisit(input: {
   // N06: the attempt's parameters are journaled BEFORE the Stripe
   // call (payment_confirm_started), so an unknown outcome is
   // recoverable; the key is bound to (booking, intent, card).
-  async function confirmExisting(piId: string, intentAmountCents?: number): Promise<ChargeOutcome> {
+  // LB-09: the revalidation clock is the charge's threaded nowMs,
+  // not Date.now() — the confirm path is testable against fixed
+  // hours like the rest of the charge.
+  async function confirmExisting(piId: string, intentAmountCents?: number, nowMs: number = input.nowMs): Promise<ChargeOutcome> {
     const revalidation = await (async (): Promise<string | null> => {
       const fr = await loadRow(bookingId);
       if (!fr.ok) return "db_unreadable";
@@ -569,7 +650,7 @@ export async function chargeVisit(input: {
       // Payment-date gate (B): confirming a live intent is a NEW money
       // operation — it must not pay for a visit that has not happened
       // yet, even if the claim was made when the date was current.
-      if (isFutureVisitDate(effectiveVisitDate(confirmedDateOf(fevents), frow.visit_date), Date.now())) {
+      if (isFutureVisitDate(effectiveVisitDate(confirmedDateOf(fevents), frow.visit_date), nowMs)) {
         return "report_too_early";
       }
       if (issueStateFrom(fevents, frow.issue_open ?? null, frow.issue_ever ?? null).open) {
@@ -602,7 +683,7 @@ export async function chargeVisit(input: {
           // Fix round 2: a refunded visit has no basis.
           status: frow.status ?? null,
         },
-        Date.now(),
+        nowMs,
       );
       if (!fbasis || !input.allowedBases.includes(fbasis)) return "payment_basis_missing";
       if (source === "timer_24h" && !latestDeliveredSent(fevents)) {
@@ -690,55 +771,15 @@ export async function chargeVisit(input: {
     // H4: resolve-and-pay is not atomic — the owner may have resolved
     // the dispute (closing it) and the charge then fails. The client
     // cannot reopen it: the 24h complaint window runs from
-    // report_sent_at and may have expired. Reopen the dispute on a
-    // terminal charge failure so the owner sees it again and the
-    // client gets a fresh path to report. Requires_action is NOT a
-    // failure (the client can still complete 3DS and re-approve) and
-    // unknown outcomes are NOT reopened (the money may have moved;
-    // reconciliation decides) — this branch only runs for terminal
-    // failures.
-    await reopenIssueAfterFailedCharge();
+    // report_sent_at and may have expired. MB-07: the dispute is
+    // reopened by the chargeVisit wrapper
+    // (reopenIssueAfterUnsettledCharge) for every unsettled outcome,
+    // not just terminal failures — a blocked or unknown charge leaves
+    // the same closed-dispute / no-payment hole. Requires_action is
+    // NOT a failure (the client can still complete 3DS and
+    // re-approve) and a processing intent is NOT reopened (the money
+    // may still land); both are excluded there.
     await deps.sendPaymentFailedEmail(row.id);
     return { outcome: "failed", error: "payment_failed", detail: errMsg, status };
-  }
-
-  // H4: reopen a resolved dispute when the charge that was supposed to
-  // settle it fails. Reads FRESH journal state: an issue that opened
-  // during the charge (after the create) is already open and needs no
-  // reopen, and a visit that was never disputed has nothing to reopen.
-  // The row update is verified by changed-row count; a lost race (the
-  // owner or client reopened it first) is a no-op.
-  async function reopenIssueAfterFailedCharge(): Promise<void> {
-    const freshEv = await loadEvents(bookingId);
-    if (!freshEv.ok) return;
-    const freshEvents = freshEv.events;
-    const freshRow = await loadRow(bookingId);
-    if (!freshRow.ok || !freshRow.row) return;
-    const issue = issueStateFrom(
-      freshEvents,
-      freshRow.row.issue_open ?? null,
-      freshRow.row.issue_ever ?? null,
-    );
-    if (!issue.ever || issue.open) return;
-    // Only a RESOLVED dispute reopens: an issue_resolved event newer
-    // than the latest issue_opened proves the owner closed it.
-    let openedAt = "";
-    let resolvedAt = "";
-    for (const e of freshEvents) {
-      if (e.event === "issue_opened" && e.created_at > openedAt) openedAt = e.created_at;
-      if (e.event === "issue_resolved" && e.created_at > resolvedAt) resolvedAt = e.created_at;
-    }
-    if (!openedAt || !resolvedAt || resolvedAt < openedAt) return;
-    const reopened = await dbUpdateCount(
-      "gh_visits",
-      `id=eq.${freshRow.row.id}&issue_open=neq.true`,
-      { issue_open: true },
-    );
-    if (reopened === 1) {
-      await logEvent(freshRow.row.id, bookingId, "system", "issue_opened", {
-        reason: "payment_failed_after_resolve",
-        via: source,
-      });
-    }
   }
 }

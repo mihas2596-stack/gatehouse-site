@@ -68,7 +68,11 @@ const Areas = () => {
         <div className="container relative text-center max-w-3xl">
           <p className="font-script text-xl text-[#9C5630] mb-2">Where We Serve</p>
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4 text-foreground">
-            House Cleaning in <span className="text-gradient-gold">7 North Atlanta Suburbs</span>
+            House Cleaning in{" "}
+            {/* Live-run #4: the "7" used to sit at the wrap edge of the
+                gradient span and crowd the line. The phrase is now its
+                own line, so the digit can never land on a break. */}
+            <span className="text-gradient-gold block">7 North Atlanta Suburbs</span>
           </h1>
           <p className="text-foreground text-lg">
             Seven North Atlanta suburbs, one simple routine.

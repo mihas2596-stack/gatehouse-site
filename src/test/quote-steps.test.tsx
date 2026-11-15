@@ -165,7 +165,7 @@ describe("quote steps", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "6" } });
     expect(screen.getByText(/Email us for a price/)).toBeInTheDocument();
-    expect(screen.getByText(/Homes with 6\+ bedrooms or 6\+ full bathrooms get an individual quote/)).toBeInTheDocument();
+    expect(screen.getByText(/Homes with 6\+ bedrooms or 6\+ full bathrooms get a custom quote/)).toBeInTheDocument();
   });
 
   it("step 2 asks how to arrange entry, with no preselection and no codes", () => {
@@ -237,7 +237,7 @@ describe("quote steps", () => {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
     fireEvent.click(screen.getByRole("radio", { name: /Decide later/ }));
-    expect(screen.getByText(/We’ll email you to agree on entry/)).toBeInTheDocument();
+    expect(screen.getByText(/We’ll email you to arrange entry/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("We’ll help you arrange it")).toBeInTheDocument();

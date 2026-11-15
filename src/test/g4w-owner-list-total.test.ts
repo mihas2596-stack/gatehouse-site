@@ -73,6 +73,7 @@ beforeEach(() => {
       return okRes(rows);
     }
     if (u.pathname.includes("/rest/v1/gh_photos")) return okRes([]);
+    if (u.pathname.includes("/rest/v1/gh_visit_access")) return okRes([]);
     if (u.pathname.includes("/rest/v1/gh_events")) {
       const qVisit = u.searchParams.get("visit_id");
       const qEv = u.searchParams.get("event");

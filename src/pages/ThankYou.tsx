@@ -9,7 +9,6 @@ type Plan = {
   service?: string;
   first?: number | null;
   recurring?: number | null;
-  firstIsDeep?: boolean;
 };
 
 type SubmissionState = {
@@ -243,7 +242,7 @@ const ThankYou = () => {
           <dt className="font-semibold">Service</dt>
           <dd>
             {serviceLabel}
-            {(plan.firstIsDeep || summaryBooking?.first_service === "deep") ? " · First visit: Deep clean" : ""}
+            {summaryBooking?.first_service === "deep" ? " · First visit: Deep clean" : ""}
           </dd>
         </div>
         {first !== null && (
@@ -311,7 +310,7 @@ const ThankYou = () => {
   if (card.kind === "cancelled" || card.kind === "unknown") {
     return shell(<div className="text-center">
       <h1 className="font-heading text-3xl font-bold mb-4">{card.kind === "cancelled" ? "This visit is cancelled" : "We couldn’t verify your card status"}</h1>
-      <p className="mb-6 text-lg">{card.kind === "cancelled" ? "No further card step is needed for this visit." : "Your request is saved. Check again before entering your card again."}</p>
+      <p className="mb-6 text-lg">{card.kind === "cancelled" ? "No further card step is needed for this visit." : "Your request is saved. Check again before entering your card."}</p>
       {card.kind === "unknown" && <Button variant="hero" size="lg" onClick={checkCard}>Check again</Button>}
       <p className="mt-6"><Link className="underline" to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link></p>
     </div>);

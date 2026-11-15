@@ -274,7 +274,7 @@ export function cleanerEntryView(
   },
   confirmed: boolean,
   events?: Array<{ event: string; created_at: string }>,
-): { method: EntryMethod | null; note: string; secret: string | null } | null {
+): { method: EntryMethod | null; note: string; secret: string | null; secret_undecryptable: boolean } | null {
   if (!row || !confirmed) return null;
   if (visit.status === "cancelled") return null;
   // H5: once the cleaner has finished the job (report submitted/sent),
@@ -307,9 +307,14 @@ export function cleanerEntryView(
   // cleaner for a scheduled re-clean, else the assigned cleaner.
   const effectiveCleanerId = recleanOpen && reclean!.cleanerId ? reclean!.cleanerId : visit.cleaner_id;
   if (!effectiveCleanerId || !row.assigned_cleaner_id || effectiveCleanerId !== row.assigned_cleaner_id) return null;
+  // LB-47: a stored secret that no longer decrypts (key rotated) is
+  // not the same as "no secret saved" — say so explicitly instead of
+  // returning secret: null and letting the cleaner guess.
+  const secret = decryptEntrySecret(row.entry_secret);
   return {
     method: row.entry_method,
     note: row.entry_note ?? "",
-    secret: decryptEntrySecret(row.entry_secret),
+    secret,
+    secret_undecryptable: row.entry_secret !== null && secret === null,
   };
 }

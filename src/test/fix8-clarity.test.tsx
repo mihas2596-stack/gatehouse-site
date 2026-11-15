@@ -147,7 +147,7 @@ describe("fix8 — clarity: step-1 validation is never silent", () => {
     fireEvent.click(screen.getByRole("radio", { name: /^Deep/ }));
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "300" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter a 5-digit ZIP code.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a 5-digit ZIP code, e.g. 30518.");
     expect(screen.queryByRole("heading", { name: "Your visit" })).not.toBeInTheDocument();
   });
 });

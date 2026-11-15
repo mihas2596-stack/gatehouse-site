@@ -4,7 +4,9 @@
 // visit date (confirmed date from the journal when set, else the
 // scheduled visit date). Both gates also share the validated
 // isFutureVisitDate from api/_visit_date.ts: an impossible calendar
-// date ("2026-13-40") is never treated as future.
+// date ("2026-13-40") is treated as future (MB-20, fail-closed —
+// a garbage date blocks the gate instead of letting a charge or a
+// submit through).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import cleanerHandler, { isFutureVisitDate as cleanerIsFuture, effectiveGateDate as cleanerGateDate } from "../../api/cleaner";
 import reportHandler, { isFutureVisitDate as reportIsFuture, effectiveGateDate as reportGateDate } from "../../api/report";
@@ -48,13 +50,13 @@ describe("effectiveGateDate is identical on both sides", () => {
 });
 
 describe("isFutureVisitDate (shared validated copy, both modules)", () => {
-  it("an impossible calendar date is never future", () => {
+  it("an impossible calendar date is treated as future (fail-closed)", () => {
     for (const fn of [cleanerIsFuture, reportIsFuture]) {
-      expect(fn("2026-13-40")).toBe(false);
-      expect(fn("2026-02-30")).toBe(false);
-      expect(fn("2026-00-10")).toBe(false);
-      expect(fn("2026-01-00")).toBe(false);
-      expect(fn("2026-04-31")).toBe(false);
+      expect(fn("2026-13-40")).toBe(true);
+      expect(fn("2026-02-30")).toBe(true);
+      expect(fn("2026-00-10")).toBe(true);
+      expect(fn("2026-01-00")).toBe(true);
+      expect(fn("2026-04-31")).toBe(true);
     }
   });
   it("a real future date is future; today, past and malformed are not", () => {
@@ -152,13 +154,13 @@ describe("cleaner submit gate (handler)", () => {
     return r;
   };
 
-  it("an impossible visit date is not treated as future — the gate passes", async () => {
+  it("an impossible visit date is treated as future — the gate blocks (fail-closed)", async () => {
     row["visit_date"] = "2026-13-40";
     events[0]["detail"] = { date: "2026-13-40", window: "midday" };
     const r = await submit();
-    // Past the date gate; the next failure is the missing photos.
-    expect(r.body["error"]).not.toBe("report_too_early");
-    expect(r.body["error"]).toBe("rooms_incomplete");
+    // MB-20: a garbage date must not let a submit through.
+    expect(r.code).toBe(400);
+    expect(r.body["error"]).toBe("report_too_early");
   });
 
   it("a real future visit date blocks the submit", async () => {
@@ -291,10 +293,10 @@ describe("report Approve date gate (handler)", () => {
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-  it("an impossible visit date is not treated as future — the gate passes", async () => {
+  it("an impossible visit date is treated as future — the gate blocks (fail-closed)", async () => {
     const r = await approve("2026-13-40");
-    expect(r.body["error"]).not.toBe("report_too_early");
-    expect(r.code).not.toBe(409);
+    expect(r.body["error"]).toBe("report_too_early");
+    expect(r.code).toBe(409);
   });
 
   it("a real future visit date blocks Approve with no charge", async () => {

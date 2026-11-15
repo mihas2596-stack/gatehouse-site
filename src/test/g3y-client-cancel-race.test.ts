@@ -109,7 +109,7 @@ beforeEach(() => {
     });
     if (u.hostname.includes("supabase")) {
       const table = u.pathname.split("/").pop() ?? "";
-      const list = table === "gh_visits" ? [row] : table === "gh_events" ? events : accessRows;
+      const list: Record<string, unknown>[] = table === "gh_visits" ? [row] : table === "gh_events" ? events : accessRows;
       if (method === "GET") return sbRes(applyDbFilters(list, u));
       if (method === "POST") {
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};

@@ -104,6 +104,59 @@ type GhEvent = { id: number; actor: string; event: string; detail: Record<string
 const money = (cents: number | null): string =>
   cents ? `$${(cents / 100).toFixed(2).replace(/\.00$/, "")}` : "—";
 
+// Live-run #7: Stripe returns the brand lowercase ("mastercard") —
+// show the proper name, not the raw value. Known brands map by name;
+// anything else gets each word capitalised.
+const CARD_BRAND_LABEL: Record<string, string> = {
+  visa: "Visa",
+  mastercard: "Mastercard",
+  amex: "American Express",
+  "american express": "American Express",
+  discover: "Discover",
+  diners: "Diners Club",
+  "diners club": "Diners Club",
+  jcb: "JCB",
+  unionpay: "UnionPay",
+};
+const formatCardBrand = (brand: string): string => {
+  const key = brand.trim().toLowerCase();
+  if (!key) return "Card";
+  return CARD_BRAND_LABEL[key] ?? key.replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
+// LB-20: server error codes are not owner-facing copy — map the known
+// ones to plain language. Unknown codes fall back to a generic line
+// (the raw code is never shown: it means nothing to the owner and
+// reads as a crash).
+const humanActionError = (error: unknown): string => {
+  const code = typeof error === "string" ? error : "";
+  switch (code) {
+    case "payment_requires_action":
+      return "The card needs extra verification — only the client can finish this on their report page. Ask the client to approve on /report; the owner charge cannot complete it.";
+    case "checklist_stale":
+      return "This visit changed in another tab — refresh the visit and try again.";
+    case "needs_reminder_confirm":
+      return "No reminder was sent for this report yet — confirm to charge without a reminder.";
+    case "report_locked":
+      return "This report is locked — refresh the visit to see its current state before retrying.";
+    case "invalid_link":
+    case "visit_not_found":
+    case "booking_not_found":
+      return "This visit could not be found — refresh the list and try again.";
+    case "db_error":
+    case "server_error":
+    case "db_not_configured":
+      return "The server could not complete this — try again in a moment.";
+    case "fee_charge_failed":
+      return "The $25 fee could not be charged to the saved card — check the card and try again.";
+    case "card_not_found":
+    case "no_card":
+      return "There is no saved card for this booking — the client needs to save one first.";
+    default:
+      return "Something went wrong — try again.";
+  }
+};
+
 // TASK 1 (fix6): short "opened 3h ago" label for the Open issues block.
 const timeAgo = (iso: string | null | undefined): string => {
   const ms = Date.parse(iso ?? "");
@@ -319,6 +372,12 @@ const Owner = () => {
   const [returnNote, setReturnNote] = useState("");
   const [issueReason, setIssueReason] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  // MB-27: while a search is active, older pages auto-load so the
+  // search covers the whole history, not just the first page.
+  const [loadingAll, setLoadingAll] = useState(false);
+  const nextOffsetRef = useRef<number | null>(null);
+  const loadAllRef = useRef(false);
+  useEffect(() => { nextOffsetRef.current = nextOffset; }, [nextOffset]);
   const [filter, setFilter] = useState<OwnerFilter>("attention");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
@@ -431,10 +490,16 @@ const Owner = () => {
   // Task 7: returns the fetched list (null on failure) so a card
   // action can re-open the visit from post-action data instead of
   // the pre-action snapshot — see reloadOpenVisit below.
-  const loadList = useCallback(async (): Promise<Visit[] | null> => {
+  // MB-27: a failed load never wipes the loaded list — a transient
+  // 502 used to blank the whole cabinet (setVisits([])). Only an
+  // unauthorized session clears it (the session itself is gone).
+  // silent: polling refetches must not flash the spinner or clear the
+  // error line on every tick.
+  const loadList = useCallback(async (opts?: { silent?: boolean }): Promise<Visit[] | null> => {
     if (!token) return null;
-    setLoading(true);
-    setError("");
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
     try {
       const r = await fetch("/api/owner?view=list", { headers: headers() });
       const j = (await r.json()) as { ok: boolean; visits?: Visit[]; error?: string; next_offset?: number | null };
@@ -450,9 +515,9 @@ const Owner = () => {
           setRoster([]);
           setRosterLoaded(false);
           linkSessionRef.current = null;
+          setVisits([]);
         }
-        setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
-        setVisits([]);
+        if (!silent) setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
         return null;
       } else {
         setVisits(j.visits ?? []);
@@ -461,10 +526,10 @@ const Owner = () => {
       }
     } catch {
       if (tokenRef.current !== token) return null;
-      setError("Network error while loading visits.");
+      if (!silent) setError("Network error while loading visits.");
       return null;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, headers]);
 
@@ -491,7 +556,7 @@ const Owner = () => {
   // A3: same pattern as the cleaner cabinet — when the owner returns
   // to the tab, re-read the list and (when a card is open) its detail,
   // so a report the cleaner just submitted no longer needs a manual
-  // Refresh. No polling: the refetch fires only on tab return.
+  // Refresh. The polling effect below covers the tab staying open.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
@@ -501,6 +566,25 @@ const Owner = () => {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [loadList, refreshSelected]);
+
+  // MB-04 (DA-12): poll while a visit card is open — an open owner
+  // tab now picks up the cleaner's submission, the client's issue or
+  // a payment without waiting for a tab switch. Every 45 seconds,
+  // only while the tab is visible and a card is open; silent, so the
+  // spinner never flashes and a transient failure never wipes the
+  // list (see loadList silent). The interval restarts when the card
+  // opens or closes.
+  useEffect(() => {
+    if (!selected) return;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!selectedIdRef.current) return;
+      void loadList({ silent: true });
+      void refreshSelected();
+    };
+    const id = window.setInterval(tick, 45_000);
+    return () => window.clearInterval(id);
+  }, [selected, loadList, refreshSelected]);
 
   const loadMore = async () => {
     if (nextOffset === null || loadingMore || !token) return;
@@ -516,6 +600,49 @@ const Owner = () => {
     } catch { if (tokenRef.current === session) setError("Couldn't load more visits. Please try again."); }
     finally { setLoadingMore(false); }
   };
+
+  // MB-27: load every remaining page, oldest first, so an active
+  // search sees the whole history. One run at a time; a failed page
+  // keeps what is already loaded and stops the run (the empty state
+  // offers the manual "Load older visits" button instead).
+  const loadAll = useCallback(async () => {
+    if (loadAllRef.current || !token) return;
+    loadAllRef.current = true;
+    setLoadingAll(true);
+    try {
+      const session = token;
+      let offset = nextOffsetRef.current;
+      let pages = 0;
+      while (offset !== null && pages < 100) {
+        pages++;
+        const response = await fetch(`/api/owner?view=list&offset=${offset}`, { headers: headers() });
+        const data = await response.json();
+        if (tokenRef.current !== session) return;
+        if (!response.ok || !data.ok) throw new Error("list");
+        setVisits((current) => { const ids = new Set(current.map((v) => v.id)); return [...current, ...(data.visits ?? []).filter((v: Visit) => !ids.has(v.id))]; });
+        const next = (data.next_offset ?? null) as number | null;
+        setNextOffset(next);
+        nextOffsetRef.current = next;
+        offset = next;
+      }
+    } catch {
+      /* keep what loaded; the empty state offers a manual retry */
+    } finally {
+      loadAllRef.current = false;
+      setLoadingAll(false);
+    }
+  }, [token, headers]);
+
+  // MB-27: when the owner starts searching and older pages are still
+  // unloaded, fetch them (debounced, so typing does not fire a run
+  // per keystroke). The search itself ignores the active filter — see
+  // filteredVisits below.
+  useEffect(() => {
+    if (!searchQuery.trim()) return;
+    if (nextOffsetRef.current === null) return;
+    const id = window.setTimeout(() => { void loadAll(); }, 300);
+    return () => window.clearTimeout(id);
+  }, [searchQuery, loadAll]);
 
   useEffect(() => {
     void loadList();
@@ -732,7 +859,7 @@ const Owner = () => {
           ? `${label}: the email was sent, but saving its delivery record failed. Retry the action to complete the record — no second email will go out.`
           : j["issue_blocked"] === true
             ? "Automatic charging is blocked for this visit, but the activity record could not be saved. No confirmation email was sent. Refresh the visit before retrying."
-            : `${label}: ${j.error ?? "failed"}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
+            : `${label}: ${humanActionError(j.error)}${j["report_status"] ? ` (report: ${String(j["report_status"])})` : ""}`);
         await reloadOpenVisit();
       }
     } catch {
@@ -764,7 +891,7 @@ const Owner = () => {
           : "Visit deleted.");
         void loadList();
       } else {
-        setActionMsg(`Delete visit: ${j.error ?? "failed"}`);
+        setActionMsg(`Delete visit: ${humanActionError(j.error)}`);
         void loadList();
       }
     } catch {
@@ -816,7 +943,16 @@ const Owner = () => {
         void openVisit(uploadVisit);
       }
     } catch (err) {
-      if (isCurrentVisit(uploadVisit.id, uploadEpoch)) setActionMsg(`Owner upload: ${err instanceof Error ? err.message : "failed"}`);
+      if (isCurrentVisit(uploadVisit.id, uploadEpoch)) {
+        const msg = err instanceof Error ? err.message : "";
+        setActionMsg(msg === "sign failed"
+          ? "Owner upload: couldn't start the photo upload — check your connection and retry."
+          : msg === "upload failed"
+            ? "Owner upload: the photo upload failed — check your connection and retry."
+            : msg === "register failed"
+              ? "Owner upload: the photo uploaded but couldn't be saved — please retry."
+              : `Owner upload: ${humanActionError(msg)}`);
+      }
     } finally {
       if (operationSeqRef.current === operation) setActing("");
     }
@@ -1221,6 +1357,9 @@ const Owner = () => {
       // cleaner name and amount (formatted "$1.49" and raw cents "149").
       const hay = `${v.client_name ?? ""} ${v.client_email ?? ""} ${v.client_phone ?? ""} ${v.address ?? ""} ${v.booking_id ?? ""} ${v.cleaner_name ?? ""} ${money(v.amount_cents)} ${v.amount_cents ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
+      // MB-27 / live-run #6: a search searches every loaded visit —
+      // never only the visits inside the active filter.
+      return true;
     }
     if (filter === "all") return true;
     if (filter === "cancelled") return v.status === "cancelled";
@@ -1291,7 +1430,7 @@ const Owner = () => {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold">{c.name}</span>
                         {c.phone && <span className="text-sm">{c.phone}</span>}
-                        <span className={`text-[11px] px-2 py-0.5 rounded ${c.active ? "bg-green-100 text-green-900" : "bg-muted text-muted-foreground"}`}>{c.active ? "Active" : "Inactive"}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${c.active ? "bg-green-100 text-green-900" : "bg-muted text-muted-foreground"}`}>{c.active ? "Active" : "Inactive"}</span>
                         <span className="ml-auto flex gap-2">
                           <Button variant="outline" size="sm" onClick={() => { setEditRosterId(c.id); setEditRosterName(c.name); setEditRosterPhone(c.phone ?? ""); setEditRosterPhoto(c.photo_url ?? ""); setEditRosterActive(c.active); }}>Edit</Button>
                           <Button variant="outline" size="sm" onClick={() => void toggleRosterActive(c)}>{c.active ? "Deactivate" : "Activate"}</Button>
@@ -1344,7 +1483,7 @@ const Owner = () => {
             <section className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4" aria-label="Open issues">
               <h2 className="font-heading text-lg font-bold text-red-900">Open issues ({openIssues.length})</h2>
               <p className="text-sm text-red-900 mt-1">
-                Automatic charging is blocked for these visits and never resumes on its own — the client must approve again to pay, or you waive the charge.
+                Automatic charging is blocked for these visits and never resumes on its own — the client must approve again to pay, or you waive the charge. For visits already paid, decide on a re-clean or a refund instead — there is nothing more to charge.
               </p>
               <ul className="mt-3 space-y-3">
                 {openIssues.map((v) => (
@@ -1361,6 +1500,9 @@ const Owner = () => {
                         {` · ${v.issue_decision ? (ISSUE_DECISION_LABEL[v.issue_decision.decision] ?? v.issue_decision.decision) : "Awaiting your decision"}`}
                         {v.photo_count ? ` · ${v.photo_count} photo${v.photo_count === 1 ? "" : "s"}` : ""}
                       </span>
+                      {v.status === "paid" && (
+                        <span className="block text-sm mt-1 font-semibold">Paid — payment is complete. Decide on a re-clean or a refund.</span>
+                      )}
                       {v.issue_decision?.resolution ? (
                         <span className="block text-sm mt-1">Your decision: {v.issue_decision.resolution}</span>
                       ) : null}
@@ -1380,11 +1522,11 @@ const Owner = () => {
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
-                  {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
-                  <span className="text-sm text-muted-foreground">{`${fmtVisitDate(v.visit_date)}${v.window ? ` ${formatArrivalWindow(v.window)}` : ""} · ${money(v.amount_cents)}`} {v.is_test && <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">test price</span>}</span>
+                  {v.is_test && <span className="text-xs bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">TEST</span>}
+                  <span className="text-sm text-muted-foreground">{`${fmtVisitDate(v.visit_date)}${v.window ? ` ${formatArrivalWindow(v.window)}` : ""} · ${money(v.amount_cents)}`} {v.is_test && <span className="text-xs bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded">test price</span>}</span>
                 </div>
                 <div className="text-sm font-medium mt-1">Next: {rowNextAction(v)}</div>
-                <div className="flex flex-wrap gap-1.5 mt-2 text-[11px]">
+                <div className="flex flex-wrap gap-1.5 mt-2 text-xs">
                   <span className="bg-muted px-2 py-0.5 rounded">Visit: {visitBadgeLabel(v.status, v.report_status)}</span>
                   {v.cleaner_name
                     ? <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded">cleaner: {v.cleaner_name}</span>
@@ -1402,11 +1544,37 @@ const Owner = () => {
             ))}
             {nextOffset !== null && <Button variant="outline" className="w-full mt-4" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load older visits"}</Button>}
             {filteredVisits.length === 0 && !loading && !error && (
-              <p className="text-muted-foreground text-sm">
-                {filter === "all"
-                  ? (visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them.")
-                  : FILTERS.find((f) => f.key === filter)?.empty}
-              </p>
+              <div>
+                {searchQuery.trim() ? (
+                  <>
+                    <p className="text-muted-foreground text-sm">
+                      {loadingAll
+                        ? "Searching all visits…"
+                        : nextOffset !== null
+                          ? `No visits match “${searchQuery.trim()}” — try loading older visits.`
+                          : `No visits match “${searchQuery.trim()}”.`}
+                    </p>
+                    {!loadingAll && nextOffset !== null && (
+                      <Button variant="outline" className="mt-3" disabled={loadingMore} onClick={() => void loadMore()}>
+                        {loadingMore ? "Loading…" : "Load older visits"}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-muted-foreground text-sm">
+                      {filter === "all"
+                        ? (visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them.")
+                        : FILTERS.find((f) => f.key === filter)?.empty}
+                    </p>
+                    {filter === "all" && visits.length === 0 && (
+                      <Button variant="outline" className="mt-3" asChild>
+                        <a href="/quote">Create a visit</a>
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -1424,7 +1592,10 @@ const Owner = () => {
           // later issue_resolved.
           const openIssue = (() => {
             const byTimeDesc = [...events].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-            const opened = byTimeDesc.find((e) => e.event === "issue_opened");
+            // MA-04: a post-payment complaint opens with postpay_issue,
+            // not issue_opened — the detail panel must show its words
+            // too, or a paid visit's open issue renders with no reason.
+            const opened = byTimeDesc.find((e) => e.event === "issue_opened" || e.event === "postpay_issue");
             if (!opened) return null;
             const resolved = byTimeDesc.find((e) => e.event === "issue_resolved");
             if (resolved && resolved.created_at >= opened.created_at) return null;
@@ -1578,7 +1749,7 @@ const Owner = () => {
                         view already uses for its "Card ready" chip.
                         The payment lifecycle ("Requested"/"Paid") lives
                         in the "Payment:" line above, not here. */}
-                    <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : cardMethod === "saved" ? (cardBrand && cardLast4 ? `${cardBrand} •••• ${cardLast4}` : "Card ready") : cardMethod === "none" ? "not saved yet" : v.card_confirmed ? "Card ready" : "not saved yet"}</li>
+                    <li>Card: {noStripeCustomer ? "no Stripe customer — no card can be charged" : cardMethod === "saved" ? (cardBrand && cardLast4 ? `${formatCardBrand(cardBrand)} •••• ${cardLast4}` : "Card ready") : cardMethod === "none" ? "not saved yet" : v.card_confirmed ? "Card ready" : "not saved yet"}</li>
                     <li>
                       {`Entry: ${entryStatusText(v)}${v.entry_agreed ? " · settled" : ""}${v.entry?.has_secret ? " · private entry details saved" : ""}`}
                     </li>
@@ -1609,6 +1780,40 @@ const Owner = () => {
                         {latestDecision.resolution ? ` — ${latestDecision.resolution}` : ""}
                       </p>
                     )}
+                    {/* MA-04: the three pre-payment decisions all 409 on a
+                        paid visit (booking-action blocks issue decisions
+                        once paid), so offering them here would be a dead
+                        end. A paid issue closes with the existing
+                        "resolve" action instead — refund in Stripe first
+                        if money is owed, then mark it resolved. */}
+                    {v.status === "paid" ? (
+                      <>
+                        <p className="text-sm mt-3 font-medium">Payment is complete — nothing more to charge. If the client is owed money, refund it in Stripe, then mark this issue resolved.</p>
+                        <label htmlFor="issue-reclean-date" className="block text-sm font-medium mt-3 mb-1">Re-clean date (optional)</label>
+                        <input
+                          id="issue-reclean-date"
+                          type="date"
+                          value={recleanDate}
+                          onChange={(e) => setRecleanDate(e.target.value)}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">The cleaner’s report can only be submitted on or after this date, and the cleaner’s link stays valid until two days after it. Leave empty to resolve without a re-clean date.</p>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          <Button
+                            variant="hero"
+                            size="sm"
+                            disabled={acting !== ""}
+                            onClick={() => {
+                              void runAction("Mark resolved", { action: "resolve", booking_id: v.booking_id, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
+                            }}
+                          >
+                            Mark resolved
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Marking resolved closes the issue here. No email is sent by this button — tell the client yourself what you decided (refund or re-clean).</p>
+                      </>
+                    ) : (
+                      <>
                     <label htmlFor="issue-decision-text" className="block text-sm font-medium mt-3 mb-1">Your decision for the client *</label>
                     <textarea
                       id="issue-decision-text"
@@ -1679,6 +1884,8 @@ const Owner = () => {
                         </Button>
                       )}
                     </div>
+                      </>
+                    )}
                   </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -2402,7 +2609,7 @@ const Owner = () => {
                     the line above (state / no-customer) stands alone. */}
                 {cardBrand && cardLast4 && (
                   <p className="text-sm mt-1">
-                    Card: {cardBrand.charAt(0).toUpperCase() + cardBrand.slice(1)} •••• {cardLast4}
+                    Card: {formatCardBrand(cardBrand)} •••• {cardLast4}
                   </p>
                 )}
                 {/* C4: the 24h auto-charge deadline, from the report
@@ -2475,7 +2682,7 @@ const Owner = () => {
                     <p className="text-xs text-muted-foreground mt-1">
                       {v.can_charge === false
                         ? "No payment basis yet — the client must approve the report, or 24 hours must pass with no open issue. The server enforces this."
-                        : "Works only after the client approved (or the agreed automatic rule fired). Server errors are shown as-is."}
+                        : "Works only after the client approved (or the agreed automatic rule fired). If the card needs extra verification, only the client can finish it on their report page."}
                     </p>
                   </div>
                 </details>

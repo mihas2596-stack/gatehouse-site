@@ -313,6 +313,18 @@ describe("visit confirmation flow", () => {
   it("cleaner submit works after confirmation and reports the visit as confirmed", async () => {
     await assignCleaner();
     await confirmVisit();
+    // MA-03: the stored checklist is empty, so the submit seeds the
+    // standard scope (Kitchen, Bathrooms, Bedrooms, Living room) and
+    // every seeded room needs a before + after photo.
+    for (const room of ["Kitchen", "Bathrooms", "Bedrooms", "Living room"]) {
+      for (const kind of ["before", "after"]) {
+        photos.push({
+          id: `${room}-${kind}`, visit_id: VISIT_ID, room, kind,
+          storage_path: `visits/${VISIT_ID}/${room}/${kind}.jpg`,
+          created_at: "2026-11-14T10:00:00.000Z",
+        });
+      }
+    }
     const r = await clean("POST",
       { ct: "legacy-cleaner-token-1234567890", action: "submit", checklist: { rooms: [] } },
     );

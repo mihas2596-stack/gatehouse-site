@@ -21,7 +21,7 @@ import {
   dbUpsert,
   dbUpdate,
   dbUpdateCount,
-  dbDelete,
+  dbDeleteCount,
   logEvent,
   storageSignUpload,
   storageSignDownload,
@@ -40,9 +40,10 @@ import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate } from "./_visit
 export { isFutureVisitDate };
 // M5: orphan accounting — objects signed for upload but never
 // registered are listed from Storage and counted against the cap.
-import { countUnregisteredObjects, storageListObjects } from "./_storage-cleanup.js";
+import { countUnregisteredObjects, storageListObjects, ORPHAN_LIST_MAX } from "./_storage-cleanup.js";
 import { cleanerLinkSecretCandidates, verifyCleanerLinkV2 } from "./_cleaner_link.js";
-import { photoBlocked } from "./_photo_policy.js";
+import { photoBlocked, isCleanerPhotoKind, CLEANER_PHOTO_URL_TTL_SECONDS } from "./_photo_policy.js";
+import { buildWorkRooms } from "./_work_scope.js";
 import { reportEmail } from "./_email_copy.js";
 import { cleanerEntryView, deleteAccess, loadAccess } from "./_visit_access.js";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
@@ -115,11 +116,15 @@ type PhotoRow = {
 const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const EDITABLE = new Set(["none", "draft", "returned"]);
 
-// M5: at most this many signed-but-unregistered uploads may pile up
-// for one visit. Each sign-then-abandon leaves an orphan object in
-// Storage; the cap bounds the pile-up, and the periodic cleanup in
-// api/_storage-cleanup.ts removes the rest.
-const MAX_UNREGISTERED_PHOTOS = 10;
+// M5 / LB-16: at most this many signed-but-UNREGISTERED cleaner
+// uploads may pile up for one visit. This is a bound on the orphan
+// pile-up (sign-then-abandon), NOT a cap on signatures and NOT a cap
+// on photos: registered photos do not count (they are capped at 60
+// on register instead), and unregistered client-issue objects
+// (visits/<id>/client-issue/...) are excluded from the count — they
+// are the client's evidence, not the cleaner's uploads. The periodic
+// cleanup in api/_storage-cleanup.ts removes the rest.
+const MAX_UNREGISTERED_CLEANER_UPLOADS = 10;
 
 const roomSlug = (room: string): string =>
   room.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "room";
@@ -249,6 +254,59 @@ export function checklistRoomMismatch(
   };
 }
 
+/** MB-09 / DA-35: validate checklist item LABELS against the visit's
+ * task-list scope — the STORED checklist, the same authority M1 uses
+ * for room names. sanitizeChecklist only bounds lengths — a cleaner
+ * could otherwise rename/add items and have them published verbatim
+ * in the client's report. A label is valid only when the same-named
+ * room of the scope carries exactly that label (per room, not union:
+ * a kitchen task does not belong in a bathroom). Rooms absent from
+ * the scope are skipped here — the M1 room-set check owns those.
+ * An empty scope fails open, like M1: a legacy row stores no
+ * checklist, so there is nothing to check against (the MA-03 seed is
+ * a display/healing fallback, not a validation authority for a row
+ * whose real scope is unknown — and seed labels are canonical
+ * buildWorkRooms labels, so a UI-driven submit of the seeded
+ * checklist passes any scope it is checked against). */
+export function findUnknownChecklistLabels(
+  scope: Checklist | null | undefined,
+  incoming: Checklist,
+): string[] {
+  const scopeByLower = new Map<string, Set<string>>();
+  for (const r of scope?.rooms ?? []) {
+    const key = r.name.trim().toLowerCase();
+    if (!key) continue;
+    if (!scopeByLower.has(key)) scopeByLower.set(key, new Set());
+    for (const it of r.items) scopeByLower.get(key)!.add(it.label);
+  }
+  if (scopeByLower.size === 0) return [];
+  const unknown: string[] = [];
+  for (const r of incoming.rooms) {
+    const allowed = scopeByLower.get(r.name.trim().toLowerCase());
+    if (!allowed) continue;
+    for (const it of r.items) {
+      if (!allowed.has(it.label)) unknown.push(it.label);
+    }
+  }
+  return unknown;
+}
+
+/** MA-03 / DA-17: the effective work scope for a visit. The stored
+ * checklist IS the scope for normal rows, but a pre-checklist row
+ * stores null (or an empty room list) — it has no scope to check
+ * against, and the old submit code dereferenced it at
+ * `checklist.submitted_at` (500, before the CAS) while GET showed 0
+ * rooms with Finish enabled. Seed the standard scope — the same
+ * buildWorkRooms call booking-action uses for new rows (no dimensions
+ * are stored in booking metadata, so this is Kitchen + Bathroom(s) +
+ * Bedroom(s) + Living room; deep / move-in-out adds the extra tasks).
+ * The seed is derived, never written by GET: the first checklist save
+ * or the submit CAS stores it on the row, healing the legacy row. */
+export function effectiveChecklist(visit: { checklist?: Checklist | null; service?: string | null }): Checklist {
+  if (visit.checklist?.rooms?.length) return visit.checklist;
+  return { rooms: buildWorkRooms({ deep: /deep|move-in/i.test(visit.service ?? "") }) };
+}
+
 /** M2: optimistic-concurrency check for checklist saves. The client
  * sends the checklist_revision it loaded (the row's updated_at, as
  * returned by GET); a different stored value means another writer
@@ -276,17 +334,25 @@ export function checklistRevisionStale(
  * agreement wins — the arrange path leaves the issue open, so a
  * later legacy resolve can re-agree the date; a dateless newer
  * agreement means no date is agreed. */
-async function journalRecleanDate(visitId: string): Promise<string> {
-  const decision = await dbSelect<{ detail: { decision?: string; reclean_date?: string } | null; created_at: string }>(
+/** MB-06: the journal read for the re-clean date is strict — a DB
+ * failure returns null (journal unreadable) instead of "" (no
+ * re-clean). The submit gate fails closed on null (502) rather than
+ * letting the cleaner submit before a re-clean date it cannot see. */
+async function journalRecleanDate(visitId: string): Promise<string | null> {
+  const decisionRes = await dbSelectStrict<{ detail: { decision?: string; reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visitId}&event=eq.issue_decision&order=created_at.desc&limit=1`,
   );
+  if (!decisionRes.ok) return null;
+  const decision = decisionRes.rows;
   const decided = decision[0]?.detail?.decision;
   if (typeof decided === "string" && decided !== "reclean") return "";
-  const resolved = await dbSelect<{ detail: { reclean_date?: string } | null; created_at: string }>(
+  const resolvedRes = await dbSelectStrict<{ detail: { reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visitId}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
   );
+  if (!resolvedRes.ok) return null;
+  const resolved = resolvedRes.rows;
   const valid = (d: unknown): string =>
     typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
   const dValid = valid(decision[0]?.detail?.reclean_date);
@@ -320,6 +386,61 @@ async function photosOf(visitId: string): Promise<PhotoRow[]> {
     "gh_photos",
     `visit_id=eq.${visitId}&order=created_at.asc&limit=200`,
   );
+}
+
+/** LB-15 / DA-33: magic-byte check for a claimed photo type. The
+ * Content-Type the register path checks comes from a Storage HEAD —
+ * the uploader sets it on PUT, so it proves nothing about the bytes.
+ * Mirror of the JPEG SOI check for client issue photos (api/report.ts):
+ * require the file's own leading bytes to match its claimed type.
+ * Pure — exported for tests. */
+export function photoMagicMatches(contentType: string, head: Uint8Array): boolean {
+  const startsWith = (bytes: number[]): boolean =>
+    bytes.every((b, i) => head[i] === b);
+  switch (contentType) {
+    case "image/jpeg":
+      // SOI marker FF D8 FF.
+      return head.length >= 3 && startsWith([0xff, 0xd8, 0xff]);
+    case "image/png":
+      return head.length >= 8 && startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    case "image/webp":
+      // RIFF....WEBP (WEBP tag at offset 8).
+      return head.length >= 12 && startsWith([0x52, 0x49, 0x46, 0x46]) &&
+        head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50;
+    case "image/heic":
+    case "image/heif": {
+      // ftyp box at offset 4 + a still-image brand.
+      if (head.length < 12) return false;
+      if (!(head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70)) return false;
+      const brand = String.fromCharCode(head[8], head[9], head[10], head[11]);
+      return ["heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs", "mif1", "msf1"].includes(brand);
+    }
+    default:
+      return false;
+  }
+}
+
+/** Sniff the first bytes of a stored object through a short-lived
+ * signed URL (Range request — 16 bytes are enough for every type
+ * above). Returns true (bytes match the claimed type), false (bytes
+ * positively mismatch — reject the file), or null (the bytes could
+ * not be read at all — the caller fails OPEN to the HEAD check, so a
+ * transient Storage read never blocks the cleaner's work). */
+async function sniffPhotoMagicBytes(storagePath: string, contentType: string): Promise<boolean | null> {
+  try {
+    const signed = await storageSignDownload(storagePath, 120);
+    if (!signed) return null;
+    const r = await fetch(signed, {
+      headers: { Range: "bytes=0-15" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return null;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.length === 0) return null;
+    return photoMagicMatches(contentType, buf);
+  } catch {
+    return null;
+  }
 }
 
 /** A visit counts as confirmed only when the owner confirmed it: the
@@ -386,7 +507,25 @@ async function view(visit: VisitRow, restricted = false) {
     };
   }
   const { loadClientPhone } = await import("./_client_contact.js");
-  const photos = await photosOf(visit.id);
+  // MB-06: secondary reads are strict — a DB failure must not
+  // silently render as "no photos / no issue / no re-clean". Each
+  // failed read falls back to its empty value (fail closed: rooms
+  // look not ready, no issue shown) and marks the view degraded, so
+  // the client can say so instead of showing an empty state as fact.
+  let degraded = false;
+  const strictSelect = async <T>(table: string, query: string): Promise<T[]> => {
+    const r = await dbSelectStrict<T>(table, query);
+    if (!r.ok) degraded = true;
+    return r.rows;
+  };
+  // MB-08: the view signs only the cleaner's own photos. Client
+  // issue photos (kind: "client") are the client's evidence — the UI
+  // filtered them, but the signed URLs were still handed to whoever
+  // holds the cleaner link.
+  const photos = (await strictSelect<PhotoRow>(
+    "gh_photos",
+    `visit_id=eq.${visit.id}&order=created_at.asc&limit=200`,
+  )).filter((p) => isCleanerPhotoKind(p.kind));
   const withUrls = await Promise.all(
     photos.map(async (p) => ({
       id: p.id,
@@ -394,10 +533,10 @@ async function view(visit: VisitRow, restricted = false) {
       kind: p.kind,
       note: p.note,
       created_at: p.created_at,
-      url: await storageSignDownload(p.storage_path, 3600),
+      url: await storageSignDownload(p.storage_path, CLEANER_PHOTO_URL_TTL_SECONDS),
     })),
   );
-  const events = await dbSelect<{ detail: { note?: string } | null }>(
+  const events = await strictSelect<{ detail: { note?: string } | null }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.report_returned&order=created_at.desc&limit=1`,
   );
@@ -406,15 +545,15 @@ async function view(visit: VisitRow, restricted = false) {
   // DA-01: the re-clean date lives on the issue_decision event
   // (issue_arrange_reclean logs reclean_date there); the
   // issue_resolved event carries it only for the legacy resolve path.
-  const decisionEvents = await dbSelect<{ detail: { decision?: string; resolution?: string; reclean_date?: string } | null; created_at: string }>(
+  const decisionEvents = await strictSelect<{ detail: { decision?: string; resolution?: string; reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_decision&order=created_at.desc&limit=1`,
   );
-  const resolvedEvents = await dbSelect<{ detail: { reclean_date?: string } | null; created_at: string }>(
+  const resolvedEvents = await strictSelect<{ detail: { reclean_date?: string } | null; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_resolved&order=created_at.desc&limit=1`,
   );
-  const issueEvents = await dbSelect<{ actor?: string | null; detail: { reason?: string; room?: string; via?: string } | null }>(
+  const issueEvents = await strictSelect<{ actor?: string | null; detail: { reason?: string; room?: string; via?: string } | null }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.issue_opened&order=created_at.desc&limit=1`,
   );
@@ -486,14 +625,14 @@ async function view(visit: VisitRow, restricted = false) {
     : null;
   // The customer's general comments (booking form "Notes") — kept separate
   // from access instructions so the two never merge into one dump again.
-  const noteEvents = await dbSelect<{ detail: { text?: string } | null }>(
+  const noteEvents = await strictSelect<{ detail: { text?: string } | null }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=eq.client_note&order=created_at.desc&limit=1`,
   );
   // N09: journal gate for entry visibility — a cancel or Finish
   // recorded after the access row was saved revokes it even if the
   // cleanup delete itself failed.
-  const revokeEvents = await dbSelect<{ event: string; created_at: string }>(
+  const revokeEvents = await strictSelect<{ event: string; created_at: string }>(
     "gh_events",
     `visit_id=eq.${visit.id}&event=in.(visit_cancelled,report_submitted)&order=created_at.desc&limit=20`,
   );
@@ -527,7 +666,9 @@ async function view(visit: VisitRow, restricted = false) {
         && visit.report_status !== "sent" && visit.report_status !== "submitted"
         && await visitConfirmed(visit.id) ? await loadClientPhone(visit.id) : null,
     },
-    checklist: visit.checklist ?? { rooms: [] },
+    // MA-03: a legacy row with no stored checklist gets the standard
+    // scope seeded (derived, not written) — see effectiveChecklist.
+    checklist: effectiveChecklist(visit),
     // M2: the revision the next checklist save must echo back, or a
     // 409 tells it the row moved first.
     checklist_revision: visit.updated_at ?? null,
@@ -560,6 +701,11 @@ async function view(visit: VisitRow, restricted = false) {
         }
       : null,
     client_issue: clientIssue,
+    // MB-06: one or more secondary reads failed — the view above is
+    // a fail-closed partial (rooms look not ready, no issue shown),
+    // not a confirmed empty state. Present only when degraded, so
+    // existing clients see no new field on a healthy read.
+    ...(degraded ? { degraded: true } : {}),
   };
 }
 
@@ -911,9 +1057,21 @@ export default async function handler(req: Req, res: Res) {
       if (!checklist) return json(400, { ok: false, error: "invalid_checklist" });
       // M1: the room-name set must match the stored work scope
       // exactly — a one-room fake with a skip reason never saves.
+      // This coarser check runs BEFORE the MB-09 label check below,
+      // so a fake checklist keeps its pinned error
+      // (checklist_rooms_mismatch) instead of invalid_checklist.
       const mismatch = checklistRoomMismatch(visit.checklist, checklist);
       if (mismatch.missing.length > 0 || mismatch.unknown.length > 0) {
         return json(400, { ok: false, error: "checklist_rooms_mismatch", missing: mismatch.missing, unknown: mismatch.unknown });
+      }
+      // MB-09: labels must come from the visit's stored task-list
+      // scope — a renamed/invented item would otherwise publish
+      // verbatim in the client's report. Same authority as M1 (the
+      // stored checklist); a legacy row with no stored scope fails
+      // open, like M1.
+      const unknownLabels = findUnknownChecklistLabels(visit.checklist, checklist);
+      if (unknownLabels.length > 0) {
+        return json(400, { ok: false, error: "invalid_checklist", unknown_labels: unknownLabels });
       }
       // M2: a stale revision loses — the writer must reload and retry.
       const expectedRevision = typeof body["checklist_revision"] === "string" ? (body["checklist_revision"] as string) : null;
@@ -949,7 +1107,10 @@ export default async function handler(req: Req, res: Res) {
     if (action === "photo_sign") {
       const room = typeof body["room"] === "string" ? (body["room"] as string).slice(0, 60) : "";
       const kind = body["kind"] === "before" ? "before" : "after";
-      const rooms = (visit.checklist?.rooms ?? []).map((r) => r.name);
+      // MA-03: sign against the effective scope, so a legacy row can
+      // take photos for its seeded rooms before any checklist save
+      // has healed the stored row.
+      const rooms = effectiveChecklist(visit).rooms.map((r) => r.name);
       if (!room || (!rooms.includes(room) && room !== "Other areas")) {
         return json(400, { ok: false, error: "invalid_room" });
       }
@@ -961,10 +1122,22 @@ export default async function handler(req: Req, res: Res) {
       // (the sign proceeds): blocking the cleaner's work because a
       // read-only listing call failed would be worse than one more
       // orphan, and the periodic cleanup still removes it later.
-      const listed = await storageListObjects(`visits/${visit.id}/`, 200);
+      // LB-46: the listing is capped — when it reports truncated, the
+      // count below is a lower bound, so the cap is treated as reached
+      // (fail closed) instead of letting orphans pile up unseen. The
+      // listing limit is the full orphan-list budget, not 200, so
+      // truncation needs >500 objects under one visit.
+      // LB-16: client-issue objects (visits/<id>/client-issue/...) are
+      // the client's evidence, not cleaner uploads — they never count
+      // toward the cleaner's cap.
+      const listed = await storageListObjects(`visits/${visit.id}/`, ORPHAN_LIST_MAX);
       if (listed !== null) {
+        if (listed.truncated) {
+          return json(400, { ok: false, error: "too_many_unregistered_photos" });
+        }
         const registeredPaths = (await photosOf(visit.id)).map((p) => p.storage_path);
-        if (countUnregisteredObjects(listed.objects, registeredPaths) >= MAX_UNREGISTERED_PHOTOS) {
+        const cleanerUploads = listed.objects.filter((o) => !o.path.includes("/client-issue/"));
+        if (countUnregisteredObjects(cleanerUploads, registeredPaths) >= MAX_UNREGISTERED_CLEANER_UPLOADS) {
           return json(400, { ok: false, error: "too_many_unregistered_photos" });
         }
       }
@@ -987,7 +1160,9 @@ export default async function handler(req: Req, res: Res) {
       // — the same rule as photo_sign (and the M1 checklist
       // validation, for a single room): a photo for an invented room
       // never registers.
-      const scopeRooms = (visit.checklist?.rooms ?? []).map((r) => r.name);
+      // MA-03: same effective-scope rule as photo_sign — a photo for
+      // a seeded room registers before the stored row is healed.
+      const scopeRooms = effectiveChecklist(visit).rooms.map((r) => r.name);
       if (!scopeRooms.includes(room) && room !== "Other areas") {
         return json(400, { ok: false, error: "invalid_room" });
       }
@@ -998,6 +1173,15 @@ export default async function handler(req: Req, res: Res) {
       const info = await storageObjectInfo(storagePath);
       if (!info) return json(502, { ok: false, error: "storage_error" });
       if (!ALLOWED_PHOTO_TYPES.includes(info.contentType) || info.size <= 0 || info.size > MAX_PHOTO_BYTES) {
+        await storageRemove(storagePath);
+        return json(400, { ok: false, error: "invalid_photo_file" });
+      }
+      // LB-15: the Content-Type above comes from a Storage HEAD — the
+      // uploader sets it on PUT. Sniff the leading bytes and require
+      // them to match the claimed type (a HEIC registered as JPEG
+      // never renders in <img>). Only a positive mismatch rejects
+      // the file; an unreadable sniff fails open to the HEAD check.
+      if ((await sniffPhotoMagicBytes(storagePath, info.contentType)) === false) {
         await storageRemove(storagePath);
         return json(400, { ok: false, error: "invalid_photo_file" });
       }
@@ -1049,8 +1233,28 @@ export default async function handler(req: Req, res: Res) {
       const photos = await photosOf(visit.id);
       const target = photos.find((p) => p.id === photoId);
       if (!target) return json(404, { ok: false, error: "photo_not_found" });
-      await dbDelete("gh_photos", `id=eq.${target.id}&visit_id=eq.${visit.id}`);
-      await storageRemove(target.storage_path);
+      // MB-08: only the cleaner's own photos may be deleted here. A
+      // client issue photo (kind: "client") is the client's evidence
+      // — it must survive even while the report is editable (e.g.
+      // after a return for re-clean).
+      if (!isCleanerPhotoKind(target.kind)) {
+        return json(403, { ok: false, error: "photo_not_allowed" });
+      }
+      // MB-08: both results are checked — the old code awaited them
+      // and always answered ok:true. The counted delete proves the
+      // row is gone (a 2xx that matched nothing is not a deletion);
+      // bytes left behind by a failed storage remove become orphans
+      // for the periodic cleanup.
+      const rowGone = await dbDeleteCount("gh_photos", `id=eq.${target.id}&visit_id=eq.${visit.id}`);
+      if (rowGone < 1) return json(502, { ok: false, error: "db_error" });
+      if (!(await storageRemove(target.storage_path))) {
+        return json(502, { ok: false, error: "storage_error" });
+      }
+      // Log only a real success — the old code logged nothing, and
+      // the owner variant logs even on failure.
+      await logEvent(visit.id, visit.booking_id, "cleaner", "photo_deleted", {
+        photo_id: target.id, room: target.room, kind: target.kind,
+      });
       return json(200, { ok: true });
     }
 
@@ -1074,6 +1278,11 @@ export default async function handler(req: Req, res: Res) {
         typeof visit.reclean_date === "string" &&
         !!visit.reclean_date;
       const journalDate = rowRecleanScheduled ? "" : await journalRecleanDate(visit.id);
+      // MB-06: the journal could not be read — fail closed (502)
+      // instead of gating on "no re-clean arranged".
+      if (journalDate === null) {
+        return json(502, { ok: false, error: "db_unavailable" });
+      }
       const recleanScheduled = rowRecleanScheduled || !!journalDate;
       // G3: the gate date is shared with the client approve gate in
       // api/report.ts (effectiveGateDate): the re-clean date when one
@@ -1102,12 +1311,44 @@ export default async function handler(req: Req, res: Res) {
       if (submitRevision && checklistRevisionStale(visit.updated_at, submitRevision)) {
         return json(409, { ok: false, error: "checklist_stale", checklist_revision: visit.updated_at ?? null });
       }
-      const checklist = sanitizeChecklist(body["checklist"]) ?? visit.checklist;
+      // MA-03 / DA-17: a legacy row stores no checklist and the client
+      // may send none either (or an empty one) — sanitizeChecklist
+      // returns null for both, and the old `?? visit.checklist` left
+      // a null that crashed at submitted_at below (500, before the
+      // CAS). Seed the standard scope instead: the mismatch check
+      // fails open against a null stored scope, missingRooms then
+      // requires a before+after photo (or a reason) per seeded room,
+      // and the CAS stores the seeded checklist, healing the row.
+      // MB-09: a posted checklist that fails validation is a 400, not
+      // a silent fallback to the stored scope — the old `??` published
+      // the stored checklist while the cleaner believed their edits
+      // were submitted. Only a MISSING or EMPTY checklist seeds the
+      // scope (MA-03: legacy row, nothing posted — an explicit empty
+      // room list means the same as no checklist, it carries no
+      // labels to poison the report).
+      const postedChecklist = body["checklist"];
+      const postedRooms = (postedChecklist as { rooms?: unknown } | null | undefined)?.rooms;
+      const postedHasRooms = Array.isArray(postedRooms) && postedRooms.length > 0;
+      const sanitized = !postedHasRooms ? null : sanitizeChecklist(postedChecklist);
+      if (postedHasRooms && !sanitized) {
+        return json(400, { ok: false, error: "invalid_checklist" });
+      }
+      const checklist = sanitized ?? effectiveChecklist(visit);
       // M1: the submitted room-name set must match the stored work
       // scope exactly — a fake one-room checklist never submits.
+      // This coarser check runs BEFORE the MB-09 label check below,
+      // so a fake checklist keeps its pinned error
+      // (checklist_rooms_mismatch) instead of invalid_checklist.
       const submitMismatch = checklistRoomMismatch(visit.checklist, checklist);
       if (submitMismatch.missing.length > 0 || submitMismatch.unknown.length > 0) {
         return json(400, { ok: false, error: "checklist_rooms_mismatch", missing: submitMismatch.missing, unknown: submitMismatch.unknown });
+      }
+      // MB-09: labels must come from the visit's stored task-list
+      // scope (same authority as M1; a legacy row with no stored
+      // scope fails open, like M1).
+      const unknownLabels = findUnknownChecklistLabels(visit.checklist, checklist);
+      if (unknownLabels.length > 0) {
+        return json(400, { ok: false, error: "invalid_checklist", unknown_labels: unknownLabels });
       }
       const photos = await photosOf(visit.id);
       const missing = missingRooms(checklist, photos, visit.no_photo_zones);

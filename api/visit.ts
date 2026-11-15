@@ -25,6 +25,8 @@ import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEve
 import { ownerNotificationEmail } from "./_owner_email.js";
 import { issueStateFrom, everWaivedDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
+import { listCustomerCards } from "./card-status.js";
+import { visitDateStartNYMs } from "./_visit_date.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
   type ClientEntryView, type EntryMethod,
@@ -701,12 +703,16 @@ async function reconcileCard(
   const allowWrite = opts?.allowWrite === true;
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
-  const res = await stripeGet(
-    secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
-  );
-  if (!res.ok) return "";
-  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  // LB-06/DA-20: the single page of 10 cards used to silently drop
+  // the booking's own card past 10 cards on file. Reuse the paginated
+  // listCustomerCards instead; a Stripe read failure is still a soft
+  // no-card, never a throw up the stack.
+  let list: Array<{ id: string }>;
+  try {
+    list = await listCustomerCards(secretKey, customer.id);
+  } catch {
+    return "";
+  }
   // C13: the booking's card_confirmed event wins; else a lone card.
   // Several cards with no booking signal is ambiguous — no backfill
   // of an arbitrary card (chargeVisit still prefers card_confirmed
@@ -877,11 +883,15 @@ export default async function handler(req: Req, res: Res) {
     const cardConfirmed = Boolean(selectedCardEvent);
     if (customer.id && meta["gh_payment_method"]) {
       try {
-        const pmRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`);
-        const pmList = (pmRes.data["data"] as Array<{ id: string; card?: { brand?: string; last4?: string } }> | undefined) ?? [];
-        // C13: brand/last4 must describe THIS booking's card, not
-        // whatever card Stripe lists first.
-        const pm = pmList.find((c) => c.id === meta["gh_payment_method"]) ?? (pmList.length === 1 ? pmList[0] : undefined);
+        // LB-06/DA-20: the full (paginated) card list, so the
+        // booking's own card is found past 10 cards on file. C13:
+        // brand/last4 must describe THIS booking's card, not whatever
+        // card Stripe lists first — the old single-card fallback
+        // (show the only other card when the booking's card was
+        // detached) is gone with the complete list: no match now
+        // shows no details instead of another card's.
+        const pmList = await listCustomerCards(STRIPE_SECRET_KEY, customer.id);
+        const pm = pmList.find((c) => c.id === meta["gh_payment_method"]);
         cardBrand = String(pm?.card?.brand ?? "");
         cardLast4 = String(pm?.card?.last4 ?? "");
       } catch { /* best-effort — the choice UI falls back to no details */ }
@@ -1135,8 +1145,17 @@ export default async function handler(req: Req, res: Res) {
 
     if (action === "propose_date") {
       const date = typeof body["date"] === "string" ? body["date"].slice(0, 10) : "";
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      // MB-14/DA-44: a bare YYYY-MM-DD regex accepts impossible dates
+      // ("2026-13-40") and past dates — a dead proposal the owner
+      // can only decline later (confirm refuses it). Validate the
+      // calendar date and require a future date (America/New_York
+      // "today", same clock the gates use).
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(visitDateStartNYMs(date))) {
         res.status(400).json({ requestId, ok: false, error: "bad_date" });
+        return;
+      }
+      if (date <= todayInNewYork(Date.now())) {
+        res.status(400).json({ requestId, ok: false, error: "date_in_past" });
         return;
       }
       // B6: a passed date must be reschedulable — that is the whole point
@@ -1149,10 +1168,17 @@ export default async function handler(req: Req, res: Res) {
       // date stays the agreement until the owner confirms the new one;
       // the proposal travels separately (gh_proposed_date + the
       // date_proposed journal event) and is visible after reload.
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      // MB-14: the Stripe write is checked — a failed metadata copy
+      // used to return 200 with a proposed_date the server never
+      // stored.
+      const proposed = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "card_ready",
         "metadata[gh_proposed_date]": date,
       });
+      if (!proposed.ok) {
+        res.status(502).json({ requestId, ok: false, error: "stripe_error" });
+        return;
+      }
       Object.assign(meta, { gh_state: "card_ready", gh_proposed_date: date, gh_proposed_pending: "1" });
       if (row) await logEvent(row.id, payload.bid, "client", "date_proposed", { date });
       await notify(`New date proposed — booking ${payload.bid}`, `The client proposed a new date: ${date} (booking ${payload.bid}). Confirm or decline it in the dashboard flow.`, false);
@@ -1166,11 +1192,26 @@ export default async function handler(req: Req, res: Res) {
       // does — the payment may already have gone through, so the
       // client retries the payment first; once the outcome is known
       // (paid or failed) cancel behaves normally again.
-      if (state === "paid" || state === "report_sent" || state === "approved" || state === "payment_unknown") {
+      // MA-02/DA-14: the derived state returns issue_open BEFORE
+      // report_sent (and waived even earlier, refunded earlier still),
+      // so a report-sent visit with an open dispute, a waived visit
+      // and a refunded visit all slipped past the old block-list.
+      // Block on the DERIVED state, mirroring owner_cancel (which
+      // refuses once the report is sent): a disputed visit ends in
+      // re-clean / waive / payment, never in a $25-fee cancel, and a
+      // refunded visit must keep its refund record.
+      if (state === "paid" || state === "report_sent" || state === "approved" || state === "payment_unknown"
+        || state === "issue_open" || state === "waived" || state === "refunded") {
         res.status(409).json({ requestId, ok: false, error: "visit_already_done" });
         return;
       }
       const fee = cancelFeeCents(meta, requestedDate, Date.now(), meta["gh_confirmed_window"] || row?.window || "");
+      // LB-17/DA-46: the entry revocation result is surfaced to the
+      // client — a failed deleteAccess used to be only a journal line
+      // under a success response. The cleaner view gates cancelled
+      // visits, so a stale secret is not usable, but the client and
+      // the owner must see the warning instead of a clean success.
+      let accessDeleted = true;
       if (row) {
         const previousStatus = row.status;
         const changed = await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.${encodeURIComponent(previousStatus ?? "requested")}`, { status: "cancelled" });
@@ -1211,7 +1252,7 @@ export default async function handler(req: Req, res: Res) {
           res.status(503).json({ requestId, ok: false, error: rollback === 1 ? "cancellation_not_saved" : "cancellation_state_unknown" }); return;
         }
         row.status = "cancelled";
-        const accessDeleted = await deleteAccess(row.id);
+        accessDeleted = await deleteAccess(row.id);
         await logEvent(row.id, payload.bid, "client", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
       }
       const cancellationSync = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
@@ -1244,7 +1285,7 @@ export default async function handler(req: Req, res: Res) {
         true,
       );
       await notify(`Cancelled (${scope}) — booking ${payload.bid}`, `Booking ${payload.bid} cancelled by the client. Scope: ${scope}. Fee recorded: ${fee} cents.`, false);
-      res.status(200).json({ ...view(), fee_cents: fee, notification_email_sent: !notificationFailed });
+      res.status(200).json({ ...view(), fee_cents: fee, notification_email_sent: !notificationFailed, ...(accessDeleted ? {} : { entry_revoke_failed: true }) });
       return;
     }
 
@@ -1280,8 +1321,14 @@ export default async function handler(req: Req, res: Res) {
       // N10: after Finish/cancel/publication/expiry the old path must
       // not save notes either — entry is closed, full stop. Zones
       // (no-photo areas) are unaffected and still save above.
+      // MB-15/DA-45: saveAccessNote returns a boolean — a failed note
+      // save used to return 200 as if the note were saved.
       if (notes !== null && row) {
-        await saveAccessNote(row.id, payload.bid, notes);
+        const noteSaved = await saveAccessNote(row.id, payload.bid, notes);
+        if (!noteSaved) {
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
+        }
         if (entryAvailable) entryView = clientEntryView(await loadAccess(row.id), true);
       }
       if (row && zones !== null) {

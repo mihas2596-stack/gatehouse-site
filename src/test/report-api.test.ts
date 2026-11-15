@@ -672,16 +672,21 @@ describe("report portal", () => {
     expect(view.body["charge_timer_blocked"]).toBe(true);
   });
 
-  it("C26: a pre-payment issue after the 24h Terms §7 window is refused", async () => {
+  it("C26: a pre-payment issue after BOTH Terms windows (24h report, 48h damage) is refused", async () => {
     await sendReport();
     enableDb();
-    const sentAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+    // MB-13: a complaint 25h after the report is still timely under
+    // the 48h damage window, so this refusal case sits outside both:
+    // report sent 50h ago, visit 3 days ago.
+    const sentAt = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+    const visitDate = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10);
     currentMeta["gh_report_sent_at"] = sentAt;
     dbRows = [{
       id: "row-report-late", booking_id: BID, visit_no: 1, status: "report_sent",
       report_status: "sent", amount_cents: 18900, client_email: CUSTOMER.email,
       report_sent_at: sentAt, issue_open: false, issue_ever: false,
       report_bounced: false, payment_intent_id: null, receipt_email_id: null,
+      visit_date: visitDate,
     }];
     dbEvents = [];
     const issue = response();

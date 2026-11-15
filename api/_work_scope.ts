@@ -13,11 +13,24 @@ export function buildWorkRooms(options: {
   const beds = ["Reachable surfaces dusted", "Nightstands and dressers dusted", "Beds made (linens changed if left on bed)", "Mirrors cleaned", "Window sills dusted", "Light switches and door handles wiped", "Trash emptied", "Floor vacuumed or mopped"];
   const living = ["Reachable surfaces and shelves dusted", "TV stand dusted", "Couch cushions straightened", "Mirrors and glass tabletops cleaned", "Window sills dusted", "Light switches and door handles wiped", "Stair railings wiped", "Stairs vacuumed", "Trash emptied", "Floors vacuumed", "Floors mopped"];
   const rooms = [room("Kitchen", kitchen)];
+  // Room naming, one scheme: the singular base ("Bathroom"), numbered
+  // ("Bathroom 1", "Bathroom 2") when there is more than one. The only
+  // exception is the no-dimensions default, which keeps the collective
+  // plural ("Bathrooms", "Bedrooms"): stored scopes, the public
+  // checklist and the MA-03 seed all use those names, so renaming the
+  // default would break scope matching for existing rows instead of
+  // unifying anything.
   const repeat = (raw: string | undefined, singular: string, plural: string, labels: string[], optional = false) => {
     const parsed = Number.parseInt(raw ?? "", 10);
+    // MB-23 / DA-11: an explicit "0" means zero rooms — the old loop
+    // ran Math.max(1, count) times and built one phantom room for a
+    // home with no full bathroom (powder-room only) or no bedroom.
+    // A missing/non-numeric count still defaults: 1 room for
+    // bedrooms/full baths (the booking form always sends them), 0
+    // for optional rooms (half baths).
     const count = Number.isFinite(parsed) ? Math.max(0, Math.min(20, parsed)) : optional ? 0 : 1;
-    if (!count && optional) return;
-    for (let i = 1; i <= Math.max(1, count); i++) rooms.push(room(count > 1 ? `${singular} ${i}` : Number.isFinite(parsed) ? singular : plural, labels));
+    if (count === 0) return;
+    for (let i = 1; i <= count; i++) rooms.push(room(count > 1 ? `${singular} ${i}` : Number.isFinite(parsed) ? singular : plural, labels));
   };
   repeat(options.fullBaths, "Bathroom", "Bathrooms", baths);
   repeat(options.bedrooms, "Bedroom", "Bedrooms", beds);

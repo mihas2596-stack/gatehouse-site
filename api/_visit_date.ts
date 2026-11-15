@@ -5,8 +5,12 @@
 // never before. This is the same rule as isFutureVisitDate in
 // api/cleaner.ts and api/report.ts, shared here so the money path
 // (charge, timer, publish) enforces it too instead of each endpoint
-// re-deriving it. An absent or malformed date never blocks (legacy
-// rows without a date are not gated by this rule).
+// re-deriving it. An absent date never blocks (legacy rows without a
+// date are not gated by this rule). A well-formed-looking but
+// impossible calendar date ("2026-13-40", "2026-02-30") DOES block:
+// it is not a date the visit could have happened on, so every gate
+// that trusts it treats it as future — fail closed on garbage, not
+// fail open.
 
 export function todayInNewYork(nowMs: number): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -16,13 +20,16 @@ export function todayInNewYork(nowMs: number): string {
 
 export function isFutureVisitDate(visitDate: string | null | undefined, nowMs = Date.now()): boolean {
   if (typeof visitDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) return false;
-  // G3: a well-formed-looking but impossible calendar date
-  // ("2026-13-40", "2026-02-30") passes the regex and compares as a
-  // future string — fail-open for every gate that trusts this. An
-  // unparseable date is NEVER a future date: visitDateStartNYMs
-  // validates the calendar date and returns NaN for impossible ones,
-  // so gates fail closed on garbage instead of treating it as future.
-  if (!Number.isFinite(visitDateStartNYMs(visitDate))) return false;
+  // MB-20 / LB-07 (DA-21): a well-formed-looking but impossible
+  // calendar date ("2026-13-40", "2026-02-30") passes the regex and
+  // compares as a future string — but it is NOT a date the visit
+  // could have happened on, so every gate that trusts this must treat
+  // it as blocking (fail closed), not as "not future" (fail open:
+  // the old `return false` let a report be sent and paid for a visit
+  // dated 2026-02-30). An ABSENT or wrong-shaped date still never
+  // blocks: legacy rows without a date are not gated by this rule.
+  // Only the regex-shaped-but-impossible date blocks.
+  if (!Number.isFinite(visitDateStartNYMs(visitDate))) return true;
   return visitDate > todayInNewYork(nowMs);
 }
 

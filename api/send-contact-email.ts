@@ -709,6 +709,10 @@ export default async function handler(req: Req, res: Res) {
     let visitUrl: string | null = null;
     // Server-verified first-visit price (recomputed, never the browser value).
     let serverFirst: string | undefined;
+    // LB-04: true when the home is larger than the price table — a
+    // custom quote, not a priced booking. Declared here (outer scope)
+    // because the response below reads it outside the isQuote block.
+    let needsCustomQuote = false;
     let testScale = false;
     // Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While
     // active, every booking prices at TEST_PRICE_SCALE with no token
@@ -764,6 +768,34 @@ export default async function handler(req: Req, res: Res) {
           pets: parsed.data.addons?.pets,
         },
       });
+      // LB-04: a null server breakdown has two causes and they split
+      // here. A count that is present but not a plain number ("abc",
+      // "-2", "3.5" bedrooms) is a bad request (400) — the old code
+      // fell through with the browser's price in the token and a null
+      // amount on the row. An EMPTY count is not an error: stale and
+      // old clients omit counts and the rooms fall back to defaults
+      // (pinned by the "falls back without counts" test below).
+      // Finite counters with no tier are a home larger than the price
+      // table: a custom quote, never the browser's price — the token
+      // carries no price and the response says so explicitly.
+      const badInt = (raw: string | undefined): boolean => {
+        const v = (raw ?? "").trim();
+        return v !== "" && !/^\d+$/.test(v);
+      };
+      const badDecimal = (raw: string | undefined): boolean => {
+        const v = (raw ?? "").trim();
+        return v !== "" && !/^\d+(\.\d+)?$/.test(v);
+      };
+      if (badInt(bedrooms) || badDecimal(bathrooms) || badInt(parsed.data.full_baths) || badInt(parsed.data.half_baths)) {
+        return json(400, {
+          ok: false,
+          errors: {
+            bedrooms: "Enter the number of bedrooms and bathrooms.",
+            bathrooms: "Enter the number of bedrooms and bathrooms.",
+          },
+        });
+      }
+      needsCustomQuote = !server;
       let tokenPrice = (price ?? "").trim() || undefined;
       let tokenRecurring: string | undefined;
       if (server) {
@@ -785,6 +817,11 @@ export default async function handler(req: Req, res: Res) {
         if (parsed.data.frequency !== "onetime") tokenRecurring = String(server.recurring_total);
         serverFirst = String(server.first_total);
         serverRecurring = tokenRecurring;
+      } else if (needsCustomQuote) {
+        // LB-04: no price in the token for a custom-quote home — the
+        // browser's number is a tier-S guess for a home off the table.
+        tokenPrice = undefined;
+        tokenRecurring = undefined;
       }
       const forceNewBooking = parsed.data.force_new_booking === true;
       const signed = signBooking(bookingLinkSecret(signingSecret), {
@@ -840,7 +877,15 @@ export default async function handler(req: Req, res: Res) {
               bt: dupSigned.token,
             };
           };
-          const rooms = buildWorkRooms({ bedrooms, fullBaths: parsed.data.full_baths ?? bathrooms, halfBaths: parsed.data.half_baths, extraZones: extra_zones, deep: server?.first_service === "deep", addons: parsed.data.addons });
+          // LB-42: an empty full_baths is "missing", not zero — `??`
+          // does not fire on "". And a decimal `bathrooms` ("3" = 2
+          // full + 2 half) falls back as full + half/2, not as 3 full
+          // baths. Same rule as serverBreakdown's fullBathsRaw win.
+          const fullBathsRaw = (parsed.data.full_baths ?? "").trim();
+          const fullBathsForRooms = fullBathsRaw !== ""
+            ? fullBathsRaw
+            : String(Math.max(0, Math.floor(parseFloat(bathrooms ?? "") - (parseFloat(parsed.data.half_baths ?? "") || 0) / 2)));
+          const rooms = buildWorkRooms({ bedrooms, fullBaths: fullBathsForRooms, halfBaths: parsed.data.half_baths, extraZones: extra_zones, deep: server?.first_service === "deep", addons: parsed.data.addons });
           // M6/N-upsert: insert-only, never merge. A retried or
           // concurrent submission reproduces the same booking id by
           // design — it must never regress a visit that has already
@@ -1276,6 +1321,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
       ownerEmailSent,
       ...(serverFirst ? { server_first: serverFirst } : {}),
       ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
+      ...(needsCustomQuote ? { needs_custom_quote: true } : {}),
       ...(bookingId ? { booking_id: bookingId } : {}),
       ...(bookingToken ? { bt: bookingToken } : {}),
     });

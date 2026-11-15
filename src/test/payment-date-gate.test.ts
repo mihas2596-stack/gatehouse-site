@@ -316,6 +316,7 @@ describe("chargeVisit date gate", () => {
   let events: Row[];
   let stripeCalls: string[];
   let piCreates: number;
+  let searchedIntents: Row[];
 
   const supRes = (data: unknown) => ({
     ok: true, status: 200,
@@ -329,7 +330,7 @@ describe("chargeVisit date gate", () => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (u.includes("api.stripe.com")) {
         stripeCalls.push(u);
-        if (u.includes("/payment_intents/search")) return supRes({ data: [] });
+        if (u.includes("/payment_intents/search")) return supRes({ data: searchedIntents });
         if (u.includes("/payment_intents") && method === "POST") {
           piCreates++;
           return supRes({ id: "pi_gate_charge", status: "succeeded" });
@@ -393,7 +394,8 @@ describe("chargeVisit date gate", () => {
     visit_id: CVISIT_ID, booking_id: CBID, event: "visit_confirmed",
     detail: { date, window: "morning" }, created_at: new Date(Date.now() - 3600 * 1000).toISOString(),
   });
-  const charge = (source: "client_approve" | "owner_charge" | "timer_24h" = "timer_24h") => chargeVisit({
+  const charge = (source: "client_approve" | "owner_charge" | "timer_24h" = "timer_24h") => chargeNow(source, Date.now());
+  const chargeNow = (source: "client_approve" | "owner_charge" | "timer_24h", nowMs: number) => chargeVisit({
     secretKey: "sk_test_x",
     bookingId: CBID,
     customerId: "cus_gate",
@@ -401,7 +403,7 @@ describe("chargeVisit date gate", () => {
     paymentMethod: "pm_1",
     source,
     allowedBases: ["client_approved", "timer_rule"],
-    nowMs: Date.now(),
+    nowMs,
     deps: {
       setCustomerMeta: async () => {},
       sendReceipt: async () => true,
@@ -416,9 +418,44 @@ describe("chargeVisit date gate", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     stripeCalls = [];
     piCreates = 0;
+    searchedIntents = [];
     installFetch();
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  // LB-09: confirmExisting revalidates the date gate against the
+  // charge's threaded nowMs, not the wall clock — the confirm path
+  // must be testable against fixed hours like the rest of the charge.
+  describe("LB-09 — confirmExisting uses the threaded nowMs", () => {
+    const pendingSetup = () => {
+      rows = [{ ...baseRow(FUTURE), status: "payment_pending", payment_intent_id: null }];
+      events = [
+        ...baseEvents(),
+        { visit_id: CVISIT_ID, booking_id: CBID, event: "report_approved", detail: { via: "client" }, created_at: new Date(Date.now() - 1000).toISOString() },
+      ];
+      searchedIntents = [{
+        id: "pi_live_1", status: "requires_confirmation", amount: 20000,
+        currency: "usd", customer: "cus_gate", created: Math.floor(Date.now() / 1000),
+        metadata: { gh_booking_id: CBID },
+      }];
+    };
+
+    it("confirms a live intent when the threaded nowMs is past the visit date, even though the wall clock is not", async () => {
+      pendingSetup();
+      const afterVisit = Date.parse(`${FUTURE}T12:00:00Z`) + 24 * 3600 * 1000;
+      const outcome = await chargeNow("client_approve", afterVisit);
+      expect(outcome.outcome).toBe("paid");
+      expect(piCreates).toBe(1);
+      expect(rows[0]["status"]).toBe("paid");
+    });
+
+    it("still blocks the confirm when the threaded nowMs is before the visit date", async () => {
+      pendingSetup();
+      const outcome = await chargeNow("client_approve", Date.now());
+      expect(outcome).toEqual({ outcome: "blocked", error: "report_too_early" });
+      expect(piCreates).toBe(0);
+    });
+  });
 
   it("a future-dated sent report is blocked on the timer, no Stripe call", async () => {
     rows = [baseRow(FUTURE)];

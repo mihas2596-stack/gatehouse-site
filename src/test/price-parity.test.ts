@@ -22,31 +22,34 @@ const addonSets = [
 ];
 
 describe("server/client price parity", () => {
+  // LB-33: the client no longer asks about recent cleaning, so the
+  // parity matrix covers the only live path — the server default
+  // (cleanedRecently absent/true = standard first visit). The server
+  // mirror still accepts cleaned_recently; its deep-first branch is
+  // unreachable from the quote form.
   for (const b of bedrooms) {
     for (const f of fullBaths) {
       for (const freq of frequencies) {
         for (const staleFounding of [false, true]) {
-          for (const cleaned of [false, true]) {
-            for (const addons of addonSets) {
-              const label = `${b}bd/${f}ba ${freq} staleFounding=${staleFounding} cleaned=${cleaned} addons=${JSON.stringify(addons)}`;
-              it(label, () => {
-                const client = priceBreakdown({
-                  bedrooms: b,
-                  fullBaths: f,
-                  frequency: freq,
-                  recentlyCleaned: cleaned,
-                  addons,
-                });
-                const server = serverBreakdown({
-                  bedroomsRaw: String(b),
-                  bathroomsRaw: String(f),
-                  serviceKey: "standard",
-                  frequency: freq,
-                  // @ts-expect-error stale clients may still send the removed flag
-                  founding: staleFounding,
-                  cleanedRecently: cleaned,
-                  addons,
-                });
+          for (const addons of addonSets) {
+            const label = `${b}bd/${f}ba ${freq} staleFounding=${staleFounding} addons=${JSON.stringify(addons)}`;
+            it(label, () => {
+              const client = priceBreakdown({
+                bedrooms: b,
+                fullBaths: f,
+                frequency: freq,
+                addons,
+              });
+              const server = serverBreakdown({
+                bedroomsRaw: String(b),
+                bathroomsRaw: String(f),
+                serviceKey: "standard",
+                frequency: freq,
+                // @ts-expect-error stale clients may still send the removed flag
+                founding: staleFounding,
+                cleanedRecently: true,
+                addons,
+              });
                 expect(server).not.toBeNull();
                 expect(client).not.toBeNull();
                 expect(server!.first_total).toBe(client!.first_total);
@@ -58,7 +61,6 @@ describe("server/client price parity", () => {
         }
       }
     }
-  }
 });
 
 describe("owner price-test mode parity (testScale = 1/100)", () => {
@@ -67,7 +69,6 @@ describe("owner price-test mode parity (testScale = 1/100)", () => {
       bedrooms: 3,
       fullBaths: 2,
       frequency: "onetime",
-      recentlyCleaned: true,
       addons: {},
       testScale: true,
     });
@@ -129,7 +130,7 @@ describe("half-bath parity (M1)", () => {
   for (const [b, f, h] of cases) {
     it(`${b}bd/${f}full/${h}half`, () => {
       const client = priceBreakdown({
-        bedrooms: b, fullBaths: f, frequency: "onetime", recentlyCleaned: true,
+        bedrooms: b, fullBaths: f, frequency: "onetime",
         addons: addonSets[0],
       });
       const server = serverBreakdown({

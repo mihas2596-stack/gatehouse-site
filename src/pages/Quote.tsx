@@ -96,6 +96,12 @@ type QuoteDraft = {
 
 const QUOTE_DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
+// MB-28: the State field serves Georgia only. Accept the full name
+// ("Georgia", any case) and normalize it to "GA" so typing the honest
+// name never fails validation.
+const normalizeStateInput = (v: string): string =>
+  v.trim().toUpperCase() === "GEORGIA" ? "GA" : v;
+
 function readQuoteDraft(key: string | null): Partial<QuoteDraft> {
   if (!key) return {};
   try {
@@ -238,7 +244,7 @@ const Quote = () => {
     termsConsent: false,
     photoConsent: false,
     city: draft.contact?.city ?? params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
-    state: draft.contact?.state ?? "GA",
+    state: normalizeStateInput(draft.contact?.state ?? "GA"),
     apt: draft.contact?.apt ?? "",
   });
   // Entry preference (not a secret): chosen on step 2, stored with the
@@ -257,8 +263,12 @@ const Quote = () => {
   // Restore the step the visitor was on (a reload mid-form lands back
   // on step 2, not step 1). Clamp to 1 when the draft has no ZIP — a
   // step-2 restore without a ZIP makes no sense.
+  // MA-06: a step-3 restore is clamped to step 2. The draft never stores
+  // the consents, and the photo-consent checkbox lives only on step 2 —
+  // restoring step 3 would strand the visitor on the review step with
+  // no way to re-give it (silent dead submit).
   const [step, setStep] = useState<1 | 2 | 3>(
-    (draft.step === 2 || draft.step === 3) && (draft.zip ?? "") !== "" ? draft.step : 1
+    (draft.zip ?? "") === "" ? 1 : draft.step === 2 || draft.step === 3 ? 2 : 1
   );
 
   // Draft save (moved below the step-2 state it reads): the draft covers
@@ -331,6 +341,9 @@ const Quote = () => {
     const t = e.target as HTMLInputElement;
     if (t.type === "checkbox") {
       setBooking((p) => ({ ...p, [t.name]: t.checked }));
+    } else if (t.name === "state") {
+      // MB-28: "Georgia" becomes "GA" as soon as it is fully typed.
+      setBooking((p) => ({ ...p, state: normalizeStateInput(t.value) }));
     } else {
       setBooking((p) => ({ ...p, [t.name]: t.value }));
     }
@@ -345,7 +358,8 @@ const Quote = () => {
     if (field === "city") return value.trim().length < 2 ? "Enter your city." : "";
     if (field === "state") {
       if (!value.trim()) return "Enter your state.";
-      return value.trim().toUpperCase() === "GA" ? "" : "We currently serve Georgia only — please enter GA.";
+      const normalized = value.trim().toUpperCase();
+      return normalized === "GA" || normalized === "GEORGIA" ? "" : "We currently serve Georgia only — please enter GA.";
     }
     if (field === "date") {
       if (!validServiceDate(value) || value < minDate) return `Choose a valid date on or after ${fmtDate(minDate)}.`;
@@ -378,7 +392,7 @@ const Quote = () => {
 
   const goToStep2 = () => {
     if (!canProceed) {
-      if (!zipEntered) setStep1ZipError(zip.length === 0 ? "Enter your ZIP code to see your price." : "Enter a 5-digit ZIP code.");
+      if (!zipEntered) setStep1ZipError(zip.length === 0 ? "Enter your ZIP code to see your price." : "Enter a 5-digit ZIP code, e.g. 30518.");
       document.getElementById("q-zip")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       document.getElementById("q-zip")?.focus();
       toast({
@@ -457,10 +471,26 @@ const Quote = () => {
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
+      // A stale submit error from an earlier attempt must not linger
+      // next to the inline error shown for this attempt.
+      setSubmitError("");
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date", "termsConsent", "photoConsent"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
-      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
-      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
+      for (const f of order) if (errs[f] && refs[f].current) { refs[f].current.focus(); return; }
+      const entryHome = errs.entryMethod ? document.getElementById("entry-home") : null;
+      if (entryHome) { entryHome.focus(); return; }
+      const entryDoorCode = errs.entryDetail ? document.getElementById("entry-detail-door_code") : null;
+      if (entryDoorCode) { entryDoorCode.focus(); return; }
+      // MA-06 (belt-and-braces): no failing field could be focused — its
+      // input is not mounted on this step. The photo-consent checkbox
+      // lives only on step 2, so on step 3 its ref is null and the loop
+      // above can neither focus it nor show it inline. Say so in the
+      // submit error instead of returning silently.
+      if (errs.photoConsent) {
+        setSubmitError("Please agree to photos for your private report. Go back to step 2 to check the photo consent box.");
+      } else {
+        const firstErr = Object.values(errs)[0];
+        if (firstErr) setSubmitError(firstErr);
+      }
       return;
     }
     submitLock.current = true;
@@ -740,7 +770,7 @@ const Quote = () => {
                 />
                 <p id="zip-msg" className="mt-2 text-sm" role={zipOutOfArea || step1ZipError ? "alert" : undefined}>
                   {step1ZipError && <span className="text-destructive">{step1ZipError}</span>}
-                  {!step1ZipError && zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code.</span>}
+                  {!step1ZipError && zipPartial && <span className="text-muted-foreground">Enter a 5-digit ZIP code, e.g. 30518.</span>}
                   {zipInArea && <span className="text-foreground">We clean homes in {zip}.</span>}
                   {zipOutOfArea && (
                     <span className="text-destructive">
@@ -775,6 +805,7 @@ const Quote = () => {
                     <option key={n} value={n}>{n} {n === 1 ? "half bathroom" : "half bathrooms"}</option>
                   ))}
                 </select>
+                <p className="mt-1.5 text-sm text-muted-foreground">Half bathrooms don&apos;t change your price.</p>
               </div>
 
               <div className="md:col-span-2">
@@ -840,7 +871,7 @@ const Quote = () => {
                 onClick={() => setExtrasOpen((v) => !v)}
                 className="min-h-[44px] rounded-lg border border-border bg-background px-4 py-2 text-sm font-semibold text-foreground"
               >
-                Add extras (optional) — {extrasSummary || "None selected"} {extrasOpen ? "⌃" : "⌄"}
+                Add extras (optional) — {extrasSummary || "None selected"} · {extrasOpen ? "Hide extras" : "Show extras"}
               </button>
               {extrasOpen && (<div className="flex flex-col gap-3 mt-1">
                 {!includedAddons.includes("insideOven") && (
@@ -888,15 +919,15 @@ const Quote = () => {
 
             {/* Result */}
             <div className="mt-7 rounded-xl border border-border bg-background p-4 text-center sm:p-6" aria-live="polite">
-              {tier === null ? (
-                <>
-                  <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
-                  <p className="text-sm text-muted-foreground mt-2">Homes with 6+ bedrooms or 6+ full bathrooms get an individual quote.</p>
-                </>
-              ) : zipOutOfArea ? (
+              {zipOutOfArea ? (
                 <p className="text-base font-semibold text-foreground">
                   We don't serve this ZIP yet. We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell. <a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us</a> and we’ll let you know when we expand to your area.
                 </p>
+              ) : tier === null ? (
+                <>
+                  <p className="font-heading text-2xl font-bold text-primary"><a href="mailto:hello@gatehousehomecleaning.com" className="underline">Email us for a price</a></p>
+                  <p className="text-sm text-muted-foreground mt-2">Homes with 6+ bedrooms or 6+ full bathrooms get a custom quote.</p>
+                </>
               ) : !zipInArea ? (
                 <p className="text-base text-foreground">Enter your ZIP code to see your price.</p>
               ) : (
@@ -1125,7 +1156,7 @@ const Quote = () => {
                   <div>
                     <label htmlFor="b-state" className="block text-sm font-medium mb-1.5">State *</label>
                     <input
-                      id="b-state" name="state" type="text" ref={refs.state} required autoComplete="address-level1" maxLength={2}
+                      id="b-state" name="state" type="text" ref={refs.state} required autoComplete="address-level1" maxLength={7}
                       value={booking.state} onChange={handleBookingChange} onBlur={handleBookingBlur}
                       aria-required="true" aria-invalid={!!bookingErrors.state} aria-describedby={bookingErrors.state ? "b-state-error" : undefined}
                       placeholder="GA"
@@ -1155,7 +1186,7 @@ const Quote = () => {
                     ))}
                   </div>
                   {entryMethod === "decide_later" && (
-                    <p className="mt-3 text-sm text-foreground">We’ll email you to agree on entry before your visit.</p>
+                    <p className="mt-3 text-sm text-foreground">We’ll email you to arrange entry before your visit.</p>
                   )}
                   {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
                   {entryMethod === "arrange_before" && (

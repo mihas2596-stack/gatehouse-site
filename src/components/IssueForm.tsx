@@ -65,7 +65,7 @@ export function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhot
         className="w-full text-sm mb-1"
       />
       <p className="text-xs text-muted-foreground mb-2">
-        Photos up to 1 MB each. If your photo is larger, take a screenshot of it first.
+        Photos are compressed on your phone before sending (up to 15 MB each).
       </p>
       {photoNote && (
         <p className="text-xs text-muted-foreground mb-2">{photoNote}</p>

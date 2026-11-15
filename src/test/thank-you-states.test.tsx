@@ -12,7 +12,7 @@ const bookingState = {
   customerEmailSent: true,
   bt: "v2.test-token",
   recap: { email: "client@example.com", date: "2026-11-08", window: "9:00 AM - 12:00 PM" },
-  plan: { service: "Standard Cleaning", first: 21.9, recurring: null, firstIsDeep: false },
+  plan: { service: "Standard Cleaning", first: 21.9, recurring: null },
 };
 
 function renderWith(cardStatus: unknown) {
@@ -42,7 +42,7 @@ describe("/thank-you card states", () => {
   it("N23: a server-corrected price shows an Updated price note before the card step", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, booking: { first: "15", service: "Standard Cleaning", date: "2026-11-08" } }) }));
     render(
-      <MemoryRouter initialEntries={[{ pathname: "/thank-you", state: { ...bookingState, plan: { service: "Standard Cleaning", first: 1.5, recurring: 1.5, firstIsDeep: false }, serverPriceChanged: true } }]}>
+      <MemoryRouter initialEntries={[{ pathname: "/thank-you", state: { ...bookingState, plan: { service: "Standard Cleaning", first: 1.5, recurring: 1.5 }, serverPriceChanged: true } }]}>
         <ThankYou />
       </MemoryRouter>,
     );

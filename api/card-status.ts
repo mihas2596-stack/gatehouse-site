@@ -276,7 +276,7 @@ async function stripePost(
 // fetched directly by id when it is not on any page — it is never
 // silently dropped.
 type StripeCardRow = { id: string; card?: { brand?: string; last4?: string } };
-async function listCustomerCards(secretKey: string, customerId: string): Promise<StripeCardRow[]> {
+export async function listCustomerCards(secretKey: string, customerId: string): Promise<StripeCardRow[]> {
   const all: StripeCardRow[] = [];
   let startingAfter: string | undefined;
   for (let page = 0; page < 10; page++) {
@@ -720,7 +720,11 @@ export default async function handler(req: Req, res: Res) {
           const createdAt = latestEvent(events, "visit_created")?.created_at || row?.created_at;
           if (createdAt && !Number.isNaN(Date.parse(createdAt))) booking.confirm_by = confirmDeadlineLabel(new Date(createdAt));
           if (row) {
-            if (row.amount_cents != null && row.amount_cents > 0) booking.first = String(row.amount_cents / 100);
+            // LB-29 / DA-25: two decimals — String(149/100) is "1.49"
+            // but String(150/100) is "1.5", and /save-card renders
+            // `$${booking.first}` ("$1.5"). toFixed(2), not fmtMoney
+            // (which adds its own "$").
+            if (row.amount_cents != null && row.amount_cents > 0) booking.first = (row.amount_cents / 100).toFixed(2);
             if (row.service) booking.service = row.service;
             if (row.visit_date) booking.date = row.visit_date;
           }

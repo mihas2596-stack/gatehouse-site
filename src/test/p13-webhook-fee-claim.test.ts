@@ -98,7 +98,10 @@ beforeEach(() => {
     gh_payment_method: "pm_1",
   };
   row = { id: VISIT_ID, booking_id: BID, status: "cancelled", payment_intent_id: null, receipt_email_id: null };
-  events = [];
+  // LB-12: the fee mirror verifies the $25 against the cancellation
+  // record — without a visit_cancelled event carrying fee_cents the
+  // webhook refuses the mirror.
+  events = [{ event: "visit_cancelled", detail: { fee_cents: 2500 } }];
   resendBodies = [];
   arrived = 0;
   barrier = new Promise<void>((r) => { barrierResolve = r; });
@@ -170,9 +173,10 @@ describe("P13: concurrent double webhook delivery journals the fee once", () => 
     ]);
     expect(r1.code).toBe(200);
     expect(r2.code).toBe(200);
-    expect(events.filter((e) => e.event === "cancellation_fee_paid")).toHaveLength(1);
-    expect(events[0].detail?.["payment_intent"]).toBe("pi_fee_1");
-    expect(events[0].detail?.["amount_cents"]).toBe(2500);
+    const paid = events.filter((e) => e.event === "cancellation_fee_paid");
+    expect(paid).toHaveLength(1);
+    expect(paid[0].detail?.["payment_intent"]).toBe("pi_fee_1");
+    expect(paid[0].detail?.["amount_cents"]).toBe(2500);
     expect(resendBodies).toHaveLength(1);
     expect(row["fee_status"]).toBe("fee_paid");
     expect(row["fee_intent_id"]).toBe("pi_fee_1");

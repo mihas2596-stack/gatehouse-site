@@ -8,6 +8,10 @@ import Visit from "@/pages/Visit";
 
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 
+// MB-33: compression succeeds in this file, so a >1 MB photo is
+// attached instead of dropped.
+vi.mock("@/lib/imageConvert", () => ({ convertToJpeg: vi.fn(async () => new Blob(["jpeg-bytes"], { type: "image/jpeg" })) }));
+
 let visitState: string;
 let reportState: string;
 let issueDecision: Record<string, unknown> | null;
@@ -135,16 +139,23 @@ describe("shared issue form on /visit (idea 3)", () => {
     expect(options).not.toContain("Bedroom");
     expect(options).not.toContain("Living areas");
     expect(screen.getByLabelText(/Add a photo/)).toBeInTheDocument();
-    expect(screen.getByText(/Photos up to 1 MB each/)).toBeInTheDocument();
+    expect(screen.getByText(/compressed on your phone before sending/)).toBeInTheDocument();
   });
 
-  it("an oversized photo is dropped with a note, the message still goes through", async () => {
+  it("an oversized photo is compressed and attached, the message still goes through", async () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Report an issue" }));
     const input = await screen.findByLabelText(/Add a photo/) as HTMLInputElement;
     const big = new File(["x".repeat(1_000_001)], "big.jpg", { type: "image/jpeg" });
     fireEvent.change(input, { target: { files: [big] } });
-    expect(await screen.findByText(/That photo is large, so we'll send your message without it\./)).toBeInTheDocument();
+    // No "too large" note: the photo was compressed instead of dropped.
+    await waitFor(() => expect(screen.queryByText(/That photo is large/)).not.toBeInTheDocument());
+    fireEvent.change(await screen.findByLabelText("What isn't right?"), { target: { value: "The floor is still dirty." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send issue — pause payment" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]["action"]).toBe("issue");
+    expect(typeof posts[0]["photo"]).toBe("string");
+    expect(String(posts[0]["photo"])).toMatch(/^data:image\/jpeg/);
   });
 
   it("an expired issue window shows the email message, not a generic error", async () => {

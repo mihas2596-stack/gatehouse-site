@@ -135,7 +135,7 @@ const Terms = () => {
           Payments are processed securely by Stripe.
         </p>
         <p className="mb-4">
-          <strong>5.3 Late Payment.</strong> Unpaid amounts may accrue a late fee of 1.5% per month or the maximum amount permitted by Georgia law, whichever is less. We may suspend Services for accounts with outstanding balances.
+          <strong>5.3 Late Payment.</strong> No late fees apply.
         </p>
         <p className="mb-8">
           <strong>5.4 Chargebacks.</strong> Initiating a chargeback without first attempting to resolve a dispute with us in good faith constitutes a material breach of these Terms.
@@ -159,7 +159,7 @@ const Terms = () => {
 
         <h2 id="terms-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">7. Service Concerns</h2>
         <p className="mb-8">
-          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us with a photo, within 24 hours after your photo report is sent. We fix missed checklist items free within 72 hours after you report the issue.
+          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us with a photo, within 24 hours after your photo report is sent. Damage claims by email follow Section 10.2 (48 hours). We fix missed checklist items free within 72 hours after you report the issue.
         </p>
 
         <h2 id="terms-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">8. Client Responsibilities</h2>

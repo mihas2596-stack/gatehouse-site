@@ -2,12 +2,13 @@ import { trackFunnel } from "@/lib/measurement";
 import { formatArrivalWindow } from "@/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle, CalendarClock, AlertTriangle, Loader2, User } from "lucide-react";
+import { CheckCircle, CalendarClock, AlertTriangle, Loader2, RefreshCw, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
 import { IssueForm } from "@/components/IssueForm";
+import { convertToJpeg } from "@/lib/imageConvert";
 import { fmtDateUS } from "@/lib/formatDate";
 import { toVisitMethod, entrySummaryLabel, entryChoiceSettled, type EntryMethodChoice, type EntryDetailChoice } from "@/config/entry";
 
@@ -160,6 +161,12 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   const [rep, setRep] = useState<ReportData | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // MB-16: whether the report fetch itself failed before any good
+  // report loaded — the not_ready branch then offers a retry instead
+  // of the (false) "will appear after your cleaning" text.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const repRef = useRef<ReportData | null>(null);
+  useEffect(() => { repRef.current = rep; }, [rep]);
   // S13: Approve refused with card_confirmation_required — several
   // cards on file, none confirmed for this booking. The link below
   // leads to the existing confirm_card flow (/save-card).
@@ -170,29 +177,60 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
 
-  // Photo for the issue form: same 1 MB rule as /report — a larger
-  // photo is dropped with a note, the message itself still goes through.
-  const onPhotoPick = (file: File | null) => {
+  // Photo for the issue form: compress on the phone (same convertToJpeg
+  // as the cleaner) instead of dropping anything over 1 MB — the
+  // server accepts up to 15 MB, and a phone photo is almost always
+  // over 1 MB (MB-33). When compression itself fails, a small photo
+  // still goes through as-is; a large one gets an honest note and the
+  // message itself still goes through.
+  const onPhotoPick = async (file: File | null) => {
     setIssuePhoto("");
     setIssuePhotoNote("");
     if (!file) return;
-    if (file.size > 1_000_000) {
-      setIssuePhotoNote("That photo is large, so we'll send your message without it.");
-      return;
+    const readAsDataUrl = (blob: Blob | File) => {
+      const reader = new FileReader();
+      reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
+      reader.readAsDataURL(blob);
+    };
+    try {
+      const blob = await convertToJpeg(file);
+      if (blob.size > 15_000_000) {
+        setIssuePhotoNote("That photo is too large to send — please pick a smaller one.");
+        return;
+      }
+      readAsDataUrl(blob);
+    } catch (err) {
+      if (file.size <= 1_000_000) {
+        readAsDataUrl(file);
+      } else {
+        setIssuePhotoNote(err instanceof Error ? err.message : "That photo is large, so we'll send your message without it.");
+      }
     }
-    const reader = new FileReader();
-    reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
-    reader.readAsDataURL(file);
   };
 
   // M7: the report fetch, refetchable — an unavailable photo tile
   // offers "Try again" (same as /report) instead of a dead end.
+  // MB-16 (mirroring /report G6): a failed refetch never wipes a
+  // loaded report — the last good version stays, with a note; only a
+  // fetch that fails before anything loaded shows not_ready, and then
+  // with a retry button.
   const reload = useCallback(() => {
     fetch(`/api/report?bt=${encodeURIComponent(bt)}`)
-      .then((r) => r.json())
-      .then((j) => setRep(j as ReportData))
-      .catch(() => setRep({ ok: false, state: "not_ready" }));
+      .then(async (r) => {
+        const j = (await r.json()) as ReportData;
+        if (!r.ok || j.ok === false) throw new Error("bad");
+        setRep(j);
+        setLoadFailed(false);
+      })
+      .catch(() => {
+        if (repRef.current) {
+          setErr("Couldn't refresh your report — showing the last loaded version. Try again in a moment.");
+        } else {
+          setRep({ ok: false, state: "not_ready" });
+          setLoadFailed(true);
+        }
+      });
   }, [bt]);
 
   useEffect(() => {
@@ -347,6 +385,15 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             report reaches you. Email hello@gatehousehomecleaning.com and we&apos;ll resend it
             another way.
           </p>
+        ) : loadFailed ? (
+          <>
+            <p className="text-sm text-foreground mb-3">
+              We couldn&apos;t load your report — check your connection and try again. Your link is fine.
+            </p>
+            <Button variant="outline" onClick={() => reload()}>
+              Try again
+            </Button>
+          </>
         ) : (
           <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
         )}
@@ -583,7 +630,8 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       {rep.deadline && rep.state === "awaiting" && !rep.charge_timer_blocked && (
         <p className="mb-3 text-sm">
           Review by <strong>{fmtDeadline(rep.deadline)}</strong> (Atlanta time) — after that your saved card
-          is charged automatically unless you report an issue.
+          is charged automatically unless you report an issue. The charge runs after this deadline, at the
+          next scheduled billing time — not at this exact minute.
         </p>
       )}
       {err && <p className="mb-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{err}</p>}
@@ -803,6 +851,15 @@ const Visit = () => {
   // visit whose date is today (Atlanta time) is being cleaned today.
   // Any other confirmed visit stays on step 1.
   const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  // MB-29: a past date can never be confirmed (the server refuses it
+  // later) — say so now instead of a generic error after the round trip.
+  const requestProposedDate = () => {
+    if (proposed && proposed < todayET) {
+      setError("Please choose a future date — that date has already passed.");
+      return;
+    }
+    void post({ action: "propose_date", date: proposed });
+  };
   const isCleaningDay = data?.state === "confirmed" && b.confirmed_date === todayET;
   // H16: after a detach, has_card is false but the card_confirmed
   // journal event (and its last4) survives. The paid receipt line
@@ -843,6 +900,16 @@ const Visit = () => {
         noindex
       />
       <div className="container max-w-2xl py-12 pb-24 md:pb-12">
+        {/* MB-31: a small Refresh, reusing load() — the client waits on
+            the owner's confirmation and should not have to reload the
+            page (or leave the tab) to see it. */}
+        {!loading && data && data.state !== "invalid_link" && data.state !== "transient_error" && (
+          <div className="flex justify-end mb-2">
+            <Button variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="w-4 h-4 mr-1" /> Refresh
+            </Button>
+          </div>
+        )}
         {loading && (
           <div className="text-center">
             <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" aria-hidden="true" />
@@ -1225,7 +1292,7 @@ const Visit = () => {
                 <div className="flex flex-wrap gap-2">
                   {data.alt_dates.map((d) => (
                     <Button key={d} variant="hero" disabled={busy} onClick={() => void post({ action: "accept_alt_date", date: d })}>
-                      {d}
+                      {fmtDateUS(d)}
                     </Button>
                   ))}
                 </div>
@@ -1239,11 +1306,12 @@ const Visit = () => {
                   <input
                     type="date"
                     value={proposed}
+                    min={todayET}
                     onChange={(e) => setProposed(e.target.value)}
                     className="rounded-xl border border-border bg-background p-3 text-sm"
                     aria-label="Propose a new date"
                   />
-                  <Button variant="outline" disabled={busy || !proposed} onClick={() => void post({ action: "propose_date", date: proposed })}>
+                  <Button variant="outline" disabled={busy || !proposed} onClick={() => requestProposedDate()}>
                     Request this date
                   </Button>
                 </div>
@@ -1254,8 +1322,8 @@ const Visit = () => {
                 </p>
                 {data.proposed_pending && data.proposed_date && (
                   <p className="text-sm mt-3" role="status">
-                    You asked for <strong>{data.proposed_date}</strong> — we&apos;re checking it.
-                    {b.confirmed_date ? <> Your confirmed date {b.confirmed_date} stays until the new one is confirmed.</> : " Your request stays as it is until the new date is confirmed."}
+                    You asked for <strong>{fmtDateUS(data.proposed_date)}</strong> — we&apos;re checking it.
+                    {b.confirmed_date ? <> Your confirmed date {fmtDateUS(b.confirmed_date)} stays until the new one is confirmed.</> : " Your request stays as it is until the new date is confirmed."}
                   </p>
                 )}
               </div>

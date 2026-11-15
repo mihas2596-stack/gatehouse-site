@@ -75,12 +75,15 @@ describe("G4 L9: cancelFeeCents fails closed on a bad date", () => {
 });
 
 describe("G3: isFutureVisitDate fails closed on a bad date", () => {
-  it("an impossible calendar date is never 'future', even though it sorts after today", () => {
+  it("an impossible calendar date IS 'future' — fail-closed, so the gates block it", () => {
     // "2026-13-40" > any real 2026 date as a string — the old
-    // regex-only check read it as future.
-    expect(isFutureVisitDate("2026-13-40")).toBe(false);
-    expect(isFutureVisitDate("2026-02-30")).toBe(false);
-    expect(isFutureVisitDate("2026-13-40", Date.parse("2026-01-01T00:00:00Z"))).toBe(false);
+    // regex-only check read it as future, the validated check read
+    // it as not-future (fail-open: a garbage date let charges and
+    // submits through). MB-20: an impossible date now blocks the
+    // gate, so it reads as future.
+    expect(isFutureVisitDate("2026-13-40")).toBe(true);
+    expect(isFutureVisitDate("2026-02-30")).toBe(true);
+    expect(isFutureVisitDate("2026-13-40", Date.parse("2026-01-01T00:00:00Z"))).toBe(true);
   });
 
   it("valid dates still read correctly", () => {

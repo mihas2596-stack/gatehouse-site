@@ -48,18 +48,17 @@ describe("addonsTotal", () => {
 
 describe("priceBreakdown — confirmed scenario (P0-1)", () => {
   // 3 bedrooms, 2 full bathrooms, ZIP 30024, Standard, every other week,
-  // cleaned in last 3 months = Yes, inside oven +$35.
+  // inside oven +$35.
   const scenario = {
     bedrooms: 3,
     fullBaths: 2,
     frequency: "every2weeks" as const,
-    recentlyCleaned: true,
     addons: { insideOven: true },
   };
   it("shows ONE first-visit total including the add-on at regular prices", () => {
     const b = priceBreakdown(scenario);
     expect(b).not.toBeNull();
-    // Recurring plan, cleaned recently: first visit at the $189 recurring
+    // Recurring plan: first visit at the $189 recurring
     // M rate, plus $35 oven = $224.
     expect(b!.first_total).toBe(224);
     expect(b!.first_service).toBe("standard");
@@ -70,29 +69,12 @@ describe("priceBreakdown — confirmed scenario (P0-1)", () => {
   });
 });
 
-describe("priceBreakdown — deep first visit", () => {
-  it("labels the first visit as a deep clean when not cleaned recently", () => {
-    const b = priceBreakdown({
-      bedrooms: 3,
-      fullBaths: 2,
-      frequency: "every2weeks",
-      recentlyCleaned: false,
-      addons: { insideOven: true },
-    });
-    expect(b!.first_service).toBe("deep");
-    // Deep M = $329; oven is included in deep, not charged twice.
-    expect(b!.first_total).toBe(329);
-    expect(b!.recurring_total).toBe(189 + 35);
-  });
-});
-
 describe("priceBreakdown — one-time", () => {
   it("one-time standard is the regular one-time price", () => {
     const b = priceBreakdown({
       bedrooms: 3,
       fullBaths: 2,
       frequency: "onetime",
-      recentlyCleaned: true,
       addons: {},
     });
     expect(b!.first_total).toBe(219);
@@ -105,7 +87,6 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       bedrooms: 3,
       fullBaths: 2,
       frequency: "onetime",
-      recentlyCleaned: true,
       addons: {},
       testScale: true,
     });
@@ -116,7 +97,6 @@ describe("priceBreakdown — owner price-test mode (testScale)", () => {
       bedrooms: 3,
       fullBaths: 2,
       frequency: "every2weeks",
-      recentlyCleaned: true,
       addons: { insideOven: true },
       testScale: true,
     });

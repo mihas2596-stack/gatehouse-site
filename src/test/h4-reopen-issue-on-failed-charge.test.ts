@@ -159,7 +159,7 @@ describe("H4: a failed charge after a resolved dispute reopens the dispute", () 
     expect(failedEmailSent).toBe(true);
     expect(rows[0]["status"]).toBe("report_sent");
     expect(rows[0]["issue_open"]).toBe(true);
-    const reopened = events.filter((e) => e.event === "issue_opened" && e.detail?.["reason"] === "payment_failed_after_resolve");
+    const reopened = events.filter((e) => e.event === "issue_opened" && e.detail?.["reason"] === "charge_unsettled_after_resolve");
     expect(reopened).toHaveLength(1);
   });
 
@@ -169,23 +169,23 @@ describe("H4: a failed charge after a resolved dispute reopens the dispute", () 
     const out = await charge();
     expect(out.outcome).toBe("failed");
     expect(rows[0]["issue_open"]).toBe(false);
-    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "payment_failed_after_resolve")).toBe(false);
+    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "charge_unsettled_after_resolve")).toBe(false);
   });
 
   it("no reopen when the charge needs 3DS — the client can still complete it", async () => {
     piBehavior = "requires_action";
     const out = await charge();
     expect(out.outcome).toBe("failed");
-    expect(out.error).toBe("payment_requires_action");
+    if (out.outcome === "failed") expect(out.error).toBe("payment_requires_action");
     expect(rows[0]["issue_open"]).toBe(false);
-    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "payment_failed_after_resolve")).toBe(false);
+    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "charge_unsettled_after_resolve")).toBe(false);
   });
 
-  it("no reopen when the charge outcome is unknown — the money may have moved", async () => {
+  it("an unknown charge outcome reopens the resolved dispute — the money may have moved, so the dispute must be visible again", async () => {
     piBehavior = "throws";
     const out = await charge();
     expect(out.outcome).toBe("unknown");
-    expect(rows[0]["issue_open"]).toBe(false);
-    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "payment_failed_after_resolve")).toBe(false);
+    expect(rows[0]["issue_open"]).toBe(true);
+    expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "charge_unsettled_after_resolve")).toBe(true);
   });
 });

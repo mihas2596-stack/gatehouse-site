@@ -39,9 +39,10 @@ import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
 import { ownerNotificationEmail, ownerRequestEmailBody } from "./_owner_email.js";
 import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision } from "./_payment_basis.js";
-import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate, todayInNewYork } from "./_visit_date.js";
+import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate, todayInNewYork, visitDateStartNYMs } from "./_visit_date.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation, type FoundIntent } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
+import { listCustomerCards } from "./card-status.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { deleteAccess, revokeAccessForCleanerChange, saveAccess, saveAccessNote } from "./_visit_access.js";
 import {
@@ -674,23 +675,29 @@ async function clearV2Fields(visitId: string): Promise<void> {
 // horizon cleanerLinkExpiry uses). A still-valid link is left untouched
 // so the cleaner keeps working on the URL the owner already sent. A
 // missing or already-expired link rotates too (the cleaner needs a
-// working one). Returns the new link, or null when no rotation was
-// needed / the write failed (the caller then falls back to the current
-// link, if any).
+// working one). MB-12 (DA-39): the result is discriminated —
+// "not_needed" and "failed" are NOT the same null. A caller that
+// falls back to recomputing the OLD link after a failed rotation
+// shows an expiring link as live; callers must surface "failed"
+// (response flag + journal event) instead.
+type LinkRotation =
+  | { status: "not_needed" }
+  | { status: "rotated"; url: string; expires: string; reusable: boolean }
+  | { status: "failed"; reason: string };
 async function rotateCleanerLinkForDate(
   visitId: string,
   bookingId: string,
   newDate: string,
   currentExpires: string | null,
   reason: string,
-): Promise<{ url: string; expires: string; reusable: boolean } | null> {
+): Promise<LinkRotation> {
   const needByMs = Date.parse(`${newDate}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
   const currentExpiresMs = currentExpires ? Date.parse(currentExpires) : NaN;
-  if (Number.isFinite(needByMs) && Number.isFinite(currentExpiresMs) && currentExpiresMs >= needByMs) return null;
+  if (Number.isFinite(needByMs) && Number.isFinite(currentExpiresMs) && currentExpiresMs >= needByMs) return { status: "not_needed" };
   const v2 = mintV2Link(visitId, newDate);
   if (v2 && (await writeV2Link(visitId, v2))) {
     await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason, expires: v2.expires });
-    return { url: v2.url, expires: v2.expires, reusable: true };
+    return { status: "rotated", url: v2.url, expires: v2.expires, reusable: true };
   }
   const leg = mintLegacyLink(newDate);
   const okLeg = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
@@ -700,13 +707,14 @@ async function rotateCleanerLinkForDate(
   if (okLeg) {
     await clearV2Fields(visitId);
     await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason, expires: leg.expires });
-    return { url: leg.url, expires: leg.expires, reusable: false };
+    return { status: "rotated", url: leg.url, expires: leg.expires, reusable: false };
   }
+  const failReason = !v2 ? "v2_mint_null" : "v2_write_failed";
   await logEvent(visitId, bookingId, "owner", "cleaner_link_legacy_fallback", {
-    reason: !v2 ? "v2_mint_null" : "v2_write_failed",
+    reason: failReason,
     legacy_saved: false,
   });
-  return null;
+  return { status: "failed", reason: failReason };
 }
 
 // Task 4 (12.11.2026): record an arranged re-clean on the visit row —
@@ -734,7 +742,11 @@ async function recordReclean(
     reclean_cleaner_name: cleanerName,
     reclean_status: "scheduled",
   });
-  if (!rowWritten) log("recordReclean", "reclean columns not set (migration 20261112 pending?)");
+  // Module scope has no request logger (the `log` helper lives
+  // inside the request handler); a failed column write must not
+  // throw here — the journal event is the authority until the
+  // migration is applied, and the link rotation below must still run.
+  if (!rowWritten) console.log(JSON.stringify({ step: "recordReclean", info: "reclean columns not set (migration 20261112 pending?)" }));
   let linkRotated = false;
   const needByMs = Date.parse(`${recleanDate}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
   const currentExpiresMs = currentLinkExpires ? Date.parse(currentLinkExpires) : NaN;
@@ -792,6 +804,19 @@ function recomputeV2Link(row: CleanerRow): { url: string; expires: string } | nu
 
 export type CleanerProfile = { phone: string | null; photo: string | null };
 
+/** MB-18 (DA-32): the owner's scope mirror of api/cleaner.ts
+ *  effectiveChecklist — the stored checklist IS the scope; a row
+ *  without one seeds the standard buildWorkRooms scope (the same call
+ *  cleaner_link uses for a backfilled row). "Other areas" is allowed
+ *  alongside scope rooms, exactly as the cleaner path allows it. */
+function ownerScopeRooms(row: { checklist?: unknown; service?: string | null }): string[] {
+  const stored = row.checklist as { rooms?: Array<{ name?: string }> } | null | undefined;
+  if (Array.isArray(stored?.rooms) && stored.rooms.length > 0) {
+    return stored.rooms.map((r) => String(r?.name ?? "")).filter(Boolean);
+  }
+  return buildWorkRooms({ deep: /deep|move-in/i.test(row.service ?? "") }).map((r) => r.name);
+}
+
 /** Tolerant parse of the cleaner_profile jsonb column (object, string, or absent). */
 function parseCleanerProfile(raw: unknown): CleanerProfile {
   let obj: Record<string, unknown> | null = null;
@@ -827,12 +852,16 @@ async function reconcileCard(
 ): Promise<string> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
-  const res = await stripeGet(
-    secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
-  );
-  if (!res.ok) return "";
-  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  // LB-06 (DA-20): page through the whole card list with the shared
+  // listCustomerCards (api/card-status.ts) instead of one page of 10 —
+  // a booking's card past the first page used to be silently dropped.
+  // A Stripe/list failure fails closed (no backfill), as before.
+  let list: Array<{ id: string }>;
+  try {
+    list = await listCustomerCards(secretKey, customer.id);
+  } catch {
+    return "";
+  }
   // C13: the booking's card_confirmed event wins; else a lone card.
   // Several cards with no booking signal is ambiguous — no backfill
   // of an arbitrary card, so a charge then fails closed with
@@ -908,6 +937,39 @@ async function bookingEventsStrict(bookingId: string): Promise<{ ok: boolean; ev
 }
 const latestEvent = (events: BookingEvent[], name: string): BookingEvent | null =>
   events.find((e) => e.event === name) ?? null;
+
+// LB-01 (DA-07): the reminder-before-charge guard, keyed to the
+// CURRENT publication — the same rule as the cron (api/auto-charge.ts
+// latestCurrentEvent / publicationAnchorMs). The anchor is the latest
+// (re-)publication: the reminders_rearmed event's report_sent_at when
+// present, else the latest report_sent event's time. A reminder counts
+// only when it was sent AFTER that anchor — a reminder sent for an old
+// publication never satisfies the guard for the new one — and a
+// reminder_bounced after the send means the client was never reminded.
+// Local copy, not an import: api/auto-charge.ts imports this file
+// (sendReceiptEmailOnce), so importing it back would be circular.
+// Events here are newest-first (bookingEventsStrict: created_at desc).
+function latestCurrentReminder(events: BookingEvent[]): BookingEvent | null {
+  const rearm = latestEvent(events, "reminders_rearmed");
+  const sent = latestEvent(events, "report_sent");
+  const anchors: number[] = [];
+  if (rearm) {
+    const sentAt = typeof rearm.detail?.["report_sent_at"] === "string" ? rearm.detail["report_sent_at"] : "";
+    const ms = Date.parse(sentAt || rearm.created_at);
+    if (Number.isFinite(ms)) anchors.push(ms);
+  }
+  if (sent) {
+    const ms = Date.parse(sent.created_at);
+    if (Number.isFinite(ms)) anchors.push(ms);
+  }
+  const anchor = anchors.length > 0 ? Math.max(...anchors) : null;
+  const matches = events.filter((e) => e.event === "reminder_sent" || e.event === "reminder_bounced");
+  if (anchor === null) return matches[0] ?? null;
+  return matches.find((e) => {
+    const ms = Date.parse(e.created_at);
+    return Number.isFinite(ms) && ms > anchor;
+  }) ?? null;
+}
 const evStr = (ev: BookingEvent | null, key: string): string =>
   ev && typeof ev.detail?.[key] === "string" ? (ev.detail[key] as string) : "";
 
@@ -1921,6 +1983,13 @@ export default async function handler(req: Req, res: Res) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return json(400, { ok: false, error: "invalid_date" });
       }
+      // MB-20 / LB-07 (DA-21): the regex alone accepts impossible
+      // calendar dates ("2026-02-30", "2026-13-40") — and the old
+      // string comparison below ("2026-13-40" > today) passed them
+      // as future. A real calendar date is required.
+      if (!Number.isFinite(visitDateStartNYMs(date))) {
+        return json(400, { ok: false, error: "invalid_date" });
+      }
       const cleanerName = (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim();
       if (!cleanerName) {
         return json(400, { ok: false, error: "cleaner_required" });
@@ -2000,6 +2069,10 @@ export default async function handler(req: Req, res: Res) {
       // visit_date / window; the requested date stays in the journal.
       // Report state is untouched: a repair confirmation keeps a
       // submitted report in review instead of silently dropping it.
+      // MB-12 (DA-39): a failed link rotation is surfaced on the
+      // response, not swallowed — declared before the row update so
+      // the success return below can carry it.
+      let linkRotationFailed = false;
       if (row) {
         const rowOk = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
           status: "confirmed",
@@ -2013,9 +2086,16 @@ export default async function handler(req: Req, res: Res) {
         // H2: the cleaner link was minted from the OLD visit date — a
         // reschedule can leave it expiring before the visit. Rotate it
         // to the new date when a link exists and does not cover it.
+        // MB-12 (DA-39): a failed rotation is surfaced, not swallowed —
+        // the confirmation stands (the date was saved), but the owner
+        // must know the cleaner link did not survive the move.
         const linkExpires = (row as unknown as CleanerRow).cleaner_token_expires ?? null;
         if (linkExpires) {
-          await rotateCleanerLinkForDate(row.id, bookingId, date, linkExpires, "visit_rescheduled");
+          const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, linkExpires, "visit_rescheduled");
+          if (rotated.status === "failed") {
+            linkRotationFailed = true;
+            await logEvent(row.id, bookingId, "owner", "cleaner_link_rotation_failed", { reason: rotated.reason, date });
+          }
         }
       }
       // Email second: a failed send keeps the confirmation and surfaces
@@ -2061,6 +2141,7 @@ export default async function handler(req: Req, res: Res) {
         confirmed_window: win,
         email_sent: emailSent,
         already_confirmed: false,
+        ...(linkRotationFailed ? { cleaner_link_rotation_failed: true } : {}),
       });
     }
 
@@ -2079,6 +2160,10 @@ export default async function handler(req: Req, res: Res) {
       if (!date) return json(400, { ok: false, error: "confirmed_date_required" });
       if (!win) return json(400, { ok: false, error: "confirmed_window_required" });
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json(400, { ok: false, error: "invalid_date" });
+      // MB-20 / LB-07 (DA-21): the regex alone accepts impossible
+      // calendar dates ("2026-02-30", "2026-13-40") — a real calendar
+      // date is required (same rule as confirm).
+      if (!Number.isFinite(visitDateStartNYMs(date))) return json(400, { ok: false, error: "invalid_date" });
       const roster = await findRosterCleaner(cleanerId);
       if (!roster) return json(404, { ok: false, error: "cleaner_not_found" });
       if (!roster.active) return json(409, { ok: false, error: "cleaner_inactive" });
@@ -2185,7 +2270,11 @@ export default async function handler(req: Req, res: Res) {
       }
       // Link: a new or changed person gets a fresh v2 link (old one
       // dies); the same person keeps the current link.
+      // MB-12 (DA-39): a failed mint/write is surfaced as
+      // cleaner_link_rotation_failed — never as a silent 200 with no
+      // link, and never by showing the OLD (expiring) link as live.
       let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
+      let linkRotationFailed = false;
       if (changed || firstAssignment) {
         // H2: mint from the NEW confirmed date, not the row snapshot
         // taken before the update — a link minted from the old date can
@@ -2210,6 +2299,10 @@ export default async function handler(req: Req, res: Res) {
             reason: !v2 ? "v2_mint_null" : "v2_write_failed",
             legacy_saved: Boolean(okLeg),
           });
+          if (!linkOut) {
+            linkRotationFailed = true;
+            await logEvent(row.id, bookingId, "owner", "cleaner_link_rotation_failed", { reason: !v2 ? "v2_mint_null" : "v2_write_failed", date });
+          }
         }
         if (linkOut) {
           await logEvent(row.id, bookingId, "owner", "cleaner_link_rotated", { reason: "cleaner_changed", expires: linkOut.expires });
@@ -2220,8 +2313,14 @@ export default async function handler(req: Req, res: Res) {
         // it to the new date (the old URL dies; the panel shows the new
         // one). A still-valid link is left untouched.
         const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, (row as unknown as CleanerRow).cleaner_token_expires ?? null, "visit_rescheduled");
-        if (rotated) {
-          linkOut = rotated;
+        if (rotated.status === "rotated") {
+          linkOut = { url: rotated.url, expires: rotated.expires, reusable: rotated.reusable };
+        } else if (rotated.status === "failed") {
+          // MB-12: do NOT recompute the old link here — it expires
+          // before the new date, so showing it would present a dead
+          // link as working. Surface the failure instead.
+          linkRotationFailed = true;
+          await logEvent(row.id, bookingId, "owner", "cleaner_link_rotation_failed", { reason: rotated.reason, date });
         } else {
           const recomputed = recomputeV2Link(row as unknown as CleanerRow);
           if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
@@ -2274,6 +2373,7 @@ export default async function handler(req: Req, res: Res) {
         email_sent: emailSent,
         already_confirmed: false,
         ...(linkOut ? { url: linkOut.url, expires: linkOut.expires, reusable: linkOut.reusable } : {}),
+        ...(linkRotationFailed ? { cleaner_link_rotation_failed: true } : {}),
       });
     }
 
@@ -2440,7 +2540,9 @@ export default async function handler(req: Req, res: Res) {
       const recleanRaw = (parsed.data.reclean_date ?? "").trim();
       if (recleanRaw) {
         const checked = validateRecleanDate(recleanRaw, events);
-        if (!checked.ok) {
+        // NB: `!checked.ok` does NOT narrow this union under the app
+        // tsconfig (strict:false) — the explicit comparison does.
+        if (checked.ok === false) {
           return checked.error === "reclean_date_too_late"
             ? json(409, { ok: false, error: checked.error, reclean_by: checked.reclean_by })
             : json(400, { ok: false, error: checked.error });
@@ -2620,7 +2722,9 @@ export default async function handler(req: Req, res: Res) {
       let recleanCleanerChanged = false;
       if (recleanRaw) {
         const checked = validateRecleanDate(recleanRaw, events);
-        if (!checked.ok) {
+        // NB: `!checked.ok` does NOT narrow this union under the app
+        // tsconfig (strict:false) — the explicit comparison does.
+        if (checked.ok === false) {
           return checked.error === "reclean_date_too_late"
             ? json(409, { ok: false, error: checked.error, reclean_by: checked.reclean_by })
             : json(400, { ok: false, error: checked.error });
@@ -2790,7 +2894,12 @@ export default async function handler(req: Req, res: Res) {
           },
           Date.now(),
         );
-        const reminded = events.some((e) => e.event === "reminder_sent");
+        // LB-01 (DA-07): the guard is keyed to the CURRENT
+        // publication (latestCurrentReminder, same rule as the cron):
+        // a reminder sent for an old publication — or bounced after
+        // the send — does not satisfy it for the new publication.
+        const latestReminder = latestCurrentReminder(events);
+        const reminded = latestReminder?.event === "reminder_sent";
         if (basis === "timer_rule" && !reminded) {
           if (parsed.data.confirm_no_reminder !== true) {
             logErr("charge", "blocked: no reminder sent for this report");
@@ -2843,7 +2952,32 @@ export default async function handler(req: Req, res: Res) {
         if (outcome.outcome === "processing") return json(409, { ok: false, error: "payment_processing" });
         if (outcome.outcome === "mismatch") return json(409, { ok: false, error: "payment_intent_mismatch" });
         if (outcome.outcome === "failed") {
-          return json(402, { ok: false, error: outcome.error === "payment_requires_action" ? "payment_requires_action" : "payment_failed", detail: outcome.detail });
+          // MB-10 (DA-36): a 3DS challenge is completable only with
+          // the PaymentIntent's client_secret and the account's
+          // publishable key — the same pair /api/report returns (see
+          // api/report.ts), where STRIPE_PUBLISHABLE_KEY comes from
+          // the server env. The owner cannot complete the challenge
+          // themselves (off-session); the key pair lets the panel hand
+          // the client the completion step, or — when the publishable
+          // key is unset in Vercel — tell the owner plainly to ask
+          // the client to approve on their report page instead.
+          // The publishable key is public by design (it ships in
+          // client code); the client_secret is per-intent, not a
+          // server secret.
+          const requiresAction = outcome.error === "payment_requires_action";
+          return json(402, {
+            ok: false,
+            error: requiresAction ? "payment_requires_action" : "payment_failed",
+            detail: outcome.detail,
+            ...(requiresAction
+              ? {
+                  client_secret: outcome.client_secret ?? "",
+                  payment_intent: outcome.payment_intent ?? "",
+                  publishable_key: process.env["STRIPE_PUBLISHABLE_KEY"] ?? "",
+                  hint: "Only the client can complete the card challenge — ask them to approve on their report page.",
+                }
+              : {}),
+          });
         }
         return json(502, { ok: false, error: outcome.error });
       }
@@ -3156,7 +3290,20 @@ export default async function handler(req: Req, res: Res) {
               hint: "A customer issue opened while this report was being sent. Resolve the issue first, or re-send with resolve_issue to resolve it together with the new report.",
             });
           }
-          return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
+          // MB-17 (DA-42): any OTHER lost claim is not "already sent"
+          // either — the row moved to a state this send did not
+          // expect (returned, cancelled, re-submitted, ...). Only a
+          // row that is actually sent is an existing result; anything
+          // else is a 409 with the current state, so the owner
+          // reloads instead of believing a report went out.
+          if (freshVisit?.report_status === "sent") {
+            return json(200, { ok: true, state: "report_sent", already_sent: true, email_sent: false });
+          }
+          return json(409, {
+            ok: false, error: "report_state_changed",
+            report_status: freshVisit?.report_status ?? visitRow.report_status,
+            hint: "The report moved to a different state before this send landed. Reload the visit and try again.",
+          });
         }
         // RA15: claimed === -1 means the DB could not be read for the
         // claim. Fail closed: no email, no metadata write, no
@@ -3550,6 +3697,13 @@ export default async function handler(req: Req, res: Res) {
       if (phoneRaw !== null && !validCleanerPhone(phoneRaw)) {
         return json(400, { ok: false, error: "invalid_phone" });
       }
+      // MB-11 (DA-38): a paid / cancelled / refunded visit is closed —
+      // assigning a cleaner to it must not issue a link (or email the
+      // client about a cleaner change) for a visit that will never
+      // happen. Same terminal set as confirm / assign_confirm.
+      if (row && (row.status === "paid" || row.status === "cancelled" || row.status === "refunded")) {
+        return json(409, { ok: false, error: "invalid_transition", status: row.status });
+      }
       const wasConfirmed = row?.status === "confirmed";
       // G4: same rule as assign_confirm — the stable roster ID decides
       // a change of person; the name is only the fallback for rows
@@ -3567,10 +3721,17 @@ export default async function handler(req: Req, res: Res) {
           return json(502, { ok: false, error: "entry_revoke_failed" });
         }
       }
-      await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      // MB-11 (DA-38): the Stripe mirror write is checked — a failed
+      // metadata write must not be reported as an assignment that
+      // landed (the client page reads the cleaner name from metadata).
+      const metaUpd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_cleaner_name]": name.slice(0, 80),
         "metadata[gh_cleaner_photo]": photo,
       });
+      if (!metaUpd.ok) {
+        logErr("set_cleaner", "stripe metadata update failed");
+        return json(502, { ok: false, error: "stripe_error" });
+      }
       // Per-visit profile: present key = set (empty = clear); on a
       // same-person edit an absent key leaves the value untouched — but
       // a CHANGE of person always resets the profile, so the new cleaner
@@ -3592,10 +3753,17 @@ export default async function handler(req: Req, res: Res) {
       }
       let linkOut: { url: string; expires: string; reusable: boolean } | null = null;
       if (row) {
-        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        // MB-11 (DA-38): the cleaner_name write is checked — the old
+        // code awaited it without looking, so a failed write still
+        // returned 200 with a link for a cleaner the row never got.
+        const nameSaved = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
           cleaner_name: name.slice(0, 80),
           ...(rosterId ? { cleaner_id: rosterId } : {}),
         });
+        if (!nameSaved) {
+          logErr("set_cleaner", "visit row update failed");
+          return json(502, { ok: false, error: "db_error" });
+        }
         // Task 4: a scheduled re-clean follows the cleaner — a
         // reassignment while a re-clean is pending moves the re-clean
         // to the new person (best-effort; the columns do not exist
@@ -3641,6 +3809,15 @@ export default async function handler(req: Req, res: Res) {
           // offers the explicit reusable upgrade instead.
           const recomputed = recomputeV2Link(visitRow);
           if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
+        }
+        // MB-11 (DA-38): a new/changed cleaner with no link is a
+        // failure, not a 200 with reusable:false and no url — the
+        // owner would otherwise believe the cleaner can open their
+        // cabinet. (The name/profile writes above stand; retrying
+        // set_cleaner re-mints the link.)
+        if ((changed || firstAssignment) && !linkOut) {
+          logErr("set_cleaner", "cleaner link issue failed");
+          return json(502, { ok: false, error: "cleaner_link_failed" });
         }
       }
       // §8: the client learns about a cleaner change in advance. A
@@ -3774,6 +3951,18 @@ export default async function handler(req: Req, res: Res) {
         : NaN;
       if (!Number.isFinite(feeCents) || feeCents <= 0) {
         return json(409, { ok: false, error: "no_fee_due" });
+      }
+      // LB-05 (DA-37): the fee is 0 (no fee) or exactly $25 — the
+      // cancelFeeCents rule. Any other journal amount is corrupt
+      // (or from another rule) and must never be charged.
+      if (feeCents !== 2500) {
+        await logEvent(row.id, bookingId, "system", "fee_basis_mismatch", {
+          journal_cents: feeCents, reason: "fee_not_in_allowlist",
+        });
+        return json(409, {
+          ok: false, error: "fee_basis_mismatch", reason: "fee_not_in_allowlist",
+          fee_cents: feeCents,
+        });
       }
       // G3: verifyIntentForObligation is the CLEANING obligation's
       // verifier — it returns "wrong_kind" for ANY intent whose gh_kind
@@ -3912,10 +4101,15 @@ export default async function handler(req: Req, res: Res) {
         if (searched.status === "error") {
           feeUnknown = true;
         } else {
+          // MB-02: walk ALL fee intents newest-first, not just the
+          // newest — a canceled newest intent must not hide an older
+          // live one (which the old [0]-only search then ignored
+          // while create replayed the dead intent below).
           const fee = searched.intents
             .filter((pi) => pi.metadata?.["gh_kind"] === "cancellation_fee")
-            .sort((a, b) => b.created - a.created)[0] ?? null;
-          if (fee && fee.status !== "canceled") {
+            .sort((a, b) => b.created - a.created)
+            .find((pi) => pi.status !== "canceled") ?? null;
+          if (fee) {
             const mismatch = feeIntentMismatch(fee, {
               amountCents: feeCents, currency: "usd", customerId: customer.id, bookingId,
             });
@@ -3985,6 +4179,13 @@ export default async function handler(req: Req, res: Res) {
         // No fee intent yet: create exactly one, under the fee's own
         // idempotency key. A retry after an unknown create finds the
         // intent by search above instead of creating a second one.
+        // MB-02: the key is bound to (booking, amount, card) like the
+        // cleaning key — the old bare `fee_<bid>` replayed a canceled
+        // intent on every retry, so a dead intent made the $25
+        // uncollectable. A new card is a new attempt (new key); the
+        // same card replays the same key (no double charge).
+        const createMethodHash = createHash("sha256").update(pm).digest("hex").slice(0, 12);
+        const feeCreateKey = `fee_${bookingId}_${feeCents}_${createMethodHash}`;
         let pi: { ok: boolean; status: number; data: Record<string, unknown> };
         try {
           pi = await stripePost(
@@ -4001,10 +4202,10 @@ export default async function handler(req: Req, res: Res) {
               "metadata[gh_booking_id]": bookingId,
               "metadata[gh_kind]": "cancellation_fee",
             },
-            `fee_${bookingId}`,
+            feeCreateKey,
           );
         } catch {
-          await logEvent(row.id, bookingId, "system", "fee_create_unknown", { key: `fee_${bookingId}` });
+          await logEvent(row.id, bookingId, "system", "fee_create_unknown", { key: feeCreateKey });
           return json(502, { ok: false, error: "payment_unknown" });
         }
         piOk = pi.ok;
@@ -4088,7 +4289,22 @@ export default async function handler(req: Req, res: Res) {
         return json(501, { ok: false, error: "db_not_configured" });
       }
       let visit = await latestVisit(bookingId);
+      // MB-24 (DA-41): a row created here has a PROVISIONAL scope.
+      // The real dimensions (bedrooms / full baths / half baths /
+      // extra zones) are not stored anywhere for a Stripe-only
+      // booking: Stripe customer metadata carries only gh_service,
+      // gh_first_price_cents and state (see api/create-checkout-
+      // session.ts), and the quote inputs live only in the gh_visits
+      // row send-contact-email creates — which does not exist yet
+      // here. Reading dimensions from metadata is therefore
+      // impossible; instead the default scope is marked provisional
+      // (journal event + response flag) so the owner — and the
+      // cleaner, via the M1 scope lock — knows it is a guess, not
+      // the booking's scope. The checklist itself stays the same
+      // default buildWorkRooms call.
+      let scopeProvisional = false;
       if (!visit) {
+        scopeProvisional = true;
         const custRes = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customer.id}`);
         // Insert-or-read (same rule as send-contact): a concurrent
         // cleaner_link must never merge-overwrite an existing row.
@@ -4104,11 +4320,11 @@ export default async function handler(req: Req, res: Res) {
             amount_cents: parseInt(meta["gh_first_price_cents"] ?? "", 10) || null,
             cleaner_name: meta["gh_cleaner_name"] ?? null,
             // One checklist source: the same buildWorkRooms the quote
-            // flow uses (public task labels). No dimensions are stored
-            // in the booking metadata, so this is the standard scope
-            // with the public category names (Kitchen, Bathrooms,
-            // Bedrooms, Living room); deep / move-in-out add the
-            // extra tasks.
+            // flow uses (public task labels). PROVISIONAL here — no
+            // dimensions are stored in the booking metadata, so this
+            // is the standard scope (Kitchen, Bathrooms, Bedrooms,
+            // Living room); deep / move-in-out add the extra tasks.
+            // See scopeProvisional above.
             checklist: { rooms: buildWorkRooms({ deep: /deep|move-in/i.test(meta["gh_service"] ?? "") }) },
             status: "scheduled",
           },
@@ -4137,11 +4353,16 @@ export default async function handler(req: Req, res: Res) {
         }
         if (!visit) return json(502, { ok: false, error: "db_error" });
       }
+      if (scopeProvisional) {
+        await logEvent(visit.id, bookingId, "owner", "cleaner_link_scope_provisional", {
+          reason: "no_dimensions_in_stripe_metadata",
+        });
+      }
       const v2 = mintV2Link(visit.id, visit.visit_date);
       if (v2 && (await writeV2Link(visit.id, v2))) {
         await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires: v2.expires, version: "v2" });
         log("cleaner_link", { booking: bookingId, expires: v2.expires, version: "v2" });
-        return json(200, { ok: true, url: v2.url, expires: v2.expires, reusable: true });
+        return json(200, { ok: true, url: v2.url, expires: v2.expires, reusable: true, ...(scopeProvisional ? { scope_provisional: true } : {}) });
       }
       const leg = mintLegacyLink(visit.visit_date);
       const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
@@ -4152,7 +4373,7 @@ export default async function handler(req: Req, res: Res) {
       await clearV2Fields(visit.id);
       await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires: leg.expires, version: "legacy" });
       log("cleaner_link", { booking: bookingId, expires: leg.expires, version: "legacy" });
-      return json(200, { ok: true, url: leg.url, expires: leg.expires, reusable: false });
+      return json(200, { ok: true, url: leg.url, expires: leg.expires, reusable: false, ...(scopeProvisional ? { scope_provisional: true } : {}) });
     }
 
     if (action === "get_cleaner_link") {
@@ -4297,6 +4518,13 @@ export default async function handler(req: Req, res: Res) {
       if (action === "owner_photo_sign") {
         const room = typeof body["room"] === "string" ? (body["room"] as string).slice(0, 60) : "";
         if (!room) return json(400, { ok: false, error: "invalid_room" });
+        // MB-18 (DA-32): the room is validated against the stored
+        // work scope — the same rule as the cleaner path
+        // (api/cleaner.ts photo_sign) — not just non-empty.
+        const scopeRooms = ownerScopeRooms(row as unknown as { checklist?: unknown; service?: string | null });
+        if (!scopeRooms.includes(room) && room !== "Other areas") {
+          return json(400, { ok: false, error: "invalid_room" });
+        }
         if (photoBlocked(row.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
         const slug = room.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "room";
         const objectPath = `visits/${row.id}/${slug}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
@@ -4311,6 +4539,14 @@ export default async function handler(req: Req, res: Res) {
         if (!room || !storagePath.startsWith(`visits/${row.id}/`)) {
           return json(400, { ok: false, error: "invalid_photo" });
         }
+        // MB-18 (DA-32): the room is validated against the stored
+        // work scope — the same rule as the cleaner path
+        // (api/cleaner.ts photo_register) — a photo for an invented
+        // room never registers.
+        const scopeRooms = ownerScopeRooms(row as unknown as { checklist?: unknown; service?: string | null });
+        if (!scopeRooms.includes(room) && room !== "Other areas") {
+          return json(400, { ok: false, error: "invalid_room" });
+        }
         if (photoBlocked(row.no_photo_zones, room)) return json(403, { ok: false, error: "photo_not_allowed" });
         const info = await storageObjectInfo(storagePath);
         if (!info) return json(502, { ok: false, error: "storage_error" });
@@ -4318,12 +4554,50 @@ export default async function handler(req: Req, res: Res) {
           await storageRemove(storagePath);
           return json(400, { ok: false, error: "invalid_photo_file" });
         }
-        const inserted = await dbInsert("gh_photos", {
+        const listPhotos = async () =>
+          dbSelect<{ id: string; room: string; storage_path: string; kind: string }>(
+            "gh_photos",
+            `visit_id=eq.${row.id}&order=created_at.asc&limit=200`,
+          );
+        const existing = await listPhotos();
+        if (existing.some((p) => p.storage_path === storagePath)) {
+          return json(200, { ok: true, already: true });
+        }
+        // MB-21 (DA-21, owner part): the same cap 60 as the cleaner
+        // path (api/cleaner.ts) — the client report only shows 60
+        // photos, so a 61st owner photo would be silently invisible.
+        if (existing.length >= 60) return json(400, { ok: false, error: "too_many_photos" });
+        const newRow = {
           visit_id: row.id, room, storage_path: storagePath, kind, note: "Added by the owner",
-        });
-        if (!inserted) return json(502, { ok: false, error: "db_error" });
-        await logEvent(row.id, bookingId, "owner", "owner_photo_added", { room, kind });
-        return json(200, { ok: true });
+        };
+        // MB-18: the cleaner path's upsert + retry — a conditional
+        // upsert on the photo's unique key (storage_path, migration
+        // 20261113_photo_storage_path_unique) collapses concurrent
+        // retries into one row; the upsert returns null while the
+        // unique index does not exist yet, so fall back to the plain
+        // insert instead of failing a valid registration — and
+        // re-read after each failure, so a row that appeared
+        // meanwhile means the register already landed.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const claimed = await dbUpsert<{ id: string }>("gh_photos", newRow, "storage_path");
+          if (claimed) {
+            await logEvent(row.id, bookingId, "owner", "owner_photo_added", { room, kind });
+            return json(200, { ok: true, photo_id: claimed.id });
+          }
+          if ((await listPhotos()).some((p) => p.storage_path === storagePath)) {
+            return json(200, { ok: true, already: true });
+          }
+          const inserted = await dbInsert<{ id: string }>("gh_photos", newRow);
+          if (inserted) {
+            await logEvent(row.id, bookingId, "owner", "owner_photo_added", { room, kind });
+            return json(200, { ok: true, photo_id: inserted.id });
+          }
+          if ((await listPhotos()).some((p) => p.storage_path === storagePath)) {
+            return json(200, { ok: true, already: true });
+          }
+          if (attempt < 2) await new Promise((r) => setTimeout(r, attempt === 0 ? 250 : 700));
+        }
+        return json(502, { ok: false, error: "db_error" });
       }
       const photoId = typeof body["photo_id"] === "string" ? (body["photo_id"] as string) : "";
       const photos = await dbSelect<{ id: string; storage_path: string }>(

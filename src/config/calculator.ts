@@ -128,7 +128,7 @@ export function addonsTotal(a: AddonSelection = {}, service: CalcServiceKey = "s
 }
 
 export const BEDROOM_CHOICES = [1, 2, 3, 4, 5, 6] as const;
-export const FULL_BATH_CHOICES = [1, 2, 3, 4, 5] as const;
+export const FULL_BATH_CHOICES = [1, 2, 3, 4, 5, 6] as const;
 export const HALF_BATH_CHOICES = [0, 1, 2] as const;
 
 export type CalcInput = {
@@ -201,23 +201,6 @@ export function calcPrice(input: CalcInput): number | null {
 }
 
 /**
- * First visit for an every-other-week plan.
- * If the home was NOT professionally cleaned in the last 3 months,
- * the first visit is a deep clean; otherwise it is the recurring rate.
- */
-export function firstVisitPrice(
-  bedrooms: number,
-  fullBaths: number,
-  recentlyCleaned: boolean,
-  addons: AddonSelection = {}
-): number | null {
-  const tier = tierFor(bedrooms, fullBaths);
-  if (!tier) return null;
-  const base = recentlyCleaned ? PRICES.recurring[tier] : PRICES.deep[tier];
-  return base + addonsTotal(addons, recentlyCleaned ? "standard" : "deep");
-}
-
-/**
  * UNIFIED PRICE BREAKDOWN — single source of truth for what the client
  * sees AND what goes into the booking. Replaces the scattered
  * firstVisit/recurringPrice display that showed contradictory numbers.
@@ -229,7 +212,8 @@ export function firstVisitPrice(
  */
 export type PriceBreakdown = {
   tier: TierKey;
-  /** What the first visit is: a deep clean or a standard clean. */
+  /** What the first visit is: always a standard clean — the form never
+   * asks about recent cleaning, so there is no deep-first branch. */
   first_service: "deep" | "standard";
   /** The ONE first-visit price shown and charged. No contradictions. */
   first_total: number;
@@ -241,23 +225,20 @@ export function priceBreakdown(opts: {
   bedrooms: number;
   fullBaths: number;
   frequency: FrequencyKey;
-  /** Legacy quotes may still request the original deep-first option. */
-  recentlyCleaned?: boolean;
   addons?: AddonSelection;
   /** Owner price-test mode (signed token, verified server-side): 1/10 prices. */
   testScale?: boolean;
 }): PriceBreakdown | null {
   const tier = tierFor(opts.bedrooms, opts.fullBaths);
   if (!tier) return null;
-  const deepFirst = opts.recentlyCleaned === false;
-  const first_service: "deep" | "standard" = deepFirst ? "deep" : "standard";
+  const first_service: "deep" | "standard" = "standard";
   const recurring_total = PRICES.recurring[tier];
 
   // One-time visits price from the one-time table; recurring plans price
-  // the first visit at the recurring rate (or deep when needed).
+  // the first visit at the recurring rate.
   const standardBase =
     opts.frequency === "onetime" ? PRICES.standardOnetime[tier] : PRICES.recurring[tier];
-  const base = deepFirst ? PRICES.deep[tier] : standardBase;
+  const base = standardBase;
   const first_total = base + addonsTotal(opts.addons ?? {}, first_service);
   const recurring_with_addons = recurring_total + addonsTotal(opts.addons ?? {}, "standard");
   if (!opts.testScale) {

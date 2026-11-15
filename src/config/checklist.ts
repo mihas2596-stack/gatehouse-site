@@ -1,4 +1,10 @@
 // Room-by-room checklist — single source for /whats-included.
+// Room names and task labels match the cleaner work scope in
+// api/_work_scope.ts (buildWorkRooms): "Bathroom"/"Bedroom" are the
+// singular room names (numbered Bathroom 1, Bedroom 1, … when there are
+// several); "Half bathroom" has no tub/shower tasks; "Additional agreed
+// work" holds the add-on tasks; the "Inside … cleaned" tasks apply on
+// deep cleans or as add-ons.
 export const CHECKLIST = [
   {
     room: "Kitchen",
@@ -15,10 +21,13 @@ export const CHECKLIST = [
       "Trash emptied and bag replaced",
       "Floor vacuumed",
       "Floor mopped",
+      "Inside oven cleaned (deep clean, or as an add-on)",
+      "Inside fridge cleaned (deep clean, or as an add-on)",
+      "Inside cabinets cleaned (deep clean, or as an add-on)",
     ],
   },
   {
-    room: "Bathrooms",
+    room: "Bathroom",
     tasks: [
       "Toilet cleaned inside, outside and base",
       "Tub scrubbed",
@@ -35,7 +44,22 @@ export const CHECKLIST = [
     ],
   },
   {
-    room: "Bedrooms",
+    room: "Half bathroom",
+    tasks: [
+      "Toilet cleaned inside, outside and base",
+      "Sink and counter cleaned",
+      "Faucets and fixtures shined",
+      "Mirrors cleaned",
+      "Towel bars and toilet paper holder wiped",
+      "Cabinet fronts spot-cleaned",
+      "Light switches and door handles wiped",
+      "Trash emptied",
+      "Floor vacuumed",
+      "Floor mopped",
+    ],
+  },
+  {
+    room: "Bedroom",
     tasks: [
       "Reachable surfaces dusted",
       "Nightstands and dressers dusted",
@@ -48,7 +72,7 @@ export const CHECKLIST = [
     ],
   },
   {
-    room: "Living areas and hallways",
+    room: "Living room",
     tasks: [
       "Reachable surfaces and shelves dusted",
       "TV stand dusted",
@@ -61,6 +85,13 @@ export const CHECKLIST = [
       "Trash emptied",
       "Floors vacuumed",
       "Floors mopped",
+    ],
+  },
+  {
+    room: "Additional agreed work",
+    tasks: [
+      "Interior windows cleaned (add-on, per window)",
+      "Extra pet-hair work completed (pet waste is not included)",
     ],
   },
 ] as const;

@@ -3,6 +3,16 @@ import { useSearchParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Camera, CheckCircle, AlertTriangle, Loader2, Trash2, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { ReportChecklistView } from "@/components/ReportContent";
 import { createAutosaveQueue, type AutosaveState } from "@/lib/autosaveQueue";
@@ -30,7 +40,7 @@ type CleanerView = {
     window: string | null;
     address: string | null;
     access_notes: string | null;
-    entry?: { method: string | null; note: string; secret: string | null } | null;
+    entry?: { method: string | null; note: string; secret: string | null; secret_undecryptable?: boolean } | null;
     entry_choice?: { method: string | null; detail: string | null; notes: string | null } | null;
     client_notes?: string | null;
     no_photo_zones: string | null;
@@ -42,6 +52,10 @@ type CleanerView = {
   };
   checklist: Checklist;
   photos: Photo[];
+  // MB-05: the revision the next checklist save/submit must echo back
+  // (the row's updated_at) — the server answers 409 checklist_stale
+  // when it moved first.
+  checklist_revision?: string | null;
   report_status: string;
   report_bounced?: boolean;
   report_held?: boolean;
@@ -103,6 +117,23 @@ const Cleaner = () => {
   // network must not wipe a loaded page (see load()).
   const dataLoaded = useRef(false);
 
+  // MB-05: the server revision of the checklist this tab loaded (and
+  // the newest one a save returned). Every save/submit echoes it back;
+  // a 409 means another tab/device moved first. Kept in a ref so the
+  // autosave write callback always sends the freshest known revision.
+  const revisionRef = useRef<string | null>(null);
+  // MB-32: mirrors the queue's "stale" state in a ref, so submit()
+  // can tell a stale flush from a network failure after awaiting it
+  // (the saveState closure it holds would be stale by then).
+  const staleRef = useRef(false);
+  // MB-05/MB-32: a submit that hits 409 checklist_stale sets this —
+  // the stale banner (with its Reload button) then shows by the
+  // submit error too, not only by the autosave status line.
+  const [submitStale, setSubmitStale] = useState(false);
+  // MB-30: the photo waiting for the owner-style in-page delete
+  // confirmation — null when no delete is pending.
+  const [pendingDelete, setPendingDelete] = useState<Photo | null>(null);
+
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
       const r = await fetch("/api/cleaner", {
@@ -115,7 +146,26 @@ const Cleaner = () => {
     [ct],
   );
   const saver = useMemo(() => createAutosaveQueue<Checklist>(
-    async (next) => (await post({ action: "checklist", checklist: next })).ok,
+    async (next) => {
+      const r = await post({
+        action: "checklist",
+        checklist: next,
+        // MB-05: echo the loaded revision; omit it only when the
+        // server never sent one (old responses keep the old behaviour).
+        ...(revisionRef.current ? { checklist_revision: revisionRef.current } : {}),
+      });
+      if (r.error === "checklist_stale") {
+        if (typeof r["checklist_revision"] === "string") revisionRef.current = r["checklist_revision"] as string;
+        staleRef.current = true;
+        return "stale";
+      }
+      if (r.ok) {
+        if (typeof r["checklist_revision"] === "string") revisionRef.current = r["checklist_revision"] as string;
+        staleRef.current = false;
+        return true;
+      }
+      return false;
+    },
     setSaveState,
   ), [post]);
   useEffect(() => { saver.activate(); return () => saver.dispose(); }, [saver]);
@@ -144,6 +194,10 @@ const Cleaner = () => {
       }
       dataLoaded.current = true;
       setData(j);
+      // MB-05: remember the revision this load carried, so the next
+      // save echoes it back.
+      if (typeof j.checklist_revision === "string") revisionRef.current = j.checklist_revision;
+      else if (j.checklist_revision === null) revisionRef.current = null;
       setLastUpdated(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }));
       // Photo uploads refresh the page data too. A response started before
       // an edit must not replace the cleaner's newer local checklist.
@@ -295,6 +349,9 @@ const Cleaner = () => {
     });
 
   const deletePhoto = async (photo: Photo) => {
+    // MB-30: the actual delete runs only after the in-page confirm
+    // (see the AlertDialog below) — a stray tap on the trash icon
+    // never deletes a photo on its own.
     const r = await post({ action: "photo_delete", photo_id: photo.id });
     if (r.ok) {
       if (photo.url && photo.url.startsWith("blob:")) {
@@ -311,6 +368,13 @@ const Cleaner = () => {
     // published report.
     if (Object.values(uploads).some((u) => u.status === "working")) {
       setSubmitError("Photos are still uploading — please wait until they finish, then press Finish again.");
+      return;
+    }
+    // MA-03: nothing to submit when the visit has no rooms at all —
+    // the Finish button is disabled then, but never send an empty
+    // report from here either.
+    if (checklist.rooms.length === 0) {
+      setSubmitError("This visit has no rooms listed yet — reload the page; if the list is still empty, contact the office.");
       return;
     }
     // Client-side before-photo gate: a room is ready only when it has a
@@ -335,17 +399,40 @@ const Cleaner = () => {
     }
     setBusy(true);
     setSubmitError("");
+    setSubmitStale(false);
     setMissing([]);
     try {
       // Flush the debounced checklist save first, so the submitted report
       // contains the latest edits (no debounce/autosave race).
       if (!await saver.flush()) {
-        setSubmitError("Couldn't save your latest checklist edits — please try again.");
+        // MB-32: a stale flush means another tab moved the checklist —
+        // say so and offer a reload instead of the generic retry.
+        if (staleRef.current) {
+          setSubmitStale(true);
+          setSubmitError("This checklist changed in another tab — reload the page to see the latest version before sending the report.");
+        } else {
+          setSubmitError("Couldn't save your latest checklist edits — please try again.");
+        }
         return;
       }
-      const r = await post({ action: "submit", checklist });
+      const r = await post({
+        action: "submit",
+        checklist,
+        // MB-05: echo the loaded revision, like every save.
+        ...(revisionRef.current ? { checklist_revision: revisionRef.current } : {}),
+      });
       if (r.ok) {
         await load();
+        return;
+      }
+      // MB-05: a stale submit loses like a stale save — reload the
+      // checklist and ask before overwriting, never publish over the
+      // newer version. The Reload button below is the ask: nothing is
+      // overwritten until the cleaner taps it.
+      if (r.error === "checklist_stale") {
+        if (typeof r["checklist_revision"] === "string") revisionRef.current = r["checklist_revision"] as string;
+        setSubmitStale(true);
+        setSubmitError("This checklist changed in another tab — reload the page to see the latest version before sending the report.");
         return;
       }
       if (r.error === "rooms_incomplete" && Array.isArray(r["missing"])) {
@@ -432,9 +519,13 @@ const Cleaner = () => {
   })();
   // Finish stays disabled until every room is ready — the cleaner sees
   // the missing list in section 3 instead of tapping Finish and getting
-  // an error. submit() still checks as a backstop. (A visit with no
-  // rooms at all keeps the old behaviour: nothing blocks the submit.)
-  const allRoomsReady = checklist.rooms.length === 0 || checklist.rooms.every((r) =>
+  // an error. submit() still checks as a backstop. MA-03: an empty
+  // checklist is NOT "everything ready" — a visit with no rooms has
+  // nothing to submit, so Finish stays disabled until at least one
+  // room exists and is ready. (The server now seeds the standard
+  // scope for a legacy row without a checklist, so 0 rooms should not
+  // normally happen; this is the backstop.)
+  const allRoomsReady = checklist.rooms.length > 0 && checklist.rooms.every((r) =>
     roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)).ready,
   );
 
@@ -456,7 +547,22 @@ const Cleaner = () => {
             {`This visit is on ${fmtDate(v.date)} — you can send the report after the visit.`}
           </p>
         )}
-        {lastUpdated && <p className="text-xs text-muted-foreground">Updated {lastUpdated} Atlanta time — reopening this page refreshes it.</p>}
+        {lastUpdated && (
+          <p className="text-xs text-muted-foreground mt-3">
+            Updated {lastUpdated} Atlanta time.
+            {" "}
+            <button type="button" className="underline font-semibold" onClick={() => void load()}>
+              Refresh
+            </button>
+          </p>
+        )}
+        {!lastUpdated && (
+          <p className="text-xs text-muted-foreground mt-3">
+            <button type="button" className="underline font-semibold" onClick={() => void load()}>
+              Refresh
+            </button>
+          </p>
+        )}
         {data.cancelled === true && (
           <div className="rounded-xl border border-border bg-muted p-4 mt-4" role="status">
             <p className="font-semibold">This visit was cancelled.</p>
@@ -501,6 +607,7 @@ const Cleaner = () => {
               <p><span className="font-semibold">Entry:</span>{` ${v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}`}</p>
               {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
               {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
+              {!v.entry.secret && v.entry.secret_undecryptable && <p><span className="font-semibold">Entry details:</span> The saved entry code couldn&apos;t be read — contact the owner for the code before the visit.</p>}
             </div>
           )}
           {!v.entry && v.entry_choice?.method && (
@@ -523,7 +630,14 @@ const Cleaner = () => {
 
         {!locked && saveState !== "idle" && (
           <p className="text-base text-muted-foreground mt-4" role="status">
-            {saveState === "saving" ? "Saving…" : saveState === "saved" ? "All changes saved." : (
+            {saveState === "saving" ? "Saving…" : saveState === "saved" ? "All changes saved." : saveState === "stale" ? (
+              <>This checklist changed in another tab —{" "}
+                <button type="button" className="underline font-semibold" onClick={() => window.location.reload()}>
+                  reload to see the latest version
+                </button>
+                . Your unsaved edits will be replaced.
+              </>
+            ) : (
               <>Not saved — <button type="button" className="underline font-semibold" onClick={retrySave}>Retry</button></>
             )}
           </p>
@@ -687,7 +801,7 @@ const Cleaner = () => {
                   type="button"
                   aria-label="Remove photo"
                   className="absolute right-1 top-1 flex min-h-[44px] min-w-[44px] items-center justify-center bg-black/60 text-white rounded p-1"
-                  onClick={() => void deletePhoto(p)}
+                  onClick={() => setPendingDelete(p)}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -708,7 +822,7 @@ const Cleaner = () => {
             );
             return (
               <details key={room.name} open={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
-                <summary className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); setOpenRoom((openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? null : room.name); }}>
+                <summary aria-expanded={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); setOpenRoom((openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? null : room.name); }}>
                   <span className="font-heading text-xl font-bold">{room.name}</span>
                   <span className="flex flex-wrap items-center gap-2">
                     {room.skip_reason ? (
@@ -770,8 +884,10 @@ const Cleaner = () => {
                   {Object.entries(uploads)
                     .filter(([, u]) => u.room === room.name && u.kind === "before" && u.status === "error")
                     .map(uploadError)}
-                  {(beforeCount === 0 || afterCount === 0) && (
-                    <div className="mt-3">
+                  {/* LB-39: the reason field stays visible once both
+                      photos are in — a cleaner who decides to add a
+                      reason afterwards must still find the field. */}
+                  <div className="mt-3">
                       <label className="block text-base font-medium mb-1" htmlFor={`skip-${room.name}`}>
                         No photo for this room? Tell us why
                       </label>
@@ -790,7 +906,6 @@ const Cleaner = () => {
                         }}
                       />
                     </div>
-                  )}
                 </div>
 
                 {/* Step 2 — checklist, locked until the before step is done. */}
@@ -917,6 +1032,14 @@ const Cleaner = () => {
               <p className="text-base text-destructive mt-4" role="alert">
                 {submitError}
                 {missing.length > 0 && <> {missing.join(", ")}</>}
+                {submitStale && (
+                  <>
+                    {" "}
+                    <button type="button" className="underline font-semibold" onClick={() => window.location.reload()}>
+                      Reload the latest checklist
+                    </button>
+                  </>
+                )}
               </p>
             )}
             {Object.values(uploads).some((u) => u.status === "error") && (
@@ -941,11 +1064,17 @@ const Cleaner = () => {
               return (
                 <div className="rounded-xl border border-border bg-card p-4 mt-4 text-base" role="status">
                   <h2 className="font-heading text-xl font-bold mb-2">3. Finish your job</h2>
-                  <p>{`Rooms ready: ${checklist.rooms.length - missingRooms.length} of ${checklist.rooms.length}`}</p>
+                  {/* MA-03: 0 rooms is a blocked state with an
+                      explanation, never "0 of 0 — everything is ready". */}
+                  {checklist.rooms.length === 0 ? (
+                    <p className="text-destructive">No rooms listed for this visit yet — reload the page; if the list is still empty, contact the office.</p>
+                  ) : (
+                    <p>{`Rooms ready: ${checklist.rooms.length - missingRooms.length} of ${checklist.rooms.length}`}</p>
+                  )}
                   {missingBefore.length > 0 && <p className="text-destructive">Still need a before photo (or a reason): {missingBefore.join(", ")}</p>}
                   {missingAfter.length > 0 && <p className="text-destructive">Still need an after photo (or a reason): {missingAfter.join(", ")}</p>}
                   {uploading > 0 && <p>Photos still uploading: {uploading} — Finish unlocks when they are done.</p>}
-                  {missingRooms.length === 0 && uploading === 0 && !isFutureVisit && <p>Everything is ready — Finish will send the report.</p>}
+                  {checklist.rooms.length > 0 && missingRooms.length === 0 && uploading === 0 && !isFutureVisit && <p>Everything is ready — Finish will send the report.</p>}
                   {isFutureVisit && <p>{`This visit is on ${fmtDate(v.date)} — Finish unlocks after the visit.`}</p>}
                 </div>
               );
@@ -959,6 +1088,28 @@ const Cleaner = () => {
           </>
         )}
       </div>
+      {/* MB-30: deleting a photo asks first (same in-page dialog as
+          the owner cabinet) — a stray tap on the trash icon never
+          deletes a before/after photo on its own. */}
+      <AlertDialog open={pendingDelete !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this photo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete ? `This removes the ${pendingDelete.kind} photo for ${pendingDelete.room}. The room will need a new photo (or a reason) before the report can be sent.` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingDelete(null)}>Keep photo</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { const photo = pendingDelete; setPendingDelete(null); if (photo) void deletePhoto(photo); }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Remove photo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

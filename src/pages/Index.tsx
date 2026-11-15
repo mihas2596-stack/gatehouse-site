@@ -24,7 +24,7 @@ const howItWorks = [
   {
     n: "03",
     title: "Review your clean",
-    text: "Get a private photo report and checklist after the visit.",
+    text: "Get a private photo report and checklist after the visit. Approve to pay — or your card is charged automatically 24 hours after the report is sent if you haven't reported an issue.",
   },
 ];
 

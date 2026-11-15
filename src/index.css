@@ -319,7 +319,11 @@
    on the <meta name="viewport"> in index.html).
 ============================================================================ */
 @media (max-width: 768px) {
-  main {
+  /* LB-38: reserve room for the mobile sticky bar ONLY when it is
+     actually mounted — it renders on marketing routes only
+     (MobileStickyCTA returns null on funnel/account pages). Pages
+     without the bar get no bottom padding. */
+  body:has(nav[aria-label="Quick action"]) main {
     padding-bottom: calc(56px + env(safe-area-inset-bottom)) !important;
   }
 }
@@ -387,13 +391,8 @@ header.site-static + main .page-shell { padding-top: 0; }
 .skip-link { position: fixed; top: -100px; left: 1rem; z-index: 200; background: white; padding: .75rem 1rem; color: hsl(var(--primary)); }
 .skip-link:focus { top: .5rem; }
 a:focus-visible, button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 4px; }
-.quote-price-bar { bottom: calc(56px + env(safe-area-inset-bottom)); }
-body[data-menu-open="true"] .quote-price-bar { display: none; }
 @media (max-width: 767px) {
   .page-shell { padding-top: 64px; }
-  /* On /quote the price bar stacks on top of the CTA bar (~124px total):
-     keep focus-scrolled fields clear of the whole stack. */
-  html:has(.quote-price-bar) { scroll-padding-bottom: calc(124px + env(safe-area-inset-bottom)); }
   header .font-script { font-size: clamp(1.125rem, 5.2vw, 1.4rem); letter-spacing: normal; }
   footer .font-script { font-size: 1.75rem; letter-spacing: normal; }
   input, select, textarea { font-size: 1rem; }

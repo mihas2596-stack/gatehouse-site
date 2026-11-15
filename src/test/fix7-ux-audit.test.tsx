@@ -68,12 +68,13 @@ describe("fix7 — UX audit fixes", () => {
     expect(link.getAttribute("href")).toBe("/services");
   });
 
-  it("step 1: extras button shows the selection state with a chevron", () => {
+  it("step 1: extras button shows the selection state with Show/Hide text", () => {
     openQuote();
     const btn = () => screen.getByRole("button", { name: /Add extras \(optional\) —/ });
     expect(btn().textContent).toMatch(/None selected/);
+    expect(btn().textContent).toMatch(/Show extras/);
     fireEvent.click(btn());
-    expect(btn().textContent).toMatch(/⌃/);
+    expect(btn().textContent).toMatch(/Hide extras/);
     fireEvent.click(screen.getByLabelText(/Inside oven/));
     expect(btn().textContent).toMatch(/Inside oven/);
     expect(btn().textContent).not.toMatch(/None selected/);
@@ -104,7 +105,10 @@ describe("fix7 — UX audit fixes", () => {
   it("home page: How it works 02/03, city line, single CTA wording", () => {
     render(<HelmetProvider><MemoryRouter><Index /></MemoryRouter></HelmetProvider>);
     expect(screen.getByText("We’ll email you to confirm your date, arrival window and who’s coming.")).toBeInTheDocument();
-    expect(screen.getByText("Get a private photo report and checklist after the visit.")).toBeInTheDocument();
+    expect(screen.getByText(/Get a private photo report and checklist after the visit\./)).toBeInTheDocument();
+    // Live-run #8: the 24-hour auto-charge caveat sits next to the
+    // payment step in How it works, not only in "When you pay" below.
+    expect(screen.getByText(/Approve to pay — or your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Check our service area" })).toBeInTheDocument();
     expect(document.getElementById("when-you-pay")).not.toBeNull();
     const ctas = screen.getAllByRole("link", { name: "See My Price" });
@@ -113,9 +117,10 @@ describe("fix7 — UX audit fixes", () => {
     expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
   });
 
-  it("FAQ data: 2–4 hour estimate and always-free rescheduling", () => {
+  it("FAQ data: no ungrounded visit-duration claim, and always-free rescheduling", () => {
     const duration = FAQS.find((f) => f.q === "How long does a visit take?");
-    expect(duration?.a).toContain("Most standard visits take 2–4 hours, depending on your home's size. A deep or move-in/out clean takes longer.");
+    expect(duration?.a).toContain("A deep or move-in/out clean takes longer.");
+    expect(duration?.a).not.toContain("2–4 hours");
     const cancel = FAQS.find((f) => f.q === "How do I pause or cancel?");
     expect(cancel?.a).toContain("Rescheduling is always free.");
     expect(cancel?.a).toContain("later cancellations cost $25");
@@ -130,19 +135,17 @@ describe("fix7 — UX audit fixes", () => {
     expect(screen.queryByText(/Free cancellation or rescheduling/)).not.toBeInTheDocument();
   });
 
-  it("city pages: payment repeat shortened to one line with a link", () => {
+  it("city pages: dead sections are gone; only 'Homes in …' renders", () => {
+    // LB-32: the unrendered sections (with their stale payment text)
+    // are deleted, not kept around — payment lives once, in CityPage's
+    // "Visit at a glance" box.
+    for (const c of CITIES) {
+      expect(c.sections.map((s) => s.heading)).toEqual([`Homes in ${c.name}`]);
+    }
     const duluth = CITIES.find((c) => c.slug === "duluth")!;
-    const access = duluth.sections.find((s) => s.heading === "Access and payment")!;
-    expect(access.text).toContain("Nothing is charged at booking.");
-    expect(access.text).not.toContain("automatically 24 hours");
-    expect(access.link).toEqual({ href: "/#when-you-pay", label: "See how payment works" });
-    const alpharetta = CITIES.find((c) => c.slug === "alpharetta")!;
-    const price = alpharetta.sections.find((s) => s.heading === "Price and booking")!;
-    expect(price.text).toContain("Nothing is charged at booking.");
-    expect(price.text).not.toContain("automatically 24 hours");
-    expect(price.link).toEqual({ href: "/#when-you-pay", label: "See how payment works" });
+    expect(duluth.sections[0].text).not.toContain("repeat every other week");
     const roswell = CITIES.find((c) => c.slug === "roswell")!;
-    expect(roswell.sections[0].text).toContain("For homes with 6+ bedrooms or 6+ full bathrooms, email us for a custom quote.");
+    expect(roswell.sections[0].text).toContain("for homes with 6+ bedrooms or 6+ full bathrooms, email us for a custom quote.");
   });
 
   it("Services cards explain that the exact price depends on bedrooms and bathrooms", () => {

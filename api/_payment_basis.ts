@@ -180,7 +180,22 @@ export function paymentBasis(
   // Fix round 2: a refunded visit has NO basis — the payment was
   // returned, so neither a fresh approval nor the timer may charge it
   // again (re-charging a refunded visit is a new charge, not a retry).
-  if (input.status === "refunded") return null;
+  // MA-02/MB-01: a cancelled visit has NO basis either — a succeeded
+  // intent that lands after the cancel (e.g. an Approve that returned
+  // unknown while the visit was cancelled) must not resurrect the
+  // visit as paid. Absent = no check (legacy callers that do not know
+  // the visit status).
+  if (input.status === "refunded" || input.status === "cancelled") return null;
+  // LB-02 (DA-18): an open issue blocks the client_approved basis
+  // too. clientApprovedEvent already voids an approval predated by a
+  // dispute, but an issue opened by a Stripe dispute sets only the
+  // row flags (no issue_opened event, no new approval) — the stale
+  // approval would otherwise keep authorising a charge, and the
+  // owner panel would offer a Charge the charge path refuses.
+  // Checked after the terminal statuses above, which stay the first
+  // word. A resolved issue (open false) does not block: the approval
+  // path closes the issue before charging.
+  if (issueStateFrom(input.events, input.issueOpenRow, input.issueEverRow).open) return null;
   if (clientApprovedEvent(input.events)) return "client_approved";
   const { open, ever } = issueStateFrom(
     input.events,

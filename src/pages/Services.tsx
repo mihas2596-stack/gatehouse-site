@@ -99,7 +99,7 @@ const Services = () => {
       {/* Comparison — factual differences only, prices from the same config
           the quote form and the server charge by. One data source renders
           the desktop table and the mobile cards, so they can never drift. */}
-      <section className="pt-8 pb-4 md:py-8 bg-background"><details className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
+      <section className="pt-8 pb-4 md:py-8 bg-background"><details open className="container max-w-4xl"><summary className="min-h-[48px] cursor-pointer text-lg font-semibold text-primary underline">Compare services and add-ons</summary>
         <div className="container max-w-4xl">
           <h2 className="font-heading text-2xl font-bold mb-3 text-center">Standard, deep or move-out — what&apos;s actually different</h2>
           <p className="text-center text-muted-foreground mb-8">
@@ -159,10 +159,10 @@ const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
   { label: "Best for", standard: "Regular upkeep of a lived-in home", deep: "A more detailed reset", move: "An empty home, moving in or out" },
   { label: "Home state", standard: "Lived-in home", deep: "Lived-in home", move: "Empty home — nothing left inside" },
   { label: "Room-by-room checklist", standard: "Included", deep: "Included", move: "Included" },
-  { label: "Inside oven", standard: <>Add-on +${disp(ADDONS.insideOven.price)} per visit</>, deep: "Included", move: "Included" },
-  { label: "Inside fridge", standard: <>Add-on +${disp(ADDONS.insideFridge.price)} per visit</>, deep: "Included", move: "Included" },
-  { label: "Inside cabinets & drawers", standard: <>Add-on +${disp(ADDONS.insideCabinets.price)} per visit</>, deep: "Included", move: "Included — every cabinet & drawer" },
-  { label: "Interior windows", standard: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</>, deep: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</>, move: <>Add-on +${disp(ADDONS.interiorWindow.price)} per window</> },
+  { label: "Inside oven", standard: <>Add-on +{fmtPrice(disp(ADDONS.insideOven.price))} per visit</>, deep: "Included", move: "Included" },
+  { label: "Inside fridge", standard: <>Add-on +{fmtPrice(disp(ADDONS.insideFridge.price))} per visit</>, deep: "Included", move: "Included" },
+  { label: "Inside cabinets & drawers", standard: <>Add-on +{fmtPrice(disp(ADDONS.insideCabinets.price))} per visit</>, deep: "Included", move: "Included — every cabinet & drawer" },
+  { label: "Interior windows", standard: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</>, deep: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</>, move: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</> },
   {
     label: "Price — small / medium / large",
     standard: <>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</>,

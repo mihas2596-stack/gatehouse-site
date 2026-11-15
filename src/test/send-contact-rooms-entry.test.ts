@@ -172,6 +172,47 @@ describe("send-contact rooms and entry", () => {
   });
 });
 
+describe("LB-04 — bad room counts are refused, big homes are a custom quote", () => {
+  it("bedrooms 'abc' is a 400, not a booking with the browser price", async () => {
+    const r = await call(base({ bedrooms: "abc" }));
+    expect(r.code).toBe(400);
+    expect(r.body["errors"]).toBeDefined();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("a negative bathroom count is a 400", async () => {
+    const r = await call(base({ bathrooms: "-1" }));
+    expect(r.code).toBe(400);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("7 bedrooms is a custom quote: 200, no server price, no price in the token", async () => {
+    const r = await call(base({ bedrooms: "7", bathrooms: "4", full_baths: "4", half_baths: "0" }));
+    expect(r.code).toBe(200);
+    expect(r.body["needs_custom_quote"]).toBe(true);
+    expect(r.body["server_first"]).toBeUndefined();
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]["amount_cents"]).toBeNull();
+  });
+});
+
+describe("LB-42 — empty full_baths falls back as full + half/2, not as the decimal", () => {
+  it("bathrooms '3' with 2 half baths is 2 full baths, not 3", async () => {
+    const r = await call(base({
+      bedrooms: "3", bathrooms: "3", full_baths: "", half_baths: "2",
+    }));
+    expect(r.code).toBe(200);
+    expect(roomNames()).toEqual([
+      "Kitchen",
+      "Bathroom 1", "Bathroom 2",
+      "Bedroom 1", "Bedroom 2", "Bedroom 3",
+      "Half bathroom 1", "Half bathroom 2",
+      "Living room",
+      "Home office",
+    ]);
+  });
+});
+
 describe("booking contact persistence", () => {
   it("keeps the submitted phone on the same visit without putting it in the client token", async () => {
     const r = await call(base({ phone: "(770) 555-0100" }));

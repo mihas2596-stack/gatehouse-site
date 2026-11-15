@@ -15,6 +15,12 @@ type BookingSummary = {
 };
 type Status = "loading" | "ready" | "saved" | "pending" | "failed" | "unknown";
 
+const fmtMoney = (v?: string): string => {
+  const n = v ? parseFloat(v.replace(/[^0-9.]/g, "")) : NaN;
+  if (!Number.isFinite(n)) return v ? `$${v}` : "";
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+};
+
 export default function SaveCard() {
   const [params] = useSearchParams();
   const bt = params.get("bt") ?? "";
@@ -132,7 +138,7 @@ export default function SaveCard() {
           {booking && <dl className="rounded-xl border border-border bg-card p-5 text-left space-y-3 mb-6">
             {booking.service && <div><dt className="font-semibold">Service</dt><dd>{booking.service}</dd></div>}
             {(booking.confirmed_date || booking.date) && <div><dt className="font-semibold">{confirmed ? "Confirmed date" : "Requested date"}</dt><dd>{formatDateLong(booking.confirmed_date || booking.date)}</dd></div>}
-            {booking.first && <div><dt className="font-semibold">This visit</dt><dd>${booking.first}</dd></div>}
+            {booking.first && <div><dt className="font-semibold">This visit</dt><dd>{fmtMoney(booking.first)}</dd></div>}
             {hasCard && <div><dt className="font-semibold">Card on file</dt><dd>{brand}{booking.card_last4 ? ` ••••${booking.card_last4}` : ""}</dd></div>}
             <div><dt className="font-semibold">Due today</dt><dd>$0</dd></div>
           </dl>}

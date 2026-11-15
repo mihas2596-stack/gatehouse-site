@@ -1,8 +1,13 @@
-export type AutosaveState = "idle" | "saving" | "saved" | "failed";
+export type AutosaveState = "idle" | "saving" | "saved" | "failed" | "stale";
+// A write may return "stale" when the server refuses it with a
+// revision conflict (409 checklist_stale): the value on the server is
+// newer, so re-sending the same value can never succeed — the UI must
+// offer a reload, not a retry loop (MB-32).
+export type AutosaveWriteResult = boolean | "stale";
 
 /** One writer per open editor. Older writes can never land after newer ones. */
 export function createAutosaveQueue<T>(
-  write: (value: T) => Promise<boolean>,
+  write: (value: T) => Promise<AutosaveWriteResult>,
   onState: (state: AutosaveState) => void,
   delay = 600,
 ) {
@@ -25,7 +30,15 @@ export function createAutosaveQueue<T>(
       const value = latest;
       notify("saving");
       try {
-        if (!await write(value)) {
+        const result = await write(value);
+        if (result === "stale") {
+          // A stale write is terminal for this value: the server holds
+          // a newer checklist, so retrying the same value loops
+          // forever. Report it distinctly and stop draining.
+          notify("stale");
+          return false;
+        }
+        if (!result) {
           notify("failed");
           return false;
         }

@@ -55,6 +55,29 @@ describe("H5: cleanerEntryView reopens entry for a scheduled re-clean", () => {
     expect(out).not.toBeNull();
     expect(out?.secret).toBe(SECRET);
     expect(out?.method).toBe("arrange");
+    expect(out?.secret_undecryptable).toBe(false);
+  });
+
+  // LB-47: a stored secret that no longer decrypts (key rotated) is
+  // not "no secret saved" — the view says so explicitly.
+  it("flags an undecryptable stored secret instead of silently returning null", () => {
+    const out = cleanerEntryView(
+      accessRow({ entry_secret: "v1.garbage.garbage" }) as never,
+      sentVisit, true, revokeEvents,
+    );
+    expect(out).not.toBeNull();
+    expect(out?.secret).toBeNull();
+    expect(out?.secret_undecryptable).toBe(true);
+  });
+
+  it("no stored secret is not undecryptable", () => {
+    const out = cleanerEntryView(
+      accessRow({ entry_secret: null }) as never,
+      sentVisit, true, revokeEvents,
+    );
+    expect(out).not.toBeNull();
+    expect(out?.secret).toBeNull();
+    expect(out?.secret_undecryptable).toBe(false);
   });
 
   it("hides a stale row saved before the re-clean was arranged", () => {

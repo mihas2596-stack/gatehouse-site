@@ -3,12 +3,25 @@ import { MapPin } from "lucide-react";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import { CITIES, CITY_BY_SLUG } from "@/config/cities";
+import { PRICES, fmtPrice, globalTestCutActive, scaleTestPrice } from "@/config/calculator";
 
 const CityPage = () => {
   const { city: slug } = useParams();
   const city = slug ? CITY_BY_SLUG[slug] : undefined;
 
   if (!city) return <Navigate to="/areas" replace />;
+
+  // MB-15(a): the "From" price, from the same calculator as
+  // /services — the lowest every-other-week visit (a small home: up
+  // to 2 bedrooms and 2 full bathrooms). Test prices apply here
+  // exactly as on /services (same global window + tab flag), so one
+  // regime never shows two different prices. Synchronous at render,
+  // NOT useEffect: the prerendered HTML must show the same prices as
+  // the live page (see Services.tsx).
+  const testPricing = (() => {
+    try { return sessionStorage.getItem("gh_test_pricing") === "1" || globalTestCutActive(); } catch { return globalTestCutActive(); }
+  })();
+  const disp = (n: number): number => (testPricing ? scaleTestPrice(n) : n);
 
   return (
     <div className="page-shell">
@@ -31,13 +44,21 @@ const CityPage = () => {
         </div>
       </section>
 
+      {testPricing && (
+        <div className="container">
+          <p className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 text-center">
+            Test booking: prices on this page are reduced for a payment test.
+          </p>
+        </div>
+      )}
+
       <section className="py-12 md:py-16">
         <div className="container max-w-3xl">
           <div className="rounded-2xl bg-card p-6 shadow-warm mb-10">
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Visit at a glance</h2>
             <ul className="space-y-2 text-base leading-relaxed text-foreground">
               <li><strong>What&apos;s covered:</strong> the published room-by-room checklist — <Link to="/whats-included" className="text-primary underline">see what&apos;s included</Link>.</li>
-              <li><strong>Price:</strong> published by bedrooms and full bathrooms — <Link to="/quote" className="text-primary underline">see your price</Link>.</li>
+              <li><strong>Price:</strong> from {fmtPrice(disp(PRICES.recurring.S))} per visit for a small home — <Link to="/quote" className="text-primary underline">see your price</Link>.</li>
               <li><strong>First visit:</strong> choose Standard for regular upkeep or Deep for a more detailed clean.</li>
               <li><strong>Payment:</strong> nothing at booking; charged when you approve the photo report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
               <li><strong>Schedule:</strong> each visit is arranged and confirmed with you; cancel free up to 48 hours before a visit; rescheduling is always free.</li>

@@ -195,7 +195,9 @@ describe("Task 1 (a): charge_fee uses this booking's card, never another booking
     expect(piCalls[0].amount).toBe("2500");
     expect(piCalls[0].paymentMethod).toBe(PM_A);
     expect(piCalls[0].customer).toBe("cus_v");
-    expect(piCalls[0].idem).toBe(`fee_${BID}`);
+    // MB-02: the fee key is bound to (booking, amount, card), so a
+    // replayed or mis-keyed create cannot charge the wrong card/amount.
+    expect(piCalls[0].idem).toMatch(/^fee_bid-task1_2500_[0-9a-f]{12}$/);
   });
 
   it("no card confirmed for this booking: no charge, a clear reason, nothing created", async () => {

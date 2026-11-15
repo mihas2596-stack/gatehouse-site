@@ -34,16 +34,29 @@
 // prefix listing. DA-05: each level is paged (100 per page, offset
 // loop) and a walk that hits the cap returns the partial list with
 // `truncated: true` — the run cleans what was listed and says so in
-// the log, it never drops the whole run.
+// the log, it never drops the whole run. MB-22: the 500-object cap
+// counts only UNREGISTERED objects (registered paths are passed in
+// as a predicate) — before this, 500 registered photos in early-UUID
+// visits ate the whole budget and orphans in later visits were never
+// listed. A hard total bound (ORPHAN_LIST_TOTAL_MAX) still caps one
+// run's listing.
 
 import { dbConfigured, dbConfig, dbSelect, dbDelete, logEvent, storageRemove, PHOTO_BUCKET } from "./_db.js";
+import { ORPHAN_MIN_AGE_MS } from "./_photo_policy.js";
+// LB-43: the orphan age is photo policy — defined in
+// api/_photo_policy.ts, re-exported here so existing imports keep
+// working.
+export { ORPHAN_MIN_AGE_MS };
 
-/** An unregistered upload may sit for a day while the cleaner retries;
-// older than this, it is abandoned, not in-flight. */
-export const ORPHAN_MIN_AGE_MS = 24 * 3600 * 1000;
 /** Per-run bounds: the walk and the deletions both stop here. */
 export const ORPHAN_LIST_MAX = 500;
 export const ORPHAN_DELETE_MAX = 50;
+/** Hard bound on the TOTAL objects one walk lists (registered +
+ * unregistered). MB-22 lets registered objects bypass the
+ * ORPHAN_LIST_MAX count, so the walk needs its own ceiling — one run
+ * can never list an unbounded bucket. Hitting it truncates the run
+ * (the flag tells the caller), it never drops the run. */
+export const ORPHAN_LIST_TOTAL_MAX = 2000;
 
 export type StorageObject = { path: string; updatedAt: string | null };
 
@@ -105,28 +118,38 @@ async function listLevel(prefix: string): Promise<{ entries: ListEntry[]; trunca
  * Every object under a prefix, recursing into subfolders. Returns
  * null when Storage cannot be listed at all (callers fail open for
  * the sign cap, fail closed for deletion). Bounded: depth ≤ 4 and
- * ORPHAN_LIST_MAX objects — a run never walks an unbounded bucket.
+ * ORPHAN_LIST_MAX objects counted toward the cap, plus the hard
+ * ORPHAN_LIST_TOTAL_MAX on everything listed.
  * DA-05: when the walk hits the cap, the partial list is returned
  * with `truncated: true` instead of null — the run cleans what was
  * listed and logs the truncation, it never skips the whole run.
+ * MB-22: with opts.isRegistered, registered objects are still
+ * returned but do NOT count toward maxObjects — only objects the
+ * caller still needs to examine consume the budget. Without a
+ * predicate the count is exactly the old out.length check.
  */
 export async function storageListObjects(
   prefix: string,
   maxObjects: number = ORPHAN_LIST_MAX,
+  opts: { isRegistered?: (path: string) => boolean } = {},
 ): Promise<{ objects: StorageObject[]; truncated: boolean } | null> {
   const out: StorageObject[] = [];
   let truncated = false;
+  const countsTowardCap = (path: string): boolean => !opts.isRegistered || !opts.isRegistered(path);
+  let counted = 0;
   const walk = async (p: string, depth: number): Promise<boolean> => {
-    if (depth > 4 || out.length >= maxObjects) { truncated = true; return false; }
+    if (depth > 4 || counted >= maxObjects || out.length >= ORPHAN_LIST_TOTAL_MAX) { truncated = true; return false; }
     const level = await listLevel(p);
     if (level === null) return false;
     if (level.truncated) truncated = true;
     const entries = level.entries;
     for (const e of entries) {
-      if (out.length >= maxObjects) { truncated = true; return false; }
+      if (counted >= maxObjects || out.length >= ORPHAN_LIST_TOTAL_MAX) { truncated = true; return false; }
       const isFile = e.metadata != null && typeof e.metadata.size === "number";
       if (isFile) {
-        out.push({ path: `${p}${e.name}`, updatedAt: e.updated_at ?? null });
+        const path = `${p}${e.name}`;
+        out.push({ path, updatedAt: e.updated_at ?? null });
+        if (countsTowardCap(path)) counted++;
       } else if (e.id == null) {
         // A subfolder entry: recurse into it (its name is the folder).
         if (!(await walk(`${p}${e.name}/`, depth + 1))) return false;
@@ -200,22 +223,27 @@ export async function cleanupOrphanPhotos(
   const nowMs = opts.nowMs ?? Date.now();
   const result: OrphanCleanupResult = { checked: 0, deleted: 0, failed: 0, skipped: 0, truncated: false };
   if (!dbConfigured()) return result;
-  const listed = await storageListObjects(opts.prefix ?? "visits/", ORPHAN_LIST_MAX);
+  // Registered paths, oldest-first so the per-candidate check below
+  // sees the same set the retention pass uses. Fetched BEFORE the
+  // walk (MB-22): the walk counts only unregistered objects toward
+  // its budget, so registered photos can no longer starve it. The set
+  // is only a pre-filter — every candidate is re-checked by exact path
+  // before any delete, so a truncated set can never cause a wrong delete.
+  const registered = await dbSelect<{ storage_path: string }>(
+    "gh_photos",
+    "select=storage_path&order=created_at.asc&limit=2000",
+  );
+  const registeredPaths = registered.map((r) => r.storage_path);
+  const registeredSet = new Set(registeredPaths);
+  const listed = await storageListObjects(opts.prefix ?? "visits/", ORPHAN_LIST_MAX, {
+    isRegistered: (path) => registeredSet.has(path),
+  });
   if (listed === null) return result;
   // DA-05: a truncated listing never skips the whole run — clean
   // what was listed; the flag tells the caller (and the next run)
   // the bucket was not fully walked.
   result.truncated = listed.truncated;
   const objects = listed.objects;
-  // Registered paths, oldest-first so the per-candidate check below
-  // sees the same set the retention pass uses. The set is only a
-  // pre-filter — every candidate is re-checked by exact path before
-  // any delete, so a truncated set can never cause a wrong delete.
-  const registered = await dbSelect<{ storage_path: string }>(
-    "gh_photos",
-    "select=storage_path&order=created_at.asc&limit=2000",
-  );
-  const registeredPaths = registered.map((r) => r.storage_path);
   const candidates = selectOrphanPhotos(objects, registeredPaths, nowMs);
   for (const obj of candidates) {
     if (result.deleted >= ORPHAN_DELETE_MAX) break;

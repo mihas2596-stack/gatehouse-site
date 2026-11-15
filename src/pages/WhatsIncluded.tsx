@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
 import { CHECKLIST, NOT_INCLUDED } from "@/config/checklist";
-import { ADDONS, globalTestCutActive, scaleTestPrice } from "@/config/calculator";
+import { ADDONS, fmtPrice, globalTestCutActive, scaleTestPrice } from "@/config/calculator";
 import { useState } from "react";
 
 const addons = [
@@ -109,7 +109,7 @@ const WhatsIncluded = () => {
               {addons.map(({ label, price, unit }) => (
                 <li key={label} className="flex items-center justify-between gap-4 text-base text-foreground">
                   <span>{label}</span>
-                  <span className="font-semibold text-primary">+${disp(price)} {unit}</span>
+                  <span className="font-semibold text-primary">+{fmtPrice(disp(price))} {unit}</span>
                 </li>
               ))}
             </ul>

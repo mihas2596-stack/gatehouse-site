@@ -47,12 +47,12 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "Who will be cleaning my home?",
     group: "Booking",
-    a: "Cleans are done by independent cleaning professionals, matched to your home by Gatehouse. We speak with every cleaner before matching them to your home. Before your visit, your visit page shows your cleaner's name (and a photo when they've agreed to share one). If your cleaner ever changes, we tell you before the visit.",
+    a: "Cleans are done by independent cleaning professionals, matched to your home by Gatehouse after a phone screening. Before your visit, your visit page shows your cleaner's name (and a photo when they've agreed to share one). If your cleaner ever changes, we tell you before the visit.",
   },
   {
     q: "How long does a visit take?",
     group: "Booking",
-    a: "We book your visit in an arrival window — morning (7–11 AM), midday (11 AM–2 PM) or afternoon (2–5 PM), Atlanta time. Your cleaner arrives within that window and works through the full room-by-room checklist for your home. Most standard visits take 2–4 hours, depending on your home's size. A deep or move-in/out clean takes longer.",
+    a: "We book your visit in an arrival window — morning (7–11 AM), midday (11 AM–2 PM) or afternoon (2–5 PM), Atlanta time. Your cleaner arrives within that window and works through the full room-by-room checklist for your home. A deep or move-in/out clean takes longer.",
   },
   {
     q: "What isn't included in a visit?",

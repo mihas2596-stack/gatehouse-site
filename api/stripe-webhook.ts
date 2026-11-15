@@ -176,6 +176,22 @@ async function stripeGet(
   return { ok: response.ok, data };
 }
 
+// LB-14 (N-4): a card save must not clobber an in-flight payment
+// state. A customer bound to a booking with a sent report sits in
+// gh_state report_sent / approved / payment_pending, and stamping
+// card_ready over it loses the payment state the cron and the owner
+// panel read (the cron rehydrates from the row, but may not reach
+// the booking). Only the state stamp is skipped — the payment-method
+// write below still lands. A failed customer read degrades to the
+// old behaviour (stamp card_ready) rather than blocking the card save.
+const PRESERVE_GH_STATES = new Set(["report_sent", "approved", "payment_pending"]);
+async function preserveGhState(secretKey: string, customerId: string): Promise<boolean> {
+  const cust = await stripeGet(secretKey, `/customers/${encodeURIComponent(customerId)}`);
+  if (!cust.ok) return false;
+  const meta = cust.data["metadata"] as Record<string, string> | undefined;
+  return PRESERVE_GH_STATES.has(typeof meta?.["gh_state"] === "string" ? meta["gh_state"] : "");
+}
+
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
   const log = (step: string, info?: unknown) =>
@@ -308,8 +324,10 @@ export default async function handler(req: Req, res: Res) {
           if (si.ok && si.data["status"] === "succeeded") {
             const pm = typeof si.data["payment_method"] === "string" ? (si.data["payment_method"] as string) : "";
             if (bookingId && pm) await recordCheckoutCardForOwner(STRIPE_SECRET_KEY, bookingId, customerId, pm);
+            // LB-14: do not stamp card_ready over an in-flight payment state.
+            const keepState = await preserveGhState(STRIPE_SECRET_KEY, customerId);
             await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-              "metadata[gh_state]": "card_ready",
+              ...(keepState ? {} : { "metadata[gh_state]": "card_ready" }),
               "metadata[gh_payment_method]": pm,
               ...(bookingId ? { "metadata[gh_booking_id]": bookingId } : {}),
             });
@@ -351,8 +369,10 @@ export default async function handler(req: Req, res: Res) {
             bookingId = custMeta["gh_booking_id"] ?? null;
           }
           if (bookingId && pm) await recordCheckoutCardForOwner(STRIPE_SECRET_KEY, bookingId, customerId, pm);
+          // LB-14: do not stamp card_ready over an in-flight payment state.
+          const keepState = await preserveGhState(STRIPE_SECRET_KEY, customerId);
           await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-            "metadata[gh_state]": "card_ready",
+            ...(keepState ? {} : { "metadata[gh_state]": "card_ready" }),
             "metadata[gh_payment_method]": pm,
             ...(bookingId ? { "metadata[gh_booking_id]": bookingId } : {}),
           });
@@ -418,7 +438,14 @@ export default async function handler(req: Req, res: Res) {
                 } else {
                   const recorded = typeof cevs.rows[0]?.detail?.["fee_cents"] === "number"
                     ? (cevs.rows[0].detail["fee_cents"] as number) : NaN;
-                  if (Number.isFinite(recorded) && recorded !== feeCents) {
+                  if (!Number.isFinite(recorded)) {
+                    // LB-12 (N-2): no cancel record at all (or no fee
+                    // on it) means the fee cannot be verified — refuse
+                    // the mirror instead of silently skipping the
+                    // amount check, as the old finite-only test did.
+                    feeVerified = false;
+                    log("fee", { state: "no_cancel_record_skip", booking: bookingId, pi: piId });
+                  } else if (recorded !== feeCents) {
                     feeVerified = false;
                     log("fee", { state: "amount_mismatch_skip", booking: bookingId, pi: piId });
                   }
@@ -600,6 +627,11 @@ export default async function handler(req: Req, res: Res) {
             const issue = issueStateFrom(evRows, cleanRow.issue_open ?? null, cleanRow.issue_ever ?? null);
             if (everWaivedDecision(evRows) || cleanRow.charge_waived === true) basisBlockedReason = "charge_waived";
             else if (cleanRow.status === "refunded") basisBlockedReason = "refunded";
+            // MB-01/N-1: a cancelled visit has no payment basis — a
+            // succeeded intent must not resurrect it as paid. Checked
+            // before issue/future-date reasons: the cancel is the
+            // terminal fact, whatever else the row also shows.
+            else if (cleanRow.status === "cancelled") basisBlockedReason = "cancelled";
             else if (issue.open) basisBlockedReason = "issue_open";
             else if (issue.ever) basisBlockedReason = "issue_ever";
             else if (isFutureVisitDate(effDate, Date.now())) basisBlockedReason = "report_too_early";
@@ -691,6 +723,34 @@ export default async function handler(req: Req, res: Res) {
                     })
                   : false;
                 if (marked !== 1 || !journaled) cleanMirrorFailed = true;
+                // LB-03 (DA-19): a dispute that arrived BEFORE this
+                // payment was marked paid journaled payment_disputed
+                // but could not open an issue — the dispute branch
+                // only flags paid rows, and this row was not paid
+                // yet. Now that it is paid, re-check for an earlier
+                // dispute on this intent and open the issue, so it
+                // shows in the owner's Open issues instead of hiding
+                // in the journal. Gated on marked === 1 so a retry
+                // never re-runs it after the first delivery did.
+                if (marked === 1 && journaled && !cleanMirrorFailed) {
+                  const disputed = await dbSelect<{ detail: Record<string, unknown> | null }>(
+                    "gh_events",
+                    `visit_id=eq.${vrow.id}&event=eq.payment_disputed&order=created_at.desc&limit=10`,
+                  );
+                  const hasEarlierDispute = disputed.some((e) => {
+                    const d = e.detail ?? {};
+                    return d["payment_intent"] === piId || d["payment_intent_id"] === piId;
+                  });
+                  if (hasEarlierDispute) {
+                    const flagged = await dbUpdateCount(
+                      "gh_visits",
+                      `id=eq.${vrow.id}&status=eq.paid`,
+                      { issue_open: true, issue_ever: true },
+                    );
+                    if (flagged < 0) cleanMirrorFailed = true;
+                    else if (flagged === 1) log("payment", { state: "issue_opened_from_earlier_dispute", booking: bookingId, pi: piId });
+                  }
+                }
               } else if (newState === "payment_failed" && vrow.status !== "paid") {
                 // C14: a redelivery of the same event must not write a
                 // second payment_failed row. The persistent dedup above

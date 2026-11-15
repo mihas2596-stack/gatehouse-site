@@ -7,7 +7,7 @@
 // stay in booking-action (confirm, set_cleaner, cleaner_link,
 // return_report, send_report, charge) — this endpoint never mutates.
 
-import { dbConfigured, dbConfig, dbSelect, dbSelectStrict, storageSignDownload } from "./_db.js";
+import { dbConfigured, dbConfig, dbSelectStrict, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { confirmedDateOf, effectiveVisitDate, autoChargeDeadlineMs } from "./_visit_date.js";
@@ -127,6 +127,31 @@ async function countVisits(): Promise<number | null> {
   }
 }
 
+// MB-19: aux signals are read in pages, not one capped page — a
+// single 500-row page silently dropped the oldest visits' badges
+// (open issues, payment-failed, card) once it filled up. Pages of
+// 500 until a short page; a hard 10000-row safety cap stops a
+// runaway loop and is reported as truncated instead of silently
+// dropping rows. Any failed page fails the list with a 502 (MB-06):
+// a badge missing because the DB errored must never read as "fine".
+const AUX_PAGE_SIZE = 500;
+const AUX_MAX_ROWS = 10000;
+async function dbSelectPaged<T>(
+  table: string,
+  query: string,
+): Promise<{ ok: boolean; rows: T[]; truncated: boolean }> {
+  const rows: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const res = await dbSelectStrict<T>(table, `${query}&offset=${offset}&limit=${AUX_PAGE_SIZE}`);
+    if (!res.ok) return { ok: false, rows: [], truncated: false };
+    rows.push(...res.rows);
+    if (res.rows.length < AUX_PAGE_SIZE) return { ok: true, rows, truncated: false };
+    offset += AUX_PAGE_SIZE;
+    if (rows.length >= AUX_MAX_ROWS) return { ok: true, rows, truncated: true };
+  }
+}
+
 // (Removed: hasPaymentFailed treated any historical payment_failed event
 // as a current failure. Detail and list now compute it from the journal
 // with currentPaymentFailed, which weighs a later payment_succeeded and
@@ -169,10 +194,14 @@ export default async function handler(req: Req, res: Res) {
       if (!visitsRes.ok) return json(502, { ok: false, error: "db_error" });
       const visit = visitsRes.rows[0];
       if (!visit) return json(404, { ok: false, error: "visit_not_found" });
-      const photos = await dbSelect<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
+      const photosRes = await dbSelectStrict<{ id: string; room: string; kind: string; note: string | null; storage_path: string; created_at: string }>(
         "gh_photos",
         `visit_id=eq.${visitId}&order=created_at.asc&limit=200`,
       );
+      // MB-06 (DA-15): a failed photo read is a 502, never an empty
+      // report — the old non-strict read fell back to an empty list.
+      if (!photosRes.ok) return json(502, { ok: false, error: "db_error" });
+      const photos = photosRes.rows;
       const photosWithUrls = await Promise.all(
         photos.map(async (ph) => ({
           id: ph.id,
@@ -183,10 +212,15 @@ export default async function handler(req: Req, res: Res) {
           url: await storageSignDownload(ph.storage_path, 3600),
         })),
       );
-      const events = await dbSelect(
+      const eventsRes = await dbSelectStrict(
         "gh_events",
         `visit_id=eq.${visitId}&order=created_at.desc&limit=100`,
       );
+      // MB-06 (DA-15): a failed journal read is a 502, never an empty
+      // history — the old non-strict read hid open issues and the
+      // payment-failed badge from the detail view.
+      if (!eventsRes.ok) return json(502, { ok: false, error: "db_error" });
+      const events = eventsRes.rows;
       const journalEvents = events as JournalEvent[];
       // O5: opened binds to the row's current issuance, not to history.
       const openedAt = openedAtForIssuance(journalEvents, visit["cleaner_link_issuance"]);
@@ -323,21 +357,30 @@ export default async function handler(req: Req, res: Res) {
     const visits = page.slice(0, 100);
     const ids = visits.map((v) => v.id);
     const counts = new Map<string, number>();
+    // MB-06/MB-19: a failed aux read is a 502 (never a silent zero),
+    // and the read is paged (never one capped page that drops the
+    // oldest visits' signals). signalsTruncated is reported below.
+    let signalsTruncated = false;
     if (ids.length > 0) {
-      const photos = await dbSelect<{ visit_id: string }>(
+      const photosRes = await dbSelectPaged<{ visit_id: string }>(
         "gh_photos",
-        `visit_id=in.(${ids.join(",")})&limit=2000`,
+        `visit_id=in.(${ids.join(",")})`,
       );
-      for (const ph of photos) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
+      if (!photosRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= photosRes.truncated;
+      for (const ph of photosRes.rows) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
     }
     // O5 (list): opened binds to each row's current issuance. The query
     // returns desc, so the first matching open per visit is its latest.
     const opened = new Map<string, string>();
     if (ids.length > 0) {
-      const opens = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+      const opensRes = await dbSelectPaged<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.cleaner_link_opened&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.cleaner_link_opened&order=created_at.desc`,
       );
+      if (!opensRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= opensRes.truncated;
+      const opens = opensRes.rows;
       const issuanceByVisit = new Map(visits.map((v) => [v.id, v["cleaner_link_issuance"]]));
       for (const o of opens) {
         if (opened.has(o.visit_id)) continue;
@@ -349,14 +392,20 @@ export default async function handler(req: Req, res: Res) {
     // O3 (list): a failure counts only until a later success or payment.
     const failed = new Set<string>();
     if (ids.length > 0) {
-      const fails = await dbSelect<{ visit_id: string; created_at: string }>(
+      const failsRes = await dbSelectPaged<{ visit_id: string; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.payment_failed&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.payment_failed&order=created_at.desc`,
       );
-      const successes = await dbSelect<{ visit_id: string; created_at: string }>(
+      if (!failsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= failsRes.truncated;
+      const fails = failsRes.rows;
+      const successesRes = await dbSelectPaged<{ visit_id: string; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.payment_succeeded&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.payment_succeeded&order=created_at.desc`,
       );
+      if (!successesRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= successesRes.truncated;
+      const successes = successesRes.rows;
       const succeededAt = new Map<string, string>();
       for (const s of successes) {
         if (!succeededAt.has(s.visit_id)) succeededAt.set(s.visit_id, s.created_at);
@@ -375,18 +424,24 @@ export default async function handler(req: Req, res: Res) {
     // status alone cannot tell, because submit overwrites it.
     const confirmed = new Set<string>();
     if (ids.length > 0) {
-      const confs = await dbSelect<{ visit_id: string }>(
+      const confsRes = await dbSelectPaged<{ visit_id: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.visit_confirmed&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.visit_confirmed`,
       );
+      if (!confsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= confsRes.truncated;
+      const confs = confsRes.rows;
       for (const c of confs) confirmed.add(c.visit_id);
     }
     const entryAgreed = new Set<string>();
     if (ids.length > 0) {
-      const accs = await dbSelect<{ visit_id: string; entry_method: string | null }>(
+      const accsRes = await dbSelectPaged<{ visit_id: string; entry_method: string | null }>(
         "gh_visit_access",
-        `visit_id=in.(${ids.join(",")})&limit=200`,
+        `visit_id=in.(${ids.join(",")})`,
       );
+      if (!accsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= accsRes.truncated;
+      const accs = accsRes.rows;
       for (const a of accs) if (a.entry_method) entryAgreed.add(a.visit_id);
       // A meeting choice needs no secret: the quote-time row method
       // settles access on its own (arrange_before without a saved
@@ -398,10 +453,13 @@ export default async function handler(req: Req, res: Res) {
     }
     const approved = new Set<string>();
     if (ids.length > 0) {
-      const apprs = await dbSelect<{ visit_id: string }>(
+      const apprsRes = await dbSelectPaged<{ visit_id: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.request_approved&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.request_approved`,
       );
+      if (!apprsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= apprsRes.truncated;
+      const apprs = apprsRes.rows;
       for (const a of apprs) approved.add(a.visit_id);
     }
     // C3 (list): card signal from the journal, batched like the other
@@ -417,10 +475,13 @@ export default async function handler(req: Req, res: Res) {
     // journal's view, not Stripe's.
     const cardConfirmed = new Set<string>();
     if (ids.length > 0) {
-      const cards = await dbSelect<{ visit_id: string }>(
+      const cardsRes = await dbSelectPaged<{ visit_id: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.card_confirmed&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.card_confirmed`,
       );
+      if (!cardsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= cardsRes.truncated;
+      const cards = cardsRes.rows;
       for (const c of cards) cardConfirmed.add(c.visit_id);
     }
     // TASK 1 (fix6): open-issue detail for the "Open issues" block —
@@ -431,10 +492,13 @@ export default async function handler(req: Req, res: Res) {
     const issueOpened = new Map<string, { opened_at: string; reason: string; room: string }>();
     const issueDecisions = new Map<string, { decision: string; resolution: string; decided_at: string }>();
     if (ids.length > 0) {
-      const openedEv = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+      const openedEvRes = await dbSelectPaged<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.issue_opened&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.issue_opened&order=created_at.desc`,
       );
+      if (!openedEvRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= openedEvRes.truncated;
+      const openedEv = openedEvRes.rows;
       for (const o of openedEv) {
         if (issueOpened.has(o.visit_id)) continue;
         issueOpened.set(o.visit_id, {
@@ -443,10 +507,13 @@ export default async function handler(req: Req, res: Res) {
           room: typeof o.detail?.["room"] === "string" ? (o.detail["room"] as string) : "",
         });
       }
-      const decisions = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+      const decisionsRes = await dbSelectPaged<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.issue_decision&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.issue_decision&order=created_at.desc`,
       );
+      if (!decisionsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= decisionsRes.truncated;
+      const decisions = decisionsRes.rows;
       for (const d of decisions) {
         if (issueDecisions.has(d.visit_id)) continue;
         const dec = d.detail?.["decision"];
@@ -457,15 +524,39 @@ export default async function handler(req: Req, res: Res) {
           decided_at: d.created_at,
         });
       }
+      // MA-04: a post-payment complaint has no issue_opened event — its
+      // opening event is postpay_issue. Fall back to it so the queue
+      // shows the client's words and the opening time instead of "no
+      // details given" / "—". Only fills visits with no issue_opened
+      // entry, so a pre-payment issue is never overwritten by a later
+      // post-payment one.
+      const postpayEvRes = await dbSelectPaged<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+        "gh_events",
+        `visit_id=in.(${ids.join(",")})&event=eq.postpay_issue&order=created_at.desc`,
+      );
+      if (!postpayEvRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= postpayEvRes.truncated;
+      const postpayEv = postpayEvRes.rows;
+      for (const o of postpayEv) {
+        if (issueOpened.has(o.visit_id)) continue;
+        issueOpened.set(o.visit_id, {
+          opened_at: o.created_at,
+          reason: typeof o.detail?.["reason"] === "string" ? (o.detail["reason"] as string) : "",
+          room: typeof o.detail?.["room"] === "string" ? (o.detail["room"] as string) : "",
+        });
+      }
     }
     // N9 (list): client phone for search — also a batched journal read
     // (`client_contact` events, latest per visit), same pattern as above.
     const clientPhone = new Map<string, string>();
     if (ids.length > 0) {
-      const contacts = await dbSelect<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
+      const contactsRes = await dbSelectPaged<{ visit_id: string; detail: Record<string, unknown> | null; created_at: string }>(
         "gh_events",
-        `visit_id=in.(${ids.join(",")})&event=eq.client_contact&order=created_at.desc&limit=500`,
+        `visit_id=in.(${ids.join(",")})&event=eq.client_contact&order=created_at.desc`,
       );
+      if (!contactsRes.ok) return json(502, { ok: false, error: "db_error" });
+      signalsTruncated ||= contactsRes.truncated;
+      const contacts = contactsRes.rows;
       for (const c of contacts) {
         if (clientPhone.has(c.visit_id)) continue;
         const ph = normalizeClientPhone(c.detail?.["phone"]);
@@ -479,6 +570,10 @@ export default async function handler(req: Req, res: Res) {
       // page. total is null only when the count itself was unreadable.
       total: await countVisits(),
       page_size: 100,
+      // MB-19: true only when the 10000-row safety cap cut an aux
+      // signal short — the badges below are then a partial view, and
+      // the panel must not read them as complete.
+      signals_truncated: signalsTruncated,
       next_offset: page.length > 100 ? offset + 100 : null,
       visits: visits.map((v) => {
         // Extension bug #1: the auto-charge deadline is max(visit-date

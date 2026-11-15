@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle, Camera, AlertTriangle, Loader2, User } from "lucide-react";
+import { CheckCircle, Camera, AlertTriangle, Loader2, RefreshCw, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
 import { IssueForm } from "@/components/IssueForm";
+import { convertToJpeg } from "@/lib/imageConvert";
 import { fmtDateUS } from "@/lib/formatDate";
 
 type ReportStateName =
@@ -167,19 +168,35 @@ const Report = () => {
     void load();
   }, [load]);
 
-  const onPhotoPick = (file: File | null) => {
+  // MB-33: compress on the phone (same convertToJpeg as the cleaner)
+  // instead of dropping anything over 1 MB — the server accepts up to
+  // 15 MB, and a phone photo is almost always over 1 MB. When
+  // compression itself fails, a small photo still goes through as-is;
+  // a large one gets an honest note and the message still goes through.
+  const onPhotoPick = async (file: File | null) => {
     setIssuePhoto("");
     setIssuePhotoNote("");
     if (!file) return;
-    if (file.size > 1_000_000) {
-      // Too large to attach — the message itself still goes through.
-      setIssuePhotoNote("That photo is large, so we'll send your message without it.");
-      return;
+    const readAsDataUrl = (blob: Blob | File) => {
+      const reader = new FileReader();
+      reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
+      reader.readAsDataURL(blob);
+    };
+    try {
+      const blob = await convertToJpeg(file);
+      if (blob.size > 15_000_000) {
+        setIssuePhotoNote("That photo is too large to send — please pick a smaller one.");
+        return;
+      }
+      readAsDataUrl(blob);
+    } catch (err) {
+      if (file.size <= 1_000_000) {
+        readAsDataUrl(file);
+      } else {
+        setIssuePhotoNote(err instanceof Error ? err.message : "That photo is large, so we'll send your message without it.");
+      }
     }
-    const reader = new FileReader();
-    reader.onload = () => setIssuePhoto(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => setIssuePhotoNote("We couldn't attach that photo — your message will still be sent.");
-    reader.readAsDataURL(file);
   };
 
   // 3DS (H1): complete the cardholder authentication for a PaymentIntent
@@ -505,6 +522,16 @@ const Report = () => {
         noindex
       />
       <div className="container max-w-2xl py-12 pb-24 md:pb-12">
+        {/* MB-31: a small Refresh, reusing load() — the client waits on
+            the report and should not have to reload the page (or leave
+            the tab) to see it. */}
+        {!loading && data && data.state !== "invalid_link" && data.state !== "transient_error" && (
+          <div className="flex justify-end mb-2">
+            <Button variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="w-4 h-4 mr-1" /> Refresh
+            </Button>
+          </div>
+        )}
         {loading && (
           <div className="text-center">
             <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" aria-hidden="true" />
@@ -629,7 +656,8 @@ const Report = () => {
                 If something isn&apos;t right, report an issue and the automatic charge is blocked for this visit — it never runs on its own afterwards.
                 {data.deadline && !data.charge_timer_blocked ? (
                   <> Review by <strong>{fmtDeadline(data.deadline)}</strong> (Atlanta time) — after that
-                  your saved card is charged automatically unless you report an issue.</>
+                  your saved card is charged automatically unless you report an issue. The charge runs after this deadline, at the
+                  next scheduled billing time — not at this exact minute.</>
                 ) : null}
                 {data.charge_timer_block_reason === "issue_ever" ? (
                   <> Automatic payment is disabled for this visit because an issue was reported.</>

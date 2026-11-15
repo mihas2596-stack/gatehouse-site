@@ -84,7 +84,10 @@ beforeEach(() => {
     gh_payment_method: "pm_1",
   };
   row = { id: VISIT_ID, booking_id: BID, status: "cancelled", payment_intent_id: null, receipt_email_id: null };
-  events = [];
+  // LB-12: the fee mirror verifies the $25 against the cancellation
+  // record — without a visit_cancelled event carrying fee_cents the
+  // webhook refuses the mirror.
+  events = [{ event: "visit_cancelled", detail: { fee_cents: 2500 } }];
   resendBodies = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
     const u = new URL(String(url));
@@ -138,7 +141,8 @@ describe("RA10 webhook obligation split", () => {
     expect(row["status"]).toBe("cancelled");
     expect(row["payment_intent_id"]).toBeNull();
     expect(events.filter((e) => e.event === "cancellation_fee_paid")).toHaveLength(1);
-    expect(events[0].detail?.["amount_cents"]).toBe(2500);
+    const paid = events.filter((e) => e.event === "cancellation_fee_paid");
+    expect(paid[0].detail?.["amount_cents"]).toBe(2500);
     expect(resendBodies).toHaveLength(1);
     const receipt = JSON.parse(resendBodies[0]) as { subject: string; text: string };
     expect(receipt.subject).toContain("late-cancellation fee");

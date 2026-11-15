@@ -25,7 +25,8 @@ import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-acti
 import { clientApprovedEvent, issueStateFrom, latestIssueDecision, everWaivedDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
 
-import { chargeVisit } from "./_payment_obligation.js";
+import { chargeVisit, reopenIssueAfterUnsettledCharge } from "./_payment_obligation.js";
+import { listCustomerCards } from "./card-status.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { autoChargeDeadlineMs, effectiveVisitDate, isFutureVisitDate } from "./_visit_date.js";
 // G3: isFutureVisitDate is the shared, calendar-validated copy from
@@ -491,12 +492,17 @@ async function reconcilePaymentMethod(
 ): Promise<{ pm: string | null; ambiguous: boolean }> {
   const existing = meta["gh_payment_method"] ?? "";
   if (existing) return { pm: existing, ambiguous: false };
-  const res = await stripeGet(
-    secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
-  );
-  if (!res.ok) return { pm: null, ambiguous: false };
-  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  // LB-06/DA-20: the single page of 10 cards used to silently drop
+  // the booking's own card past 10 cards on file. Reuse the paginated
+  // listCustomerCards (10x100 + direct fetch of the confirmed card
+  // inside card-status) instead; a Stripe read failure is still a
+  // soft no-card, never a throw up the stack.
+  let list: Array<{ id: string }>;
+  try {
+    list = await listCustomerCards(secretKey, customer.id);
+  } catch {
+    return { pm: null, ambiguous: false };
+  }
   // C13: the booking's card_confirmed event wins; else a lone card.
   // Several cards with no booking signal is ambiguous — the client
   // must confirm a card, not be charged on a guessed one.
@@ -739,44 +745,64 @@ export default async function handler(req: Req, res: Res) {
     // explanation instead of 7/8 with no word at all.
     let dbPhotosPartial = false;
     let dbPhotosUnavailable = 0;
+    // MB-06/DA-15: a failed photo read must NOT degrade to a 200 with
+    // an empty report and no flag. dbSelectStrict tells "no rows"
+    // apart from "the DB could not be read"; on a read failure the
+    // response carries photos_degraded so the page can say the photos
+    // failed to load (with a retry) instead of showing an empty
+    // report as if the cleaning had no photos.
+    let dbPhotosFailed = false;
     if (meta["gh_rp_source"] === "db" && dbConfigured()) {
       try {
-        const vrows = await dbSelect<{ id: string }>(
+        const vrowsRes = await dbSelectStrict<{ id: string }>(
           "gh_visits",
           `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
         );
-        const vid = vrows[0]?.id;
-        if (vid) {
-          const rows = await dbSelect<{ room: string; storage_path: string; note: string | null; kind: string }>(
-            "gh_photos",
-            `visit_id=eq.${vid}&order=created_at.asc&limit=60`,
-          );
-          const items: PhotoItem[] = [];
-          for (const r of rows) {
-            if (r.kind === "client") continue; // customer-submitted photos are not part of the report
-            const url = await storageSignDownload(r.storage_path, 24 * 3600);
-            if (url) {
-              items.push({
-                url,
-                room: r.room,
-                kind: r.kind === "before" ? "before" : "after",
-                ...(r.note ? { note: r.note } : {}),
-              });
+        if (!vrowsRes.ok) {
+          dbPhotosFailed = true;
+        } else {
+          const vid = vrowsRes.rows[0]?.id;
+          if (vid) {
+            // MB-21/LB-18: the 60-photo cap is for report photos — the
+            // client's own complaint photos must not eat its slots.
+            // Filter kind != client in the query, not after the fetch.
+            // (The in-loop skip below stays as defence-in-depth.)
+            const photosRes = await dbSelectStrict<{ room: string; storage_path: string; note: string | null; kind: string }>(
+              "gh_photos",
+              `visit_id=eq.${vid}&kind=neq.client&order=created_at.asc&limit=60`,
+            );
+            if (!photosRes.ok) {
+              dbPhotosFailed = true;
             } else {
-              dbPhotosPartial = true;
-              dbPhotosUnavailable++;
-              items.push({
-                url: null,
-                room: r.room,
-                kind: r.kind === "before" ? "before" : "after",
-                ...(r.note ? { note: r.note } : {}),
-                unavailable: true,
-              });
+              const items: PhotoItem[] = [];
+              for (const r of photosRes.rows) {
+                if (r.kind === "client") continue; // customer-submitted photos are not part of the report
+                const url = await storageSignDownload(r.storage_path, 24 * 3600);
+                if (url) {
+                  items.push({
+                    url,
+                    room: r.room,
+                    kind: r.kind === "before" ? "before" : "after",
+                    ...(r.note ? { note: r.note } : {}),
+                  });
+                } else {
+                  dbPhotosPartial = true;
+                  dbPhotosUnavailable++;
+                  items.push({
+                    url: null,
+                    room: r.room,
+                    kind: r.kind === "before" ? "before" : "after",
+                    ...(r.note ? { note: r.note } : {}),
+                    unavailable: true,
+                  });
+                }
+              }
+              dbPhotoItems = items;
             }
           }
-          dbPhotoItems = items;
         }
       } catch {
+        dbPhotosFailed = true;
         dbPhotoItems = null;
       }
     }
@@ -789,13 +815,18 @@ export default async function handler(req: Req, res: Res) {
     // resolved dispute still blocks the timer forever (issue_ever), as
     // does a bounced report. Otherwise the page shows a countdown for a
     // charge that can never happen.
-    const timerIssue = issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null);
-    const timerBounced = (row?.report_bounced ?? false) || meta["gh_report_bounced"] === "1";
-    // TASK 1 (fix6): the owner's latest decision on the issue, and
-    // whether the charge was waived — a waived visit is its own
-    // client state (no Approve button), not "awaiting".
-    const issueDecision = latestIssueDecision(events);
     const view = () => {
+      // MB-07: the timer/decision facts are computed INSIDE the view,
+      // from the CURRENT row/events — after a charge attempt the
+      // handler re-reads both (refreshAfterCharge below) and the
+      // rebuilt view must reflect the reopened issue / new payment
+      // state, not the pre-charge snapshot.
+      const timerIssue = issueStateFrom(events, row?.issue_open ?? null, row?.issue_ever ?? null);
+      const timerBounced = (row?.report_bounced ?? false) || meta["gh_report_bounced"] === "1";
+      // TASK 1 (fix6): the owner's latest decision on the issue, and
+      // whether the charge was waived — a waived visit is its own
+      // client state (no Approve button), not "awaiting".
+      const issueDecision = latestIssueDecision(events);
       const sentAt = meta["gh_report_sent_at"] ?? null;
       // N20: a bounced report never starts the 24h clock (the timer
       // is blocked), so there is no deadline to show — a deadline
@@ -837,6 +868,11 @@ export default async function handler(req: Req, res: Res) {
         // note and an "unavailable" tile per failed photo.
         photos_partial: dbPhotosPartial,
         photos_unavailable: dbPhotosUnavailable,
+        // MB-06: the photo read itself failed (DB unreadable) — the
+        // empty photo list above is NOT "no photos", it is a failed
+        // load; the page must say so (with a retry) instead of
+        // showing an empty report.
+        photos_degraded: dbPhotosFailed,
         // Rooms the client asked not to photograph (comma-separated in
         // gh_no_photo_zones) — the client report labels them explicitly
         // instead of silently omitting them.
@@ -915,6 +951,32 @@ export default async function handler(req: Req, res: Res) {
       };
     };
 
+    // MB-07/DA-16: rebuild the view from FRESH row + journal after a
+    // charge attempt. The in-memory meta/events predate the attempt:
+    // the issue close, the payment_failed / payment_unknown markers
+    // and a reopen by chargeVisit are all missing from them, so a
+    // plain view() after a failed charge briefly shows payment_issue
+    // while the issue is already open again (a reload fixed it — the
+    // response must not need one). A failed re-read keeps the stale
+    // view rather than failing the whole response: the charge outcome
+    // itself is already in the response's error field.
+    const refreshAfterCharge = async (): Promise<ReturnType<typeof view>> => {
+      try {
+        const freshRowRes = await latestBookingRowStrict(payload.bid);
+        if (freshRowRes.ok && freshRowRes.row && row) Object.assign(row, freshRowRes.row);
+        const freshEvRes = await bookingEventsStrict(payload.bid);
+        if (freshEvRes.ok) events = freshEvRes.events;
+        const freshMeta = row
+          ? { ...customer.metadata, ...buildEffectiveMeta(row, events) }
+          : customer.metadata;
+        for (const k of Object.keys(meta)) delete meta[k];
+        Object.assign(meta, freshMeta);
+      } catch {
+        /* keep the pre-charge view — the error field carries the outcome */
+      }
+      return view();
+    };
+
     if (req.method === "GET") {
       res.status(200).json(view());
       return;
@@ -939,8 +1001,116 @@ export default async function handler(req: Req, res: Res) {
       // shared customer metadata — another booking's complaint must not
       // suppress this booking's complaint. The metadata flag remains
       // only as the legacy fallback when no journal exists at all.
+      const RESEND_PP = process.env["RESEND_API_KEY"];
+      // MA-04/MA-05: a client photo attached to a post-payment complaint
+      // is stored with the visit (kind "client") like a pre-payment one,
+      // so it stays visible in the owner review and is protected by the
+      // issue flags instead of living only in an email attachment.
+      const storePostpayPhoto = async (visitId: string): Promise<void> => {
+        if (!photoB64) return;
+        try {
+          const bytes = Buffer.from(photoB64, "base64");
+          if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
+            const path = `visits/${visitId}/client-issue/${Date.now()}.jpg`;
+            if (await storagePut(path, bytes, "image/jpeg")) {
+              const inserted = await dbInsert("gh_photos", {
+                visit_id: visitId,
+                room: room || "Client photo",
+                storage_path: path,
+                kind: "client",
+                note: reason.slice(0, 300) || null,
+              });
+              await logEvent(visitId, payload.bid, "system",
+                inserted ? "client_photo_stored" : "client_photo_store_failed", {});
+            } else {
+              await logEvent(visitId, payload.bid, "system", "client_photo_store_failed", {});
+            }
+          }
+        } catch {
+          /* the emailed copy still reaches the owner */
+        }
+      };
       if (events.some((e) => e.event === "postpay_issue") || (!dbConfigured() && meta["gh_postpay_issue"] === "1")) {
-        res.status(200).json({ ...view(), already: true });
+        // MA-04: a second complaint after payment is a FOLLOW-UP, not a
+        // silent drop. Mirror the pre-payment follow-up branch below
+        // (issue_followup): journal the new words, store an attached
+        // photo with the visit, and notify the owner (and the client).
+        // The old code returned already:true here and the message never
+        // reached anyone.
+        let followupRecorded = false;
+        if (reason.trim() || photoB64) {
+          if (!dbConfigured()) {
+            followupRecorded = true;
+          } else {
+            const vrows = await dbSelect<{ id: string }>(
+              "gh_visits",
+              `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
+            );
+            const vid = vrows[0]?.id;
+            if (!vid) {
+              followupRecorded = true;
+            } else {
+              // Re-assert the row flags: an earlier attempt may have
+              // written the Stripe flag and the journal event but failed
+              // the flag update, and a follow-up must not leave the
+              // issue invisible in the owner queue / photo retention.
+              const flagged = await dbUpdateCount("gh_visits", `id=eq.${vid}`, { issue_open: true, issue_ever: true });
+              if (flagged !== 1) logErr("postpay_issue", `follow-up flag re-assert updated=${flagged}`);
+              followupRecorded = await logEventStrict(vid, payload.bid, "client", "issue_followup", {
+                reason: reason.slice(0, 200), room: room.slice(0, 60),
+              });
+              if (followupRecorded) await storePostpayPhoto(vid);
+            }
+          }
+          if (followupRecorded && RESEND_PP) {
+            const followupFirstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
+            try {
+              await fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${RESEND_PP}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                  to: [ownerNotificationEmail()],
+                  subject: `Follow-up on a post-payment issue — booking ${payload.bid}`,
+                  text:
+                    `A client added to a post-payment issue.\n\n` +
+                    `Booking: ${payload.bid}\nRoom: ${room}\nWhat they added: ${reason}\n` +
+                    (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) +
+                    `\nThe payment is complete — nothing was reversed automatically. ` +
+                    `Review and decide: offer a re-clean or a refund, and reply to the client.`,
+                  ...(photoB64
+                    ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
+                    : {}),
+                }),
+                signal: AbortSignal.timeout(15000),
+              });
+            } catch { /* the follow-up is recorded server-side regardless */ }
+            if (customer.email) {
+              try {
+                await fetch("https://api.resend.com/emails", {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${RESEND_PP}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+                    to: [customer.email],
+                    reply_to: "hello@gatehousehomecleaning.com",
+                    subject: "We added your note to your open issue",
+                    text:
+                      `Hi ${followupFirstName},\n\nThanks — we've added your note to your open issue. The payment is complete — nothing was reversed automatically. We'll review it right away and make it right (a re-clean or a refund) if the visit wasn't right.\n\nWe'll reply within one business day.\n\n` +
+                      (room ? `Room: ${room}\n` : "") +
+                      (reason ? `What you added: ${reason}\n\n` : "\n") +
+                      `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,
+                    ...(photoB64
+                      ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
+                      : {}),
+                  }),
+                  signal: AbortSignal.timeout(15000),
+                });
+              } catch { /* the follow-up is recorded server-side regardless */ }
+            }
+          }
+        }
+        res.status(200).json({ ...view(), already: true, ...(followupRecorded ? { followup_recorded: true } : {}) });
         return;
       }
       // C26: a post-payment complaint is timely under EITHER Terms
@@ -982,35 +1152,25 @@ export default async function handler(req: Req, res: Res) {
           await logEvent(vrows[0].id, payload.bid, "client", "postpay_issue", {
             room: room.slice(0, 60), reason: reason.slice(0, 200),
           });
-          if (photoB64) {
-            // H18: a post-payment photo is stored with the visit like a
-            // pre-payment one, so it stays visible in the owner review
-            // instead of living only in an email attachment.
-            try {
-              const bytes = Buffer.from(photoB64, "base64");
-              if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-                const path = `visits/${vrows[0].id}/client-issue/${Date.now()}.jpg`;
-                if (await storagePut(path, bytes, "image/jpeg")) {
-                  const inserted = await dbInsert("gh_photos", {
-                    visit_id: vrows[0].id,
-                    room: room || "Client photo",
-                    storage_path: path,
-                    kind: "client",
-                    note: reason.slice(0, 300) || null,
-                  });
-                  await logEvent(vrows[0].id, payload.bid, "system",
-                    inserted ? "client_photo_stored" : "client_photo_store_failed", {});
-                } else {
-                  await logEvent(vrows[0].id, payload.bid, "system", "client_photo_store_failed", {});
-                }
-              }
-            } catch {
-              /* the emailed copy still reaches the owner */
-            }
+          // MA-04/MA-05: the row flags are what the owner queue, the
+          // charge gates and both photo-retention filters read — the
+          // Stripe flag and the journal event alone leave the complaint
+          // invisible in triage and its photos unprotected. Same
+          // verified write as the pre-payment path: a failed flag
+          // update is a 502, never a silent 200 — the client retries
+          // and the retry lands in the follow-up branch above, which
+          // re-asserts the flags. (No gh_issue_open in Stripe
+          // metadata: the visit is paid, nothing is "paused" — the
+          // existing test pins this.)
+          const flagged = await dbUpdateCount("gh_visits", `id=eq.${vrows[0].id}`, { issue_open: true, issue_ever: true });
+          if (flagged !== 1) {
+            logErr("postpay_issue", `issue flags not set (updated=${flagged}) — complaint recorded in journal only`);
+            res.status(502).json({ requestId, ok: false, error: "db_error" });
+            return;
           }
+          await storePostpayPhoto(vrows[0].id);
         }
       }
-      const RESEND_PP = process.env["RESEND_API_KEY"];
       if (RESEND_PP) {
         try {
           await fetch("https://api.resend.com/emails", {
@@ -1178,7 +1338,13 @@ export default async function handler(req: Req, res: Res) {
         // Several cards on file, none confirmed for this booking: ask
         // the client to pick one — never charge a guessed card. No
         // failure is recorded: a card exists, the choice is missing.
-        res.status(409).json({ ...view(), error: "card_confirmation_required" });
+        // MB-07: the issue was already closed above for this
+        // resolve-and-pay and no charge was attempted — reopen it so
+        // the dispute stays visible while the client picks a card.
+        if (issueOpenNow && row) {
+          await reopenIssueAfterUnsettledCharge(payload.bid, "client_approve", { outcome: "blocked", error: "card_confirmation_required" });
+        }
+        res.status(409).json({ ...(await refreshAfterCharge()), error: "card_confirmation_required" });
         return;
       }
       const paymentMethod = cardChoice.pm;
@@ -1189,7 +1355,12 @@ export default async function handler(req: Req, res: Res) {
         meta["gh_state"] = "payment_failed";
         if (row) await logEvent(row.id, payload.bid, "system", "payment_failed", { reason: "no_payment_method" });
         await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, customer.id, payload.bid, row?.id ?? null);
-        res.status(402).json({ ...view(), error: "no_payment_method" });
+        // MB-07: no charge was attempted, so the dispute closed above
+        // for this resolve-and-pay must not stay closed.
+        if (issueOpenNow && row) {
+          await reopenIssueAfterUnsettledCharge(payload.bid, "client_approve", { outcome: "blocked", error: "no_payment_method" });
+        }
+        res.status(402).json({ ...(await refreshAfterCharge()), error: "no_payment_method" });
         return;
       }
       // Row-backed bookings charge through the single shared flow
@@ -1235,15 +1406,19 @@ export default async function handler(req: Req, res: Res) {
           return;
         }
         if (outcome.outcome === "blocked") {
-          res.status(409).json({ ...view(), error: outcome.error });
+          // MB-07: chargeVisit already reopened a resolved dispute on
+          // this unsettled outcome — rebuild the view from fresh
+          // row/journal so the client sees the reopened issue, not
+          // the pre-charge snapshot.
+          res.status(409).json({ ...(await refreshAfterCharge()), error: outcome.error });
           return;
         }
         if (outcome.outcome === "processing") {
-          res.status(409).json({ ...view(), error: "payment_processing" });
+          res.status(409).json({ ...(await refreshAfterCharge()), error: "payment_processing" });
           return;
         }
         if (outcome.outcome === "mismatch") {
-          res.status(409).json({ ...view(), error: "payment_intent_mismatch" });
+          res.status(409).json({ ...(await refreshAfterCharge()), error: "payment_intent_mismatch" });
           return;
         }
         if (outcome.outcome === "failed") {
@@ -1257,7 +1432,7 @@ export default async function handler(req: Req, res: Res) {
           // set it in Vercel for 3DS to work. Without it the client
           // shows a "contact us" message instead of a dead button.
           res.status(402).json({
-            ...view(),
+            ...(await refreshAfterCharge()),
             error: requiresAction ? "payment_requires_action" : "payment_failed",
             ...(requiresAction
               ? {
@@ -1282,7 +1457,7 @@ export default async function handler(req: Req, res: Res) {
           });
         }
         meta["gh_state"] = "payment_unknown";
-        res.status(502).json({ ...view(), error: outcome.error });
+        res.status(502).json({ ...(await refreshAfterCharge()), error: outcome.error });
         return;
       }
       // No visit row: no durable obligation exists, so no charge.
@@ -1372,19 +1547,33 @@ export default async function handler(req: Req, res: Res) {
       res.status(200).json({ ...view(), already: true, ...(followupRecorded ? { followup_recorded: true } : {}) });
       return;
     }
-    // C26 / Terms §7: the "Report an issue" button on the report page
-    // is the §7 mechanism — "within 24 hours after your photo report
-    // is sent". After that window the in-app issue is refused; a late
-    // complaint still has the email path (Terms §10.2: in writing to
-    // hello@), which the owner registers as a dispute. The current
-    // publication (row, else metadata) is the anchor, so a re-sent
-    // report restarts the window.
+    // C26 / Terms §7 + §10.2 (MB-13/DA-40): the "Report an issue"
+    // button is the §7 mechanism — "within 24 hours after your photo
+    // report is sent" — but §10.2 gives DAMAGE claims 48 hours from
+    // service completion, and this endpoint cannot tell a missed-item
+    // report from a damage claim (same button, same fields). So a
+    // pre-payment complaint is timely under EITHER window, mirroring
+    // the post-payment branch below: only a complaint outside BOTH is
+    // refused. The window it arrived under is journaled so the owner
+    // sees a 24–48h claim for what it is. The current publication
+    // (row, else metadata) is the anchor, so a re-sent report
+    // restarts the 24h window.
     const issueSentAt = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
     const issueWindowEnds = reportIssueWindowEnds(issueSentAt);
-    if (issueWindowEnds !== null && Date.now() > issueWindowEnds) {
+    const issueDamageEnds = damageClaimWindowEnds(row, issueSentAt);
+    const issueTimely =
+      (issueWindowEnds !== null && Date.now() <= issueWindowEnds) ||
+      (issueDamageEnds !== null && Date.now() <= issueDamageEnds);
+    const issueEnforceable = issueWindowEnds !== null || issueDamageEnds !== null;
+    // True only when the 24h report window has already closed and the
+    // complaint is saved by the 48h damage window.
+    const viaDamageWindow =
+      issueTimely && issueWindowEnds !== null && Date.now() > issueWindowEnds;
+    if (issueEnforceable && !issueTimely) {
       res.status(409).json({
         requestId, ok: false, error: "issue_window_expired",
-        report_window_ends: new Date(issueWindowEnds).toISOString(),
+        report_window_ends: issueWindowEnds !== null ? new Date(issueWindowEnds).toISOString() : null,
+        damage_window_ends: issueDamageEnds !== null ? new Date(issueDamageEnds).toISOString() : null,
       });
       return;
     }
@@ -1402,6 +1591,7 @@ export default async function handler(req: Req, res: Res) {
     if (row) {
       const journaled = await logEventStrict(row.id, payload.bid, "client", "issue_opened", {
         reason: reason.slice(0, 200), room: room.slice(0, 60),
+        window: viaDamageWindow ? "damage" : "report",
       });
       const flagged = journaled
         ? await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true })

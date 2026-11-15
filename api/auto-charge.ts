@@ -33,6 +33,8 @@ import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe
 import { loadAccess } from "./_visit_access.js";
 import { cleanupOrphanPhotos } from "./_storage-cleanup.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
+import { listCustomerCards } from "./card-status.js";
+import { PHOTO_RETENTION_MS } from "./_photo_policy.js";
 
 // Booking-scoped pass: the metadata search only sees the booking the
 // shared customer is currently bound to. A report sent for another
@@ -146,6 +148,38 @@ async function findCustomerByEmail(
     ? { id: picked.id, metadata: picked.metadata ?? {}, email: picked.email, name: picked.name }
     : null;
 }
+/** MB-03 / DA-08: the gh_state hydration rule, pure for tests. The
+ * order is deliberate: paid/refunded/cancelled/issue first (terminal
+ * or blocking), then approval — but an approval counts ONLY when no
+ * failed charge is newer than it. The old code mapped any approval
+ * to "approved", so the next cron run rehydrated a payment_failed
+ * visit as approved: the failure vanished from every surface while
+ * selectDue (report_sent only) never retried it. A failure newer
+ * than the approval keeps gh_state=payment_failed — visible as a
+ * failure, recoverable by an explicit re-approve or owner charge.
+ * A failure with NO approval does not change anything here (the old
+ * report_sent mapping stands — the timer retrying a failed timer
+ * charge is pre-existing behaviour, out of scope for this fix). */
+export function hydratedGhState(input: {
+  rowStatus: string | null;
+  cancelled: boolean;
+  issueOpen: boolean;
+  approvedAt: string | null;
+  failedAt: string | null;
+  reportSentAt: string | null;
+  fallbackState: string;
+}): string {
+  if (input.rowStatus === "paid") return "paid";
+  if (input.rowStatus === "refunded") return "refunded";
+  if (input.cancelled) return "cancelled";
+  if (input.issueOpen) return "issue_open";
+  if (input.approvedAt) {
+    if (input.failedAt && input.failedAt > input.approvedAt) return "payment_failed";
+    return "approved";
+  }
+  if (input.reportSentAt) return "report_sent";
+  return input.fallbackState;
+}
 async function hydrateCustomerMeta(
   secretKey: string,
   customer: { id: string; metadata: Record<string, string> },
@@ -163,6 +197,15 @@ async function hydrateCustomerMeta(
   const issueEver = row.issue_ever === true || Boolean(opened);
   const cancelledEv = latestEvent(events, "visit_cancelled");
   const approvedEv = latestEvent(events, "report_approved");
+  // MB-03: the newest failed charge (terminal failure, or an unknown
+  // outcome logged by the approve path) — compared against the
+  // approval time by hydratedGhState below.
+  const failedEv = latestEvent(events, "payment_failed");
+  const unknownEv = latestEvent(events, "payment_unknown");
+  const failedTimes = [failedEv?.created_at, unknownEv?.created_at]
+    .filter((t): t is string => typeof t === "string" && t !== "")
+    .sort();
+  const failedAt = failedTimes.length > 0 ? failedTimes[failedTimes.length - 1] : null;
   // G3: the reminder flags hydrate ONLY from a reminder that belongs
   // to the current publication (latestCurrentEvent). Without this,
   // hydration rebuilt the flags from the OLD publication's reminder
@@ -173,16 +216,15 @@ async function hydrateCustomerMeta(
   const remindedEv = latestCurrentEvent(events, ["reminder_sent"]);
   const earlyRemindedEv = latestCurrentEvent(events, ["early_reminder_sent"]);
   const cardEmailEv = latestEvent(events, "card_saved_email");
-  const state = row.status === "paid" ? "paid"
-    // Fix round 2: a refunded visit is its own state — it must never
-    // fall through to "report_sent" (which would make selectDue
-    // consider it for auto-charge).
-    : row.status === "refunded" ? "refunded"
-    : cancelledEv ? "cancelled"
-    : issueOpen ? "issue_open"
-    : approvedEv ? "approved"
-    : row.report_sent_at ? "report_sent"
-    : customer.metadata["gh_state"] ?? "";
+  const state = hydratedGhState({
+    rowStatus: row.status,
+    cancelled: Boolean(cancelledEv),
+    issueOpen,
+    approvedAt: approvedEv?.created_at ?? null,
+    failedAt,
+    reportSentAt: row.report_sent_at,
+    fallbackState: customer.metadata["gh_state"] ?? "",
+  });
   const values: Record<string, string> = {
     gh_booking_id: row.booking_id,
     gh_state: state,
@@ -400,12 +442,17 @@ async function reconcileCard(
 ): Promise<string> {
   const existing = customer.metadata["gh_payment_method"] ?? "";
   if (existing) return existing;
-  const res = await stripeGet(
-    secretKey,
-    `/customers/${encodeURIComponent(customer.id)}/payment_methods?${new URLSearchParams({ type: "card", limit: "10" })}`,
-  );
-  if (!res.ok) return "";
-  const list = (res.data["data"] as Array<{ id: string }> | undefined) ?? [];
+  // LB-06 / DA-20: the card list is paged (10x100) in
+  // api/card-status.ts — reuse it instead of one page of 10, so a
+  // client with more than 10 cards never loses their booking's card
+  // from the list. A Stripe outage fails closed ("") — selection
+  // skips the booking, as before.
+  let list: Array<{ id: string }>;
+  try {
+    list = await listCustomerCards(secretKey, customer.id);
+  } catch {
+    return "";
+  }
   const picked = pickCard(list);
   if (picked.status !== "ok") return "";
   const pm = picked.pm;
@@ -967,7 +1014,8 @@ export default async function handler(req: Req, res: Res) {
     let retentionFailed = 0;
     try {
       if (dbConfigured()) {
-        const cutoff = new Date(now - 90 * 24 * 3600 * 1000).toISOString();
+        // LB-43: the 90-day retention lives in api/_photo_policy.ts.
+        const cutoff = new Date(now - PHOTO_RETENTION_MS).toISOString();
         // DA-04: only PAID visits — exactly like the second pass below
         // ("unpaid ones keep their evidence"). A refunded or cancelled
         // visit keeps its photos: a dispute after a refund, a
@@ -979,27 +1027,57 @@ export default async function handler(req: Req, res: Res) {
         ];
         const seen = new Set<string>();
         for (const match of batches) {
-          const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; gh_visits?: { booking_id?: string; issue_open?: boolean | null; issue_ever?: boolean | null; status?: string } }>(
-            "gh_photos", `select=id,visit_id,storage_path,gh_visits!inner(booking_id,report_sent_at,issue_open,issue_ever,status)&${match}&order=created_at.asc&limit=200`,
-          );
-          for (const photo of photos) {
-            if (seen.has(photo.id)) continue;
-            seen.add(photo.id);
-            // Task 4 (12.11.2026): a disputed visit's photos are
-            // evidence for the complaint / a later chargeback — never
-            // delete them by age while the issue is open or ever
-            // existed. The 90-day retention (Privacy policy) applies
-            // to clean visits only.
-            if (photo.gh_visits?.issue_open === true || photo.gh_visits?.issue_ever === true) continue;
-            // DA-04 defence in depth: the query already restricts to
-            // paid, but a photo whose embedded visit is not paid (or
-            // is missing) must never be deleted by this pass, whatever
-            // the query returned.
-            if (photo.gh_visits?.status !== "paid") continue;
-            if (!await storageRemove(photo.storage_path)) { retentionFailed++; continue; }
-            if (!await dbDelete("gh_photos", `id=eq.${photo.id}`)) { retentionFailed++; continue; }
-            retentionDeleted++;
-            await logEvent(photo.visit_id, photo.gh_visits?.booking_id ?? null, "system", "photos_retention_deleted", { count: 1 });
+          // LB-44: paginate by created_at cursor instead of one fixed
+          // page of 200 — with >200 old paid photos the rest waited
+          // for the next run (self-healing, but unbounded delay).
+          // At most 10 pages per batch, so one run stays bounded;
+          // the next run resumes from the start. Rows sharing the
+          // cursor timestamp are skipped by `gt` on this run only —
+          // the next run re-scans from the start and picks them up.
+          let cursor = "";
+          for (let page = 0; page < 10; page++) {
+            const photos = await dbSelect<{ id: string; visit_id: string; storage_path: string; created_at: string; gh_visits?: { booking_id?: string; issue_open?: boolean | null; issue_ever?: boolean | null; status?: string } }>(
+              "gh_photos", `select=id,visit_id,storage_path,created_at,gh_visits!inner(booking_id,report_sent_at,issue_open,issue_ever,status)&${match}&order=created_at.asc&limit=200${cursor ? `&created_at=gt.${encodeURIComponent(cursor)}` : ""}`,
+            );
+            if (photos.length === 0) break;
+            for (const photo of photos) {
+              if (seen.has(photo.id)) continue;
+              seen.add(photo.id);
+              // Task 4 (12.11.2026): a disputed visit's photos are
+              // evidence for the complaint / a later chargeback — never
+              // delete them by age while the issue is open or ever
+              // existed. The 90-day retention (Privacy policy) applies
+              // to clean visits only.
+              if (photo.gh_visits?.issue_open === true || photo.gh_visits?.issue_ever === true) continue;
+              // DA-04 defence in depth: the query already restricts to
+              // paid, but a photo whose embedded visit is not paid (or
+              // is missing) must never be deleted by this pass, whatever
+              // the query returned.
+              if (photo.gh_visits?.status !== "paid") continue;
+              if (!await storageRemove(photo.storage_path)) { retentionFailed++; continue; }
+              // LB-45: the bytes are already gone — the DB row MUST
+              // follow, or it points at nothing (the report shows an
+              // "unavailable" tile). Retry the delete, then log loudly
+              // with the storage path so the row can be cleaned up by
+              // hand instead of failing silently.
+              let rowGone = false;
+              for (let attempt = 0; attempt < 3 && !rowGone; attempt++) {
+                if (attempt > 0) await new Promise((r) => setTimeout(r, 200 * attempt));
+                rowGone = await dbDelete("gh_photos", `id=eq.${photo.id}`);
+              }
+              if (!rowGone) {
+                retentionFailed++;
+                // logErr stringifies its second argument — pass a
+                // plain string, or the storage path (the whole point
+                // of this log) would arrive as "[object Object]".
+                logErr("retention_db_delete_failed", `photo ${photo.id} visit ${photo.visit_id} storage_path ${photo.storage_path} — bytes deleted, DB row remains; delete the gh_photos row by hand`);
+                continue;
+              }
+              retentionDeleted++;
+              await logEvent(photo.visit_id, photo.gh_visits?.booking_id ?? null, "system", "photos_retention_deleted", { count: 1 });
+            }
+            if (photos.length < 200) break;
+            cursor = photos[photos.length - 1].created_at;
           }
         }
       }
@@ -1049,12 +1127,16 @@ export default async function handler(req: Req, res: Res) {
     let receipts = 0;
     try {
       if (dbConfigured()) {
+        // LB-10: rows with paid_at null used to sort last forever
+        // (nullslast) behind a steady flow of dated rows — nulls
+        // first, so a paid visit whose paid_at was never written
+        // still gets its receipt instead of starving.
         const paidRows = await dbSelect<{
           id: string; booking_id: string; amount_cents: number | null; receipt_email_id: string | null;
           client_email: string | null; paid_at: string | null;
         }>(
           "gh_visits",
-          `status=eq.paid&or=(receipt_email_id.is.null,receipt_email_id.like.claim:*)&order=paid_at.asc.nullslast&limit=50`,
+          `status=eq.paid&or=(receipt_email_id.is.null,receipt_email_id.like.claim:*)&order=paid_at.asc.nullsfirst&limit=50`,
         );
         for (const prow of paidRows) {
           if (!prow.booking_id) continue;
@@ -1097,7 +1179,8 @@ export default async function handler(req: Req, res: Res) {
         if (m["gh_issue_open"] === "1" || m["gh_issue_ever"] === "1") continue;
         const sentMs = Date.parse(m["gh_report_sent_at"] ?? "");
         if (!Number.isFinite(sentMs)) continue;
-        if (sentMs + 90 * 24 * 3600 * 1000 > now) continue;
+        // LB-43: the 90-day retention lives in api/_photo_policy.ts.
+        if (sentMs + PHOTO_RETENTION_MS > now) continue;
         await stripePost(STRIPE_SECRET_KEY, `/customers/${c.id}`, {
           "metadata[gh_rp_0]": "",
           "metadata[gh_rp_1]": "",

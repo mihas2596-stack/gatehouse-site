@@ -69,7 +69,10 @@ describe("H3: send_report tracking failure is shown as recoverable, not failed",
     fireEvent.click(screen.getAllByRole("button", { name: /Casey Client/ })[0]);
     fireEvent.click(await screen.findByRole("button", { name: "Publish & notify customer" }));
     await waitFor(() => {
-      expect(screen.getByRole("status")).toHaveTextContent(/report_email_failed/);
+      // LB-20: server codes are never shown raw — the panel maps them
+      // to plain language, so the failure reads as a human error.
+      expect(screen.getByRole("status")).toHaveTextContent(/Something went wrong — try again/);
     });
+    expect(screen.getByRole("status")).not.toHaveTextContent(/report_email_failed/);
   });
 });
