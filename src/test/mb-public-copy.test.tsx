@@ -17,7 +17,7 @@ import { buildWorkRooms } from "../../api/_work_scope";
 
 // Pinned past the global test-price window so regular-price assertions
 // stay deterministic (same pin as quote-steps.test.tsx).
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-19T00:00:00Z"));
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-21T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/measurement", () => ({ campaignAttribution: () => ({}), trackFunnel: () => true }));

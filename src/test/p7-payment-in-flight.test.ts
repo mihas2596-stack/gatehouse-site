@@ -69,7 +69,7 @@ describe("P7: waive / return_report refuse while a charge is in flight", () => {
     ({ event, detail, created_at });
 
   beforeEach(() => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-19T00:00:00Z"));
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-21T00:00:00Z"));
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_x");
     vi.stubEnv("ADMIN_TOKEN", TOKEN);
     vi.stubEnv("RESEND_API_KEY", "re_test");

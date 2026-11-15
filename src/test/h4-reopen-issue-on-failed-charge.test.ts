@@ -11,7 +11,7 @@ import { chargeVisit } from "../../api/_payment_obligation";
 
 const BID = "bid-h4";
 const VISIT_ID = "66666666-7777-8888-9999-000000000000";
-const NOW = Date.parse("2026-11-19T00:00:00Z");
+const NOW = Date.parse("2026-11-21T00:00:00Z");
 
 type Row = Record<string, unknown>;
 type Ev = { event: string; detail: Record<string, unknown> | null; created_at: string };

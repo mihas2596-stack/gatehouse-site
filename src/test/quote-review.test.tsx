@@ -4,10 +4,10 @@ import { MemoryRouter } from "react-router-dom";
 import Quote from "@/pages/Quote";
 
 // Owner order 2026-10-24 runs a GLOBAL test-price window (until
-// 2026-11-18T20:59:59Z after the extensions, most recently 2026-11-12 by 5 days). Pin the clock
+// 2026-11-20T20:59:59Z after the extensions, most recently 2026-11-15 to Friday). Pin the clock
 // past the window so these regular-price assertions stay deterministic;
 // token test mode has its own cases below.
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-19T00:00:00Z"));
+vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-21T00:00:00Z"));
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 afterEach(cleanup);
