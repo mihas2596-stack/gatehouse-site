@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { campaignAttribution, trackFunnel } from "@/lib/measurement";
-import { Home, Search, Package } from "lucide-react";
+import { Check, Home, Search, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   calcPrice,
   globalTestCutActive,
   priceBreakdown,
   scaleTestPrice,
+  testCapApplied,
   tierFor,
   ADDONS,
   ADDONS_INCLUDED_IN,
@@ -214,6 +215,23 @@ const Quote = () => {
         : null,
     [service, bedrooms, fullBaths, addons, testMode]
   );
+
+  // Test-price cap notice (ChatGPT audit #1): true when the $1.50 test
+  // cap actually lowered a total. The raw totals are recomputed with the
+  // test scale off, so the notice appears only when the cap changed the
+  // number the client sees — never on ordinary prices.
+  const capApplied = useMemo(() => {
+    if (!testMode) return false;
+    if (service === "standard") {
+      const raw = priceBreakdown({ bedrooms, fullBaths, frequency, addons, testScale: false });
+      return raw !== null && (testCapApplied(raw.first_total) || testCapApplied(raw.recurring_total));
+    }
+    if (service === "deep" || service === "moveinout") {
+      const raw = calcPrice({ bedrooms, fullBaths, service, frequency: "onetime", addons, testScale: false });
+      return raw !== null && testCapApplied(raw);
+    }
+    return false;
+  }, [testMode, service, bedrooms, fullBaths, frequency, addons]);
 
   // The headline first-visit price used for the booking request.
   const mainPrice = service === "standard" ? breakdown?.first_total ?? null : oneTimeTotal;
@@ -442,6 +460,18 @@ const Quote = () => {
     : isRecurring && breakdown && breakdown.first_total === breakdown.recurring_total
       ? `${fmt$(breakdown.first_total)} per visit`
       : priceSummaryText;
+  // Brief total under the ZIP (V5): the amount together with the current
+  // frequency, from the same breakdown as the totals below. First and
+  // recurring are both named when they differ.
+  const zipPriceSummary = service === "standard" && breakdown
+    ? isRecurring
+      ? breakdown.first_total === breakdown.recurring_total
+        ? `${fmt$(breakdown.first_total)} per visit, every other week`
+        : `First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+      : `One-time: ${fmt$(breakdown.first_total)}`
+    : oneTimeTotal !== null
+      ? `${fmt$(oneTimeTotal)} one-time`
+      : "";
   const canSubmit = canProceed && !isSubmitting;
   // Full address for the booking: street, unit, city, state, ZIP.
   const fullAddress = useMemo(() => {
@@ -699,6 +729,12 @@ const Quote = () => {
     interiorWindows > 0 ? `${interiorWindows} interior windows +${fmt$(dispPrice(interiorWindows * ADDONS.interiorWindow.price))} ${addonNote}` : "",
     pets ? `Pets +${fmt$(dispPrice(ADDONS.pets.price))} ${addonNote}` : "",
   ].filter(Boolean).join(", ");
+  // Shown next to every total the test cap actually lowered (steps 1–3).
+  const capNote = capApplied ? (
+    <p className="mt-2 text-sm font-medium text-amber-900">
+      Test price cap applied. Selected extras are included in the total shown.
+    </p>
+  ) : null;
 
   return (
     <div className="page-shell readable-flow">
@@ -782,6 +818,17 @@ const Quote = () => {
                     </span>
                   )}
                 </p>
+                {showPrice && (
+                  <p className="mt-2 text-sm font-semibold text-foreground" aria-live="polite">
+                    {`${zipPriceSummary} · $0 due today`}
+                  </p>
+                )}
+                {zipInArea && isLargeHome && (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Custom quote for larger homes —{" "}
+                    <a href="mailto:hello@gatehousehomecleaning.com" className="underline">email us</a> for a price.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -852,16 +899,22 @@ const Quote = () => {
                         role="radio"
                         aria-checked={frequency === f.key}
                         onClick={() => setFrequency(f.key)}
-                        className={`px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
+                        className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 min-h-[44px] font-semibold transition-all text-left ${
                           frequency === f.key
                             ? "border-primary bg-peach/40 text-foreground"
                             : "border-border bg-background text-muted-foreground hover:border-primary/40"
                         }`}
                       >
+                        {frequency === f.key && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
                         {f.label}
                       </button>
                     ))}
                   </div>
+                  {isRecurring && (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Regular upkeep, arranged with you every other week. We confirm each visit’s date, arrival window and cleaner.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -975,6 +1028,7 @@ const Quote = () => {
                   ) : null}
                 </>
               )}
+              {capNote}
 
               {showPrice && <p className="mt-4 border-t border-border pt-3 text-[1.125rem] font-bold text-sage-foreground sm:text-[1.25rem]">Due today: $0</p>}
               {showPrice && (
@@ -1027,6 +1081,7 @@ const Quote = () => {
                     <dt className="text-muted-foreground">Cleaning price</dt>
                     <dd className="text-[1.25rem] font-semibold leading-tight">{reviewPrice}</dd>
                     <dd className="mt-1">{`${SERVICE_LABEL_CALC[service]} · ${service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}`}</dd>
+                    {capNote}
                   </div>
                   <div className="border-t border-border pt-3 sm:col-span-2">
                     <dt className="text-muted-foreground">Requested date</dt>
@@ -1220,6 +1275,7 @@ const Quote = () => {
               </div>
               <h3 className="font-heading text-base font-bold mb-2">Your private photo report</h3>
               <p className="text-sm text-foreground mb-3">See the results after cleaning. Photos are never published without your separate written permission.</p>
+              <p className="text-sm text-foreground mb-3">You can mark rooms to skip in photos on your visit page before the visit.</p>
               <div className="flex items-start gap-3">
                 <input
                   id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
@@ -1245,8 +1301,10 @@ const Quote = () => {
                 ) : (
                   <p className="mt-1">{priceSummaryText}</p>
                 )}
+                {capNote}
                 <p className="mt-1"><strong>Due today: $0</strong></p>
               </div>
+              <p className="mt-2 text-sm text-muted-foreground">Your date is a request. We’ll email you to confirm your date, arrival window, and who’s coming.</p>
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
@@ -1274,10 +1332,6 @@ const Quote = () => {
               </div>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
               <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
-              <div className="mt-5 rounded-xl border border-border bg-sage/10 p-4 sm:p-5">
-                <p className="text-[1.25rem] font-bold leading-snug text-sage-foreground sm:text-[1.375rem]">$0 charged today.</p>
-                <p className="mt-2 text-[1.125rem] leading-relaxed text-foreground sm:text-[1.25rem]">We&rsquo;ll send a private photo report after your cleaning. You can approve it to pay. If you haven&rsquo;t approved or reported an issue, we&rsquo;ll charge your card automatically 24 hours after we send the report.</p>
-              </div>
               <div className="mt-5">
                 <Button variant="hero" size="xl" type="submit" disabled={!canSubmit} className="h-auto min-h-[48px] w-full whitespace-normal py-3">
                   {isSubmitting

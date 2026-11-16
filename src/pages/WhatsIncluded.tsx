@@ -50,9 +50,17 @@ const WhatsIncluded = () => {
         <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-3">
           What's Included in a Standard Visit
         </h1>
-        <p className="text-foreground text-lg">
+        <p className="text-foreground text-lg md:hidden">
+          Everything below is included in a standard visit. Add-ons are listed separately.
+        </p>
+        <p className="hidden text-foreground text-lg md:block">
           Everything in the room lists below is included in a standard visit. Add-ons are listed separately with their prices. Deep and move-in/out cleans already include oven, fridge and cabinet interiors; these are not charged twice.
         </p>
+        <div className="mt-6 hidden md:block">
+          <Button variant="hero" size="lg" asChild>
+            <Link to="/quote" data-main-cta>See My Price</Link>
+          </Button>
+        </div>
       </div>
     </section>
 
@@ -141,6 +149,9 @@ const WhatsIncluded = () => {
                 </li>
               ))}
             </ul>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Oven, fridge and cabinet interiors are already included in deep and move-in/out cleans — never charged twice.
+            </p>
           </div>
           <div id="not-included" className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
             <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">Not included</h2>

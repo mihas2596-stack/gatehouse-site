@@ -6,6 +6,7 @@ import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { formatDateLong, formatArrivalWindow } from "@/lib/utils";
 import { trackFunnel } from "@/lib/measurement";
+import { resolveLinkToken } from "@/lib/tokenStrip";
 
 type SavedCardOption = { id: string; brand: string; last4: string; exp_month?: number; exp_year?: number };
 type BookingSummary = {
@@ -25,7 +26,9 @@ const fmtMoney = (v?: string): string => {
 
 export default function SaveCard() {
   const [params] = useSearchParams();
-  const bt = params.get("bt") ?? "";
+  // One-time link token: resolved from the URL once, then stripped from
+  // the address bar so it never reaches analytics (see tokenStrip.ts).
+  const [bt] = useState<string>(() => resolveLinkToken("bt", "gh_visit_bt", params.toString()));
   const sessionId = params.get("session_id") ?? "";
   const returning = params.get("saved") === "1";
   const [status, setStatus] = useState<Status>(bt || returning ? "loading" : "ready");

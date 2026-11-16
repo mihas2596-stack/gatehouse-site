@@ -55,7 +55,7 @@ const Index = () => {
         "@id": "https://www.gatehousehomecleaning.com/#business",
         name: "Gatehouse Home Cleaning",
         url: "https://www.gatehousehomecleaning.com/",
-        image: "https://gatehousehomecleaning.com/og-image.png",
+        image: "https://www.gatehousehomecleaning.com/og-image.png",
         email: "hello@gatehousehomecleaning.com",
         areaServed: cities.map((name) => ({
           "@type": "City",
@@ -81,6 +81,7 @@ const Index = () => {
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
             <p className="mt-3 text-base text-muted-foreground">No email or card needed to see your price.</p>
+            <a href="#sample-report" className="mt-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">See a sample photo report</a>
           </div>
           <figure>
             <img

@@ -20,7 +20,7 @@ const SEO = ({
   ogDescription,
   twitterDescription,
   metaDescription,
-  image = "https://gatehousehomecleaning.com/og-image.png",
+  image = "https://www.gatehousehomecleaning.com/og-image.png",
   noindex = false,
 }: SEOProps) => {
   const finalOgTitle = ogTitle ?? title;
@@ -30,7 +30,7 @@ const SEO = ({
       <title>{title}</title>
       <meta name="description" content={metaDescription ?? description} />
       {canonical && <link rel="canonical" href={canonical} />}
-      <meta name="robots" content={noindex ? "noindex, follow" : "index, follow"} />
+      <meta name="robots" content={noindex ? "noindex, nofollow" : "index, follow"} />
       <meta property="og:title" content={finalOgTitle} />
       <meta property="og:description" content={ogDescription ?? description} />
       {canonical && <meta property="og:url" content={canonical} />}

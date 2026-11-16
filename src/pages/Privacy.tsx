@@ -27,12 +27,12 @@ const Privacy = () => {
           <li>
             Visit our website at{" "}
             <a
-              href="https://gatehousehomecleaning.com"
+              href="https://www.gatehousehomecleaning.com"
               className="text-primary underline"
               target="_blank"
               rel="noopener noreferrer"
             >
-              https://gatehousehomecleaning.com
+              https://www.gatehousehomecleaning.com
             </a>{" "}
             or any website of ours that links to this Privacy Notice.
           </li>
@@ -141,7 +141,7 @@ const Privacy = () => {
           3. WHEN AND WITH WHOM DO WE SHARE YOUR PERSONAL INFORMATION?
         </h2>
         <p className="mb-8">
-          We may share your data with third-party vendors, service providers, contractors, or agents who perform services for us. We may also share or transfer your information in connection with any merger, sale of company assets, financing, or acquisition of all or a portion of our business.
+          We may share your data with the vendors who run our Services: Stripe (payment processing), Supabase (booking and photo storage), Resend (email), and Google (analytics through Google Tag Manager and the map on our Contact page). We may also share or transfer your information in connection with any merger, sale of company assets, financing, or acquisition of all or a portion of our business.
         </p>
 
         <h2 id="privacy-4" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">
@@ -149,6 +149,9 @@ const Privacy = () => {
         </h2>
         <p className="mb-4">
           We may use cookies and similar tracking technologies to gather information when you interact with our Services. We also permit third parties to use online tracking technologies on our Services for analytics purposes.
+        </p>
+        <p className="mb-4">
+          <strong>Google Maps:</strong> The map on our Contact page loads from Google Maps. When you view that page, Google may receive your IP address and browser information, just as it would if you visited Google Maps directly.
         </p>
         <p className="mb-8">
           <strong>Google Analytics:</strong> We share your information with Google Analytics to track and analyze the use of the Services. To opt out, visit{" "}
@@ -225,7 +228,7 @@ const Privacy = () => {
           <li>I. Professional or employment-related information — NO</li>
           <li>J. Education information — NO</li>
           <li>K. Inferences drawn from personal information — NO</li>
-          <li>L. Sensitive personal information — NO</li>
+          <li>L. Sensitive personal information — YES (limited to your visit: photos of your cleaned rooms, kept 90 days — see section 15 — and entry codes, see section 17)</li>
         </ul>
         <p className="mb-4">
           To exercise your rights, email us at{" "}

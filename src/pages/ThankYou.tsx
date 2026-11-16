@@ -4,6 +4,7 @@ import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
+import { resolveLinkToken } from "@/lib/tokenStrip";
 
 type Plan = {
   service?: string;
@@ -69,16 +70,12 @@ const ThankYou = () => {
 
   // The booking token comes from the submit navigation, an explicit ?bt=
   // link, or this tab's session (so a refresh or a reopened tab still
-  // shows the true status instead of a generic page).
+  // shows the true status instead of a generic page). A token from the
+  // URL is stripped from the address bar so it never reaches analytics
+  // (see tokenStrip.ts).
   const [bt] = useState<string>(() => {
     if (submission.bt) return submission.bt;
-    const fromUrl = searchParams.get("bt");
-    if (fromUrl) return fromUrl;
-    try {
-      return sessionStorage.getItem("gh_last_bt") ?? "";
-    } catch {
-      return "";
-    }
+    return resolveLinkToken("bt", "gh_last_bt", searchParams.toString());
   });
   useEffect(() => {
     if (submission.bt) {

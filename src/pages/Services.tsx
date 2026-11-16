@@ -81,7 +81,7 @@ const Services = () => {
             <article key={service.title} className="rounded-2xl border border-border bg-card p-6 shadow-warm flex flex-col">
               <h2 className="font-heading text-2xl font-bold mb-3">{service.title}</h2>
               <p className="mb-4">{service.desc}</p>
-              <p className="font-semibold mb-4">From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit — your exact price depends on bedrooms and bathrooms.</p>
+              <p className="font-semibold mb-4">{testPricing && (<span className="mr-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-900">Test price</span>)}From {fmtPrice(disp([PRICES.standardOnetime.S, PRICES.recurring.S, PRICES.deep.S, PRICES.moveinout.S][index]))} per visit — your exact price depends on bedrooms and bathrooms.</p>
               <Button asChild variant="hero" size="lg" className="mt-auto"><Link to={service.link} data-main-cta>See your price</Link></Button>
             </article>
           ))}

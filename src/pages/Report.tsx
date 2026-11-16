@@ -7,6 +7,7 @@ import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
 import { IssueForm } from "@/components/IssueForm";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { fmtDateUS } from "@/lib/formatDate";
+import { resolveLinkToken } from "@/lib/tokenStrip";
 
 type ReportStateName =
   | "invalid_link"
@@ -99,7 +100,9 @@ const fmtDeadline = (iso: string): string => {
 
 const Report = () => {
   const [searchParams] = useSearchParams();
-  const bt = searchParams.get("bt") ?? "";
+  // One-time link token: resolved from the URL once, then stripped from
+  // the address bar so it never reaches analytics (see tokenStrip.ts).
+  const [bt] = useState<string>(() => resolveLinkToken("bt", "gh_visit_bt", searchParams.toString()));
 
   const [data, setData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);

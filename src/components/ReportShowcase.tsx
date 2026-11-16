@@ -46,7 +46,7 @@ function RoomCard({ name, photo, checks }: { name: string; photo?: { src: string
           <p className="text-base font-semibold text-sage-foreground">{name}</p>
           {photo ? (
             <figure className="mt-2">
-              <img src={photo.src} alt={photo.alt} loading="lazy" className="h-40 w-full rounded-lg object-cover" />
+              <img src={photo.src} alt={photo.alt} loading="lazy" className="h-40 w-full rounded-lg object-cover object-[center_30%]" />
               <figcaption className="mt-1 text-xs text-muted-foreground">{photo.caption}</figcaption>
             </figure>
           ) : (
@@ -108,19 +108,7 @@ const ReportShowcase = () => {
             </div>
             <p className="mt-3 text-sm text-muted-foreground">In a real report, every item is marked ✓ Done or ○ Not done, with a note for anything not done.</p>
 
-            {!expanded ? (
-              <Button
-                variant="outline"
-                size="lg"
-                className="mt-4 w-full rounded-full"
-                onClick={() => setExpanded(true)}
-                aria-expanded="false"
-              >
-                Show all rooms <ChevronDown className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            ) : (
-              <>
-                {state === "idle" && (
+            {state === "idle" && (
                   <div className="pt-4">
                     <p className="mb-3 text-center text-sm font-medium text-muted-foreground">
                       Try the demo actions below — they send nothing.
@@ -178,7 +166,16 @@ const ReportShowcase = () => {
                     </button>
                   </div>
                 )}
-              </>
+            {!expanded && (
+              <Button
+                variant="outline"
+                size="lg"
+                className="mt-4 w-full rounded-full"
+                onClick={() => setExpanded(true)}
+                aria-expanded="false"
+              >
+                Show all rooms <ChevronDown className="h-4 w-4" aria-hidden="true" />
+              </Button>
             )}
           </div>
           <p className="mt-2 text-center text-sm text-muted-foreground">

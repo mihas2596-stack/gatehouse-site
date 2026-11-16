@@ -4,6 +4,7 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
       <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-6">
         <h2 id="quote-payment-heading" className="font-heading text-3xl font-bold text-sage-foreground max-md:[&&]:!text-3xl md:text-4xl">When you pay</h2>
         <div className="mt-4 rounded-lg bg-sage/15 p-4 sm:p-5">
+          <p className="text-sm font-bold uppercase tracking-wide text-muted-foreground">At booking</p>
           <p className="text-2xl font-bold text-sage-foreground">$0 charged today</p>
           <p className="mt-2 text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
             Save your card with Stripe for this visit. Only Stripe handles your full card number.
@@ -11,14 +12,14 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
         </div>
         <dl className="mt-5 divide-y divide-border text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
           <div className="pb-4">
-            <dt className="font-bold">Review your cleaning first</dt>
+            <dt className="font-bold">After cleaning</dt>
             <dd className="mt-1">
               We’ll send you a photo report after cleaning. Select <strong>Approve &amp; pay</strong> to pay.
               If you don’t approve or report an issue, we’ll charge your card automatically <strong>24 hours after we send the report</strong>.
             </dd>
           </div>
           <div className="pt-4">
-            <dt className="font-bold">Something missed?</dt>
+            <dt className="font-bold">If something was missed</dt>
             <dd className="mt-1">
               Select <strong>Report an issue</strong> within those 24 hours to stop automatic payment for this visit.
               Once we resolve the issue, you choose when to approve and pay.

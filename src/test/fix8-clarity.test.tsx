@@ -67,10 +67,14 @@ describe("fix8 — clarity: tier wording", () => {
     expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
-  it("sample photo report opens from its toggle after When you pay, not from the hero", () => {
+  it("hero links to the sample report; the sample itself opens from its toggle after When you pay", () => {
     renderPage(<Index />);
-    // No sample link in the hero any more (16.11 item 1): the single
-    // toggle sits after "When you pay", and the sample starts closed.
+    // V3 (16.11 visual audit, supersedes 16.11 item 1): a secondary text
+    // link in the hero leads to the sample section — it scrolls there,
+    // it does not open the sample. The sample still starts closed and
+    // opens from its toggle after "When you pay".
+    const heroLink = screen.getByRole("link", { name: "See a sample photo report" });
+    expect(heroLink).toHaveAttribute("href", "#sample-report");
     expect(screen.queryByRole("button", { name: "See a sample photo report" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Hide sample report" })).not.toBeInTheDocument();

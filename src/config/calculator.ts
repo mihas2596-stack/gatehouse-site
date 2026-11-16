@@ -149,6 +149,13 @@ export const TEST_PRICE_CAP = 1.5;
 export const scaleTestPrice = (n: number): number =>
   Math.min(TEST_PRICE_CAP, Math.round(n * TEST_PRICE_SCALE * 100) / 100);
 
+/** True when the $1.50 test cap actually lowered this total: the price
+ * scaled by TEST_PRICE_SCALE still sits above the cap. The quote page
+ * shows a "Test price cap applied" notice only when this is true, so
+ * the notice never appears when the cap changed nothing. */
+export const testCapApplied = (rawTotal: number): boolean =>
+  Math.round(rawTotal * TEST_PRICE_SCALE * 100) / 100 > TEST_PRICE_CAP;
+
 /**
  * Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While active,
  * every visitor sees test prices (x0.01, cap $1.50) with no token needed.

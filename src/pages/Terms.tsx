@@ -60,12 +60,12 @@ const Terms = () => {
         <p className="mb-8">
           These Terms of Service ("Terms") constitute a legally binding agreement between you ("Client," "you," "your") and Gatehouse Home Cleaning ("Company," "we," "us," "our") regarding your access to and use of the website located at{" "}
           <a
-            href="https://gatehousehomecleaning.com"
+            href="https://www.gatehousehomecleaning.com"
             className="text-primary underline"
             target="_blank"
             rel="noopener noreferrer"
           >
-            https://gatehousehomecleaning.com
+            https://www.gatehousehomecleaning.com
           </a>{" "}
           (the "Site") and any cleaning services we provide (collectively, the "Services").
         </p>
@@ -79,6 +79,12 @@ const Terms = () => {
           Email:{" "}
           <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">
             hello@gatehousehomecleaning.com
+          </a>
+        </p>
+        <p className="mb-4">
+          Phone:{" "}
+          <a href="tel:+17705258599" className="text-primary underline">
+            (770) 525-8599
           </a>
         </p>
         <p className="mb-4">Location: Atlanta, Georgia, United States</p>
@@ -330,6 +336,12 @@ const Terms = () => {
           Email:{" "}
           <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">
             hello@gatehousehomecleaning.com
+          </a>
+        </p>
+        <p className="mb-4">
+          Phone:{" "}
+          <a href="tel:+17705258599" className="text-primary underline">
+            (770) 525-8599
           </a>
         </p>
         <p className="mb-8">Atlanta, Georgia, United States</p>

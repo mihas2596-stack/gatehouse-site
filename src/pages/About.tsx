@@ -21,11 +21,15 @@ const About = () => {
           <p className="text-lg text-foreground/80 max-w-2xl mx-auto">
             I manage Gatehouse and coordinate your visit with independent cleaning professionals in North Atlanta. You can reach me directly with questions about your request.
           </p>
-          <p className="text-base text-foreground/80 max-w-2xl mx-auto mt-4">
-            <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>
-            {" · "}
-            <a href="tel:+17705258599" aria-label="Call Gatehouse Home Cleaning (770) 525-8599" className="font-semibold text-primary underline">(770) 525-8599</a>
+          <p className="text-base text-foreground/80 max-w-2xl mx-auto mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-2">
+            <a href="mailto:hello@gatehousehomecleaning.com" className="inline-flex min-h-[44px] items-center font-semibold text-primary underline break-all">hello@gatehousehomecleaning.com</a>
+            <a href="tel:+17705258599" aria-label="Call Gatehouse Home Cleaning (770) 525-8599" className="inline-flex min-h-[44px] items-center font-semibold text-primary underline whitespace-nowrap">(770) 525-8599</a>
           </p>
+          <div className="mt-6 hidden md:block">
+            <Button variant="hero" size="lg" asChild>
+              <Link to="/quote" data-main-cta>See My Price</Link>
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -42,6 +46,9 @@ const About = () => {
             </div>
             <p className="md:hidden text-center text-sm text-muted-foreground mt-2">Nick — Owner</p>
             <div>
+              <p className="mb-6 text-lg leading-relaxed text-foreground">
+                I coordinate your visit. We’ll email you to confirm your date, arrival window, and who’s coming.
+              </p>
               <h2 className="font-heading text-2xl md:text-[34px] font-bold mb-6">
                 Why Every Other Week
               </h2>

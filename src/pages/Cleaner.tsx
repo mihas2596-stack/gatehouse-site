@@ -1,3 +1,4 @@
+import { resolveLinkToken } from "@/lib/tokenStrip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
@@ -97,7 +98,11 @@ const roomPhotoStatus = (room: ChecklistRoom, photos: Photo[], noPhotoHere: bool
 
 const Cleaner = () => {
   const [searchParams] = useSearchParams();
-  const ct = searchParams.get("ct") ?? "";
+  // One-time link token: resolved from the URL once, then stripped from
+  // the address bar so it never reaches analytics (see tokenStrip.ts).
+  // searchParams stays for the preview flag (?pv=1), which the strip
+  // preserves in the URL.
+  const [ct] = useState<string>(() => resolveLinkToken("ct", "gh_cleaner_ct", searchParams.toString()));
   const [data, setData] = useState<CleanerView | null>(null);
   const [error, setError] = useState("");
   const [openRoom, setOpenRoom] = useState<string | null | undefined>(undefined);

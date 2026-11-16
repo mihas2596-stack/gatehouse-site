@@ -48,6 +48,17 @@
       "maxDuration": 40
     }
   },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    }
+  ],
   "redirects": [
     {
       "source": "/founding",

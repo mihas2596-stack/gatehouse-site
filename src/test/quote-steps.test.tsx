@@ -278,13 +278,18 @@ describe("quote steps", () => {
     // anything (16.11 item 5: the full payment block lives on step 3).
     expect(screen.getByText("See your price before saving a card.")).toBeInTheDocument();
     expect(screen.queryByText(/We.ll send a private photo report after your cleaning/)).not.toBeInTheDocument();
-    // Step 3: the full payment block, right before the Stripe button.
+    // Step 3: the payment explanation lives in "When you pay" only —
+    // the duplicate $0 box under Terms was removed (ChatGPT #5 / V1).
+    // PaymentSummary keeps the $0-today line, the 24-hour rule and the
+    // Report-an-issue stop; the repeated box is gone.
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
-    expect(screen.getByText("$0 charged today.")).toBeInTheDocument();
-    expect(screen.getByText(/We.ll send a private photo report after your cleaning\. You can approve it to pay\. If you haven.t approved or reported an issue, we.ll charge your card automatically 24 hours after we send the report\./)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "When you pay" })).toBeInTheDocument();
+    expect(screen.getByText("24 hours after we send the report")).toBeInTheDocument();
+    expect(screen.queryByText("$0 charged today.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/We.ll send a private photo report after your cleaning\. You can approve it to pay\. If you haven.t approved or reported an issue, we.ll charge your card automatically 24 hours after we send the report\./)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
     sessionStorage.removeItem("gh_quote_draft_v1");
   });

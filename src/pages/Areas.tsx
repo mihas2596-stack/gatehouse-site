@@ -75,8 +75,13 @@ const Areas = () => {
             <span className="text-gradient-gold block">7 North Atlanta Suburbs</span>
           </h1>
           <p className="text-foreground text-lg">
-            Seven North Atlanta suburbs, one simple routine.
+            Seven North Atlanta suburbs, cleaned every other week.
           </p>
+          <div className="mt-6 hidden md:block">
+            <Button variant="hero" size="lg" asChild>
+              <Link to="/quote" data-main-cta>Check my ZIP &amp; price</Link>
+            </Button>
+          </div>
         </div>
       </section>
 

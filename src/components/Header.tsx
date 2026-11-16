@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Menu, Phone, X } from "lucide-react";
+import { Menu, Mail, Phone, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navLinks = [
@@ -15,18 +15,25 @@ const navLinks = [
 
 const Header = () => {
   const [isOpen, setIsOpen] = useState(false);
+  // Minimal header (funnel pages): the inline Call/Email links do not fit
+  // below lg, so they collapse into a Help button with a panel instead.
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpBtnRef = useRef<HTMLButtonElement>(null);
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const toggleRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen && !helpOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setIsOpen(false); toggleRef.current?.focus(); }
+      if (event.key === "Escape") {
+        if (helpOpen) { setHelpOpen(false); helpBtnRef.current?.focus(); }
+        else { setIsOpen(false); toggleRef.current?.focus(); }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen]);
+  }, [isOpen, helpOpen]);
 
   const handleLogoClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -54,6 +61,7 @@ const Header = () => {
 
   useEffect(() => {
     setIsOpen(false);
+    setHelpOpen(false);
   }, [location]);
 
   // Lets the mobile quick-actions bar hide itself while the menu is open.
@@ -95,7 +103,7 @@ const Header = () => {
               North Atlanta, GA
             </span>
           </Link>
-          <div className="flex shrink-0 items-center gap-4">
+          <div className="hidden shrink-0 items-center gap-4 lg:flex">
             <a
               href="tel:+17705258599"
               aria-label="Call Gatehouse Home Cleaning (770) 525-8599"
@@ -111,6 +119,40 @@ const Header = () => {
             >
               Need help?<span className="hidden sm:inline">&nbsp;hello@gatehousehomecleaning.com</span>
             </a>
+          </div>
+          <div className="relative flex shrink-0 items-center lg:hidden">
+            <button
+              ref={helpBtnRef}
+              type="button"
+              aria-expanded={helpOpen}
+              aria-controls="header-help-panel"
+              onClick={() => setHelpOpen((v) => !v)}
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-border bg-card px-4 text-sm font-semibold text-primary"
+            >
+              Help
+            </button>
+            {helpOpen && (
+              <div
+                id="header-help-panel"
+                className="absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-2 shadow-lg"
+              >
+                <a
+                  href="tel:+17705258599"
+                  aria-label="Call Gatehouse Home Cleaning (770) 525-8599"
+                  className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm font-semibold text-primary underline"
+                >
+                  <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  Call (770) 525-8599
+                </a>
+                <a
+                  href="mailto:hello@gatehousehomecleaning.com"
+                  className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm font-semibold text-primary underline break-all"
+                >
+                  <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  hello@gatehousehomecleaning.com
+                </a>
+              </div>
+            )}
           </div>
         </div>
       </header>
