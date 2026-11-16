@@ -165,9 +165,18 @@ const comparisonRows = (disp: (n: number) => number): ComparisonRow[] => [
   { label: "Interior windows", standard: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</>, deep: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</>, move: <>Add-on +{fmtPrice(disp(ADDONS.interiorWindow.price))} per window</> },
   {
     label: "Price — small / medium / large",
-    standard: <>{fmtPrice(disp(PRICES.standardOnetime.S))} / {fmtPrice(disp(PRICES.standardOnetime.M))} / {fmtPrice(disp(PRICES.standardOnetime.L))} one-time<br />{fmtPrice(disp(PRICES.recurring.S))} / {fmtPrice(disp(PRICES.recurring.M))} / {fmtPrice(disp(PRICES.recurring.L))} every other week</>,
-    deep: <>{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))} per visit</>,
-    move: <>{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))} per visit</>,
+    standard: (
+      <>
+        <span className="block whitespace-nowrap">small — {fmtPrice(disp(PRICES.standardOnetime.S))} one-time</span>
+        <span className="block whitespace-nowrap">medium — {fmtPrice(disp(PRICES.standardOnetime.M))} one-time</span>
+        <span className="block whitespace-nowrap">large — {fmtPrice(disp(PRICES.standardOnetime.L))} one-time</span>
+        <span className="block whitespace-nowrap">small — {fmtPrice(disp(PRICES.recurring.S))} every other week</span>
+        <span className="block whitespace-nowrap">medium — {fmtPrice(disp(PRICES.recurring.M))} every other week</span>
+        <span className="block whitespace-nowrap">large — {fmtPrice(disp(PRICES.recurring.L))} every other week</span>
+      </>
+    ),
+    deep: <><span className="whitespace-nowrap">{fmtPrice(disp(PRICES.deep.S))} / {fmtPrice(disp(PRICES.deep.M))} / {fmtPrice(disp(PRICES.deep.L))}</span> per visit</>,
+    move: <><span className="whitespace-nowrap">{fmtPrice(disp(PRICES.moveinout.S))} / {fmtPrice(disp(PRICES.moveinout.M))} / {fmtPrice(disp(PRICES.moveinout.L))}</span> per visit</>,
   },
 ];
 

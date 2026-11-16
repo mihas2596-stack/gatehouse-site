@@ -86,7 +86,7 @@ const Areas = () => {
             <h2 className="mb-4 font-heading text-2xl font-bold text-sage-foreground">Cities we clean</h2>
             <ul className="space-y-3">
               {neighborhoods.map((n) => (
-                <li key={`area-${n.name}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-peach/30 px-4 py-3">
+                <li key={`area-${n.name}`} className="flex flex-col items-start gap-2 rounded-lg bg-peach/30 px-4 py-3">
                   <span className="flex flex-col">
                     <span className="flex items-center gap-2 text-base font-semibold text-foreground">
                       <MapPin className="w-5 h-5 text-primary" aria-hidden="true" /> {n.name}, GA

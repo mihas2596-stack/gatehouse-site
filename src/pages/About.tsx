@@ -57,7 +57,7 @@ const About = () => {
       </section>
 
       {/* MANIFESTO */}
-      <section className="py-16 bg-warm-gradient">
+      <section className="pt-16 pb-8 bg-warm-gradient">
         <div className="container max-w-5xl">
           <div className="text-center mb-10 max-w-2xl mx-auto">
             <p className="font-script text-xl text-golden mb-2">How We're Different</p>
@@ -76,7 +76,7 @@ const About = () => {
       </section>
 
       {/* FAQ link */}
-      <section className="py-10">
+      <section className="pt-4 pb-10">
         <div className="container text-center max-w-2xl">
           <p className="text-foreground/80 text-base">
             Have questions? <Link to="/faq" className="text-primary font-semibold underline hover:no-underline">See our FAQ</Link>.

@@ -399,6 +399,8 @@ const Quote = () => {
         title: "Enter a ZIP in our service area",
         description: "We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.",
         variant: "destructive",
+        // Validation toast: auto-dismiss so it never sits on the footer links.
+        duration: 6000,
       });
       return;
     }
@@ -464,6 +466,8 @@ const Quote = () => {
         title: "Enter a ZIP in our service area",
         description: "We serve Sugar Hill, Suwanee, Buford, Duluth, Johns Creek, Alpharetta and Roswell.",
         variant: "destructive",
+        // Validation toast: auto-dismiss so it never sits on the footer links.
+        duration: 6000,
       });
       return;
     }

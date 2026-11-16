@@ -1,4 +1,4 @@
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, Plus, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import SEO from "@/components/SEO";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,16 @@ const addons = [
   { ...ADDONS.insideCabinets, unit: "per visit" },
   { ...ADDONS.pets, unit: "per visit" },
 ];
+
+// Tasks that are NOT part of a standard visit: they apply on deep cleans
+// or as add-ons. They stay in the shared CHECKLIST config (tests assert
+// they are there), but on this page they must not sit inside an "included"
+// list — they get their own separated note under the room card instead.
+const ADDON_TASK_LABELS = new Set([
+  "Inside oven cleaned (deep clean, or as an add-on)",
+  "Inside fridge cleaned (deep clean, or as an add-on)",
+  "Inside cabinets cleaned (deep clean, or as an add-on)",
+]);
 
 const WhatsIncluded = () => {
   // Same test regime as /services: one regime, one price, clearly labeled.
@@ -73,11 +83,13 @@ const WhatsIncluded = () => {
           {CHECKLIST.map(({ room, tasks }) => {
             const id = `room-${room.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
             const open = openRooms[room] === true;
+            const addonTasks = tasks.filter((t) => ADDON_TASK_LABELS.has(t));
+            const includedTasks = tasks.filter((t) => !ADDON_TASK_LABELS.has(t));
             return (
               <div key={room} id={id} className="rounded-2xl bg-card p-6 shadow-warm scroll-mt-24">
                 <h2 className="mb-4 font-heading text-xl font-bold text-sage-foreground">{room}</h2>
                 <ul className="space-y-2">
-                  {tasks.map((task, i) => (
+                  {includedTasks.map((task, i) => (
                     <li
                       key={task}
                       className={`${i >= 3 && !open ? "hidden md:flex" : "flex"} items-start gap-2 text-base leading-relaxed text-foreground`}
@@ -87,14 +99,30 @@ const WhatsIncluded = () => {
                     </li>
                   ))}
                 </ul>
-                {tasks.length > 3 && (
+                {addonTasks.length > 0 && (
+                  <div className="mt-4 border-t border-border pt-3">
+                    <p className="text-sm font-semibold text-foreground">Available as add-ons</p>
+                    <ul className="mt-2 space-y-2">
+                      {addonTasks.map((task) => (
+                        <li key={task} className="flex items-start gap-2 text-base leading-relaxed text-muted-foreground">
+                          <Plus className="mt-1 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                          <span>{task}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      <a href="#addons" className="font-semibold text-primary underline">See add-on prices</a> — deep and move-in/out cleans already include these.
+                    </p>
+                  </div>
+                )}
+                {includedTasks.length > 3 && (
                   <button
                     type="button"
                     aria-expanded={open}
                     onClick={() => toggleRoom(room)}
                     className="md:hidden mt-3 min-h-[44px] text-sm font-semibold text-primary underline"
                   >
-                    {open ? "Show fewer tasks" : `Show all ${tasks.length} tasks`}
+                    {open ? "Show fewer tasks" : `Show all ${includedTasks.length} tasks`}
                   </button>
                 )}
               </div>
