@@ -201,7 +201,7 @@ describe("G4 L10: GET reconcile is read-only, POST confirm_card writes", () => {
       { cards: [card("pm_page2_a")], has_more: false },
     ];
     const res = response();
-    await handler({ method: "POST", headers: {}, body: { bt: mintToken(), action: "confirm_card" } } as never, res as never);
+    await handler({ method: "POST", headers: {}, body: { bt: mintToken(), action: "confirm_card", consent: true, consent_text_version: "2026-11-16-v1" } } as never, res as never);
     expect(res.code).toBe(200);
     expect(res.body["card_last4"]).toBe("5555");
     expect(customerMetadata["gh_payment_method"]).toBe(TARGET);

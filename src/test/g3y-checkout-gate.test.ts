@@ -74,7 +74,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(
 const token = () => signBooking(LINK_SECRET, {
   bid: BID, email: "client@example.com", name: "Casey Client",
 }).token;
-const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token() } });
+const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token(), consent: true, consent_text_version: "2026-11-16-v1" } });
 const rowWith = (status: string): Record<string, unknown> => ({
   id: "row-g3y-1", booking_id: BID, status, amount_cents: 2190,
 });
@@ -124,7 +124,7 @@ describe("G3: checkout refused for over bookings", () => {
 
   it("a standalone name/email request (no token) is unaffected by the gate", async () => {
     const r = res();
-    await handler({ method: "POST", headers: {}, body: { name: "Casey Client", email: "client@example.com" } } as never, r as never);
+    await handler({ method: "POST", headers: {}, body: { name: "Casey Client", email: "client@example.com", consent: true, consent_text_version: "2026-11-16-v1" } } as never, r as never);
     expect(r.code).toBe(200);
     expect(sessionCalls).toBe(1);
   });

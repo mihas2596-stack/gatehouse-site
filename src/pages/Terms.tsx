@@ -21,7 +21,7 @@ const Terms = () => {
         <p className="mb-6 font-semibold">
           Effective Date: May 15, 2026
           <br />
-          Last Updated: November 10, 2026
+          Last Updated: November 16, 2026
         </p>
 
         <p className="mb-8">
@@ -114,16 +114,22 @@ const Terms = () => {
           <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide.
         </p>
         <p className="mb-4">
-          <strong>5.2 Payment.</strong> You save a payment card when booking. Nothing is charged at booking. After each cleaning, we send you a photo report. Your saved card is charged when you approve the report, or automatically 24 hours after we send it if you have not reported an issue.
+          <strong>5.2 Payment.</strong> You save a payment card when booking. Nothing is charged at booking. When you save your card, you authorize us to charge the price shown for this visit under the payment schedule in this section.
+        </p>
+        <p className="mb-4">
+          After each cleaning, we send you a photo report. Your saved card is charged when you approve the report, or automatically 24 hours after we send it if you have not reported an issue.
         </p>
         <p className="mb-4">
           If you report an issue within that 24-hour period, automatic payment is disabled for that visit. We will review your concern and aim to provide a decision within 72 hours.
         </p>
         <p className="mb-4">
-          We may arrange a re-clean, waive the charge, or determine that the original visit amount remains due.
+          We may arrange a re-clean, waive the charge, offer a reduced amount, or determine that the original visit amount remains due.
         </p>
         <p className="mb-4">
-          If payment remains due, we will explain our decision and ask you to approve the report before charging your saved card. After an issue has been reported, your card will not be charged without your new approval.
+          If payment remains due, we will explain our decision and ask you to approve the report before charging your saved card. After an issue has been reported, your card will not be charged without your new approval — including after a re-clean and after any decision we make.
+        </p>
+        <p className="mb-4">
+          If we need more information about your concern, we may ask you for one detail and give you 48 hours to reply. Your payment stays on hold while we wait. For visits booked under the card authorization in effect from November 16, 2026, we may charge your saved card after that 48-hour deadline if we have not received the requested details or heard that you dispute the charge. That automatic charge after 48 hours is not currently in effect — while it is not in effect, your payment stays on hold until you approve the report or we resolve the issue with you. For visits booked before November 16, 2026, no automatic charge after 48 hours applies at all.
         </p>
         <p className="mb-4">
           If a re-clean is performed, we will provide an updated report for your approval.
@@ -159,7 +165,7 @@ const Terms = () => {
 
         <h2 id="terms-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">7. Service Concerns</h2>
         <p className="mb-8">
-          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us with a photo, within 24 hours after your photo report is sent. Damage claims by email follow Section 10.2 (48 hours). We fix missed checklist items free within 72 hours after you report the issue.
+          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us, within 24 hours after your photo report is sent. You can flag several areas at once, and a short description is enough — for example, &quot;The kitchen floor is still sticky.&quot; Photos are optional, both in the form and by email, and a reply to our email counts the same as the form. If something was damaged, use &quot;Report Property Damage&quot; on your report page, or email us, within 48 hours of service completion — that path is available even after the visit has been paid. We fix missed checklist items free — one free re-clean visit for the confirmed missed work in the areas you flagged — within 72 hours after you report the issue.
         </p>
 
         <h2 id="terms-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">8. Client Responsibilities</h2>
@@ -204,7 +210,7 @@ const Terms = () => {
           <a href="mailto:hello@gatehousehomecleaning.com" className="text-primary underline">
             hello@gatehousehomecleaning.com
           </a>{" "}
-          within 48 hours of service completion and must include: (a) detailed description of the damage; (b) photographic evidence; (c) proof of value where applicable. Claims submitted after 48 hours are waived.
+          or through &quot;Report Property Damage&quot; on your report page within 48 hours of service completion, including after the visit has been paid. A claim should include: (a) detailed description of the damage; (b) photographic evidence where available — photos help us review the claim but are not a condition for accepting it; (c) proof of value where applicable. Claims submitted after 48 hours are waived.
         </p>
         <p className="mb-4">
           <strong>10.3 Exclusions.</strong> We are not liable for:

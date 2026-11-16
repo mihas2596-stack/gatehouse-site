@@ -36,6 +36,7 @@ import {
 import {
   reconcileIntent, confirmIntent, confirmAttemptKey, createChargeKey,
 } from "./_payment_intent.js";
+import { detailsRequestActive } from "./_consent.js";
 
 export type ObligationRow = {
   id: string;
@@ -58,6 +59,11 @@ export type ObligationRow = {
   // undefined at runtime, which reads as "not waived" — the journal
   // check below is the authority until the column exists.
   charge_waived?: boolean | null;
+  // 16.11.2026 (spec 1.3/2.2): active details request (migration
+  // 20261116_issue_details_consent). Absent = no request — the
+  // journal event is the fallback.
+  details_requested_at?: string | null;
+  details_deadline_at?: string | null;
 };
 
 export type ObligationEvent = {
@@ -127,6 +133,31 @@ function latestDeliveredSent(events: ObligationEvent[]): ObligationEvent | null 
     if (!best || e.created_at > best.created_at) best = e;
   }
   return best;
+}
+
+function detailsRequestBlocksCharge(
+  row: ObligationRow | null,
+  events: ObligationEvent[],
+): boolean {
+  if (!row || !detailsRequestActive(row, events)) return false;
+  const reqEv = events.find((e) => e.event === "issue_details_requested");
+  const requestedAt = row.details_requested_at ?? reqEv?.created_at ?? "";
+  const approval = clientApprovedEvent(events);
+  if (approval && requestedAt && approval.created_at >= requestedAt) return false;
+  return true;
+}
+
+// 16.11.2026 (spec 1.5): an active reduced-amount offer for exactly
+// this amount — the journal is the authority.
+function activeOfferFor(events: ObligationEvent[], amountCents: number): boolean {
+  const offered = events.find((e) => e.event === "payment_offered");
+  if (!offered || offered.detail?.["offer_status"] !== "offered") return false;
+  if (offered.detail?.["offer_amount_cents"] !== amountCents) return false;
+  return !events.some(
+    (e) =>
+      (e.event === "offer_accepted" || e.event === "offer_declined") &&
+      e.created_at >= offered.created_at,
+  );
 }
 
 function latestReturnedAfterSent(events: ObligationEvent[]): boolean {
@@ -296,11 +327,20 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     ? row.amount_cents
     : NaN;
   if (!Number.isFinite(amountCents)) return { outcome: "blocked", error: "quote_missing" };
+  // 16.11.2026 (spec 1.5): a reduced amount charges ONLY with an
+  // active payment_offered event for exactly that amount — otherwise
+  // the existing price_review_required block stands. A bare
+  // requestedAmountCents (owner charge with a typed amount) that is
+  // not the pinned amount and not an active offer is still refused.
+  let chargeAmountCents = amountCents;
   if (input.requestedAmountCents != null && input.requestedAmountCents !== amountCents) {
-    await logEvent(row.id, bookingId, "system", "price_review_flagged", {
-      amount_cents: input.requestedAmountCents, pinned_cents: amountCents,
-    });
-    return { outcome: "blocked", error: "price_review_required", pinned_cents: amountCents };
+    if (!activeOfferFor(events, input.requestedAmountCents)) {
+      await logEvent(row.id, bookingId, "system", "price_review_flagged", {
+        amount_cents: input.requestedAmountCents, pinned_cents: amountCents,
+      });
+      return { outcome: "blocked", error: "price_review_required", pinned_cents: amountCents };
+    }
+    chargeAmountCents = input.requestedAmountCents;
   }
   // RA08: the client must prove they saw THIS publication. A stale tab
   // (older publication id, or none) never pays for a new report.
@@ -333,7 +373,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   // reconcile the known intent BEFORE refusing on payment_pending.
   if (row.status === "payment_pending") {
     const rec = await reconcileIntent(secretKey, bookingId, knownIntentIds(row, events), {
-      amountCents, currency: "usd", customerId,
+      amountCents: chargeAmountCents, currency: "usd", customerId,
     });
     if (rec.state === "succeeded") {
       return recordPaid(rec.intent.id, true);
@@ -402,6 +442,12 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     return { outcome: "blocked", error: "report_not_current" };
   }
   if (issue.open) return { outcome: "blocked", error: "issue_open" };
+  // 16.11.2026 (spec 2.2): an active details request blocks the
+  // charge like an open issue — unless the client has since given a
+  // fresh explicit approval (resolve-and-pay), which outranks it.
+  if (detailsRequestBlocksCharge(row, events)) {
+    return { outcome: "blocked", error: "details_requested" };
+  }
   const basis = paymentBasis(
     {
       reportSentAt: effectiveSentMs ? new Date(effectiveSentMs).toISOString() : null,
@@ -478,7 +524,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
 
   // --- Reconcile before creating (RA03): adoption first. ---
   const rec = await reconcileIntent(secretKey, bookingId, knownIntentIds(row, events), {
-    amountCents, currency: "usd", customerId,
+    amountCents: chargeAmountCents, currency: "usd", customerId,
   });
   if (rec.state === "succeeded") return recordPaid(rec.intent.id, true);
   if (rec.state === "mismatch") {
@@ -538,6 +584,14 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     await logEvent(row.id, bookingId, "system", "payment_blocked_by_issue", { source });
     return { outcome: "blocked", error: "issue_open" };
   }
+  // 16.11.2026 (spec 2.2): C11 re-check — a details request that
+  // arrived between the claim and the create stops the payment too
+  // (same shape as the issue check above; the claim is released).
+  if (detailsRequestBlocksCharge(preRow, preCreateEv.events)) {
+    await releaseClaim();
+    await logEvent(row.id, bookingId, "system", "payment_blocked_by_details_request", { source });
+    return { outcome: "blocked", error: "details_requested" };
+  }
   // TASK 1 (fix6): same race, waived variant — a waive landing
   // between the claim and the create must stop the payment too.
   // Ever-waived (fix round 2), not latest-decision.
@@ -556,7 +610,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   let pi: { ok: boolean; status: number; data: Record<string, unknown> };
   try {
     pi = await stripePost(secretKey, "/payment_intents", {
-      amount: String(amountCents),
+      amount: String(chargeAmountCents),
       currency: "usd",
       customer: customerId,
       payment_method: paymentMethod,
@@ -598,7 +652,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     if (!wrote) {
       const fresh = await loadRow(bookingId);
       if (fresh.ok && fresh.row?.status === "paid") {
-        const receiptSent = await deps.sendReceipt(amountCents);
+        const receiptSent = await deps.sendReceipt(chargeAmountCents);
         return { outcome: "paid", payment_intent: piId, adopted: true, receipt_sent: receiptSent };
       }
       await logEvent(row.id, bookingId, "system", "payment_unconfirmed", {
@@ -611,9 +665,10 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       gh_paid_at: new Date().toISOString(),
       gh_last_payment: piId,
     });
-    const receiptSent = await deps.sendReceipt(amountCents);
+    const receiptSent = await deps.sendReceipt(chargeAmountCents);
     await logEvent(row.id, bookingId, "system", "payment_succeeded", {
       payment_intent: piId, via: source, receipt_sent: receiptSent, adopted,
+      ...(chargeAmountCents !== amountCents ? { amount_cents: chargeAmountCents, pinned_cents: amountCents } : {}),
     });
     return { outcome: "paid", payment_intent: piId, adopted, receipt_sent: receiptSent };
   }
@@ -656,6 +711,12 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       if (issueStateFrom(fevents, frow.issue_open ?? null, frow.issue_ever ?? null).open) {
         return "issue_open";
       }
+      // 16.11.2026 (spec 2.2): confirming a live intent is a new money
+      // operation — an active details request blocks it too, unless a
+      // fresh client approval newer than the request exists.
+      if (detailsRequestBlocksCharge(frow, fevents)) {
+        return "details_requested";
+      }
       // TASK 1 (fix6): confirming a live intent after a waive would
       // charge a visit the owner closed without payment — never.
       // Ever-waived (fix round 2), not latest-decision.
@@ -689,7 +750,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       if (source === "timer_24h" && !latestDeliveredSent(fevents)) {
         return "report_delivery_unconfirmed";
       }
-      if (intentAmountCents !== undefined && intentAmountCents !== amountCents) {
+      if (intentAmountCents !== undefined && intentAmountCents !== chargeAmountCents) {
         return "payment_intent_mismatch";
       }
       return null;

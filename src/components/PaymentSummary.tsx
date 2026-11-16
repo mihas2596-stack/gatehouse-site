@@ -1,4 +1,11 @@
-export default function PaymentSummary({ showCard = false, compact = false }: { showCard?: boolean; compact?: boolean }) {
+// Payment summary shown on /quote (compact) and /save-card.
+// 16.11.2026 (spec 2.1/4.1): shows the pinned visit price when known,
+// the 24h rule, and the 48h details condition from the new §5.2.
+// NOTE: the 48h wording below describes CURRENT behaviour (no
+// automatic charge after 48h — the payment stays on hold until the
+// client approves again). It needs Kolya's approval together with
+// the new §5.2 text before it is treated as final copy.
+export default function PaymentSummary({ showCard = false, compact = false, amount }: { showCard?: boolean; compact?: boolean; amount?: string }) {
   if (compact) {
     return (
       <section aria-labelledby="quote-payment-heading" className="rounded-xl border border-border bg-card p-4 text-left sm:p-6">
@@ -7,21 +14,29 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
           <p className="text-2xl font-bold text-sage-foreground">$0 charged today</p>
           <p className="mt-2 text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
             Save your card with Stripe for this visit. Only Stripe handles your full card number.
+            {amount ? <> This visit: <strong>{amount}</strong>.</> : null}
           </p>
         </div>
         <dl className="mt-5 divide-y divide-border text-[1.125rem] leading-relaxed sm:text-[1.25rem]">
           <div className="pb-4">
             <dt className="font-bold">Review your cleaning first</dt>
             <dd className="mt-1">
-              We’ll send you a photo report after cleaning. Select <strong>Approve &amp; pay</strong> to pay.
+              We’ll send you a photo report after cleaning. Select <strong>Approve &amp; pay</strong> to pay{amount ? <> {amount}</> : null}.
               If you don’t approve or report an issue, we’ll charge your card automatically <strong>24 hours after we send the report</strong>.
             </dd>
           </div>
-          <div className="pt-4">
+          <div className="py-4">
             <dt className="font-bold">Something missed?</dt>
             <dd className="mt-1">
               Select <strong>Report an issue</strong> within those 24 hours to stop automatic payment for this visit.
               Once we resolve the issue, you choose when to approve and pay.
+            </dd>
+          </div>
+          <div className="pt-4">
+            <dt className="font-bold">If we need one more detail</dt>
+            <dd className="mt-1">
+              If you report an issue and we ask for one more detail, you have <strong>48 hours</strong> to reply.
+              Your payment stays on hold while we wait — it is never charged automatically after those 48 hours without your new approval.
             </dd>
           </div>
         </dl>
@@ -32,10 +47,11 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
   return <section aria-label="How payment works" className="rounded-xl border border-border bg-card p-5 sm:p-6 text-left">
     <h3 className="font-heading text-2xl font-bold">{showCard ? "Save your card. Pay after cleaning." : "When you pay"}</h3>
     <dl className="mt-5 space-y-5 text-lg leading-relaxed">
-      {showCard && <div><dt className="font-semibold">Today: $0</dt><dd className="mt-1 text-base">Save a card for this visit through Stripe, so you won’t need to enter it after cleaning. Gatehouse never sees or stores your full card number.</dd></div>}
-      <div><dt className="font-semibold">Review, then pay</dt><dd className="mt-1 text-base">After cleaning, we send your photo report. Choose “Approve &amp; pay” to charge your card.</dd></div>
+      {showCard && <div><dt className="font-semibold">Today: $0</dt><dd className="mt-1 text-base">Save a card for this visit through Stripe, so you won’t need to enter it after cleaning. Gatehouse never sees or stores your full card number.{amount ? <> This visit: <strong>{amount}</strong>.</> : null}</dd></div>}
+      <div><dt className="font-semibold">Review, then pay</dt><dd className="mt-1 text-base">After cleaning, we send your photo report. Choose “Approve &amp; pay” to charge your card{amount ? <> — {amount} for this visit</> : null}.</dd></div>
       <div><dt className="font-semibold">24 hours to review</dt><dd className="mt-1 text-base">Your card is charged automatically 24 hours after we send the report if you haven’t approved it or reported an issue.</dd></div>
       <div><dt className="font-semibold">Something missed?</dt><dd className="mt-1 text-base">Use “Report an issue” on your visit page within those 24 hours. Automatic charging stays off for this visit, including after the fix. You approve again to pay.</dd></div>
+      <div><dt className="font-semibold">If we need one more detail</dt><dd className="mt-1 text-base">If you report an issue and we ask for one more detail, you have 48 hours to reply. Your payment stays on hold while we wait — it is never charged automatically after those 48 hours without your new approval.</dd></div>
     </dl>
   </section>;
 }

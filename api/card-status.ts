@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
+import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, logEvent, logEventStrict } from "./_db.js";
+import { CONSENT_TEXT_VERSION } from "./_consent.js";
 import { emailDate, emailDocument } from "./_email_copy.js";
 import { notifyOwnerCardReady } from "./_owner_email.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
@@ -16,6 +17,10 @@ type BookingRow = {
   client_name?: string | null; client_email?: string | null; created_at?: string | null; report_sent_at?: string | null;
   issue_open?: boolean | null; issue_ever?: boolean | null;
   window?: string | null; is_test?: boolean | null;
+  // 16.11.2026 (spec 2.1): card-save consent (migration
+  // 20261116_issue_details_consent). Absent = no new consent.
+  consent_text_version?: string | null;
+  consent_given_at?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 async function latestBookingRow(bookingId: string): Promise<BookingRow | null> {
@@ -622,6 +627,16 @@ export default async function handler(req: Req, res: Res) {
     const row = rowResult.rows[0] ?? null;
     if (row?.status === "cancelled") { res.status(409).json({ ok: false, error: "visit_cancelled" }); return; }
     const events = row ? await bookingEvents(bid) : [];
+    // 16.11.2026 (spec 2.1): saving/confirming a card for this visit
+    // requires the client's explicit consent checkbox — without
+    // consent:true and the current text version the call is refused.
+    // Old visits (no consent_*) never gain consent retroactively.
+    const consentGiven = body["consent"] === true;
+    const consentVersion = typeof body["consent_text_version"] === "string" ? (body["consent_text_version"] as string) : "";
+    if (!consentGiven || consentVersion !== CONSENT_TEXT_VERSION) {
+      res.status(400).json({ ok: false, error: "consent_required" });
+      return;
+    }
     // C13: the visit row's own stripe_customer_id, where present, is
     // the strongest binding — resolve it directly and verify its
     // email, instead of trusting the email search.
@@ -669,6 +684,20 @@ export default async function handler(req: Req, res: Res) {
       });
       if (dbConfigured() && !persisted) { res.status(503).json({ ok: false, error: "card_confirmation_failed" }); return; }
     }
+    // 16.11.2026 (spec 2.1): the consent itself is journaled with its
+    // version, amount and channel, and mirrored on the row (tolerant:
+    // the columns exist only after migration 20261116).
+    if (!events.some((e) => e.event === "card_consent_given" && e.detail?.["text_version"] === CONSENT_TEXT_VERSION)) {
+      await logEventStrict(row?.id ?? null, bid, "client", "card_consent_given", {
+        text_version: CONSENT_TEXT_VERSION,
+        amount_cents: row?.amount_cents ?? null,
+        via: "confirm_card",
+      });
+    }
+    await dbUpdate("gh_visits", `booking_id=eq.${encodeURIComponent(bid)}`, {
+      consent_text_version: CONSENT_TEXT_VERSION,
+      consent_given_at: new Date().toISOString(),
+    });
     await Promise.all([
       notifyOwnerCardReady(row).catch(logOwnerEmailFailure),
       maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
@@ -927,6 +956,25 @@ export default async function handler(req: Req, res: Res) {
             payment_method_id: card.id, brand: card.brand, last4: card.last4, via: "checkout_session",
           });
           if (dbConfigured() && !persisted) throw new Error("card_confirmation_failed");
+        }
+        // 16.11.2026 (spec 2.1): a Checkout Session created with the
+        // consent checkbox carries it in metadata — journal it with
+        // via "checkout_session". A session WITHOUT it (created before
+        // this change) confirms the card but records no consent: the
+        // visit stays "without new consent", never upgraded by default.
+        const sessionMeta = (s["metadata"] as Record<string, string> | undefined) ?? {};
+        if (sessionMeta["gh_consent"] === "true" && sessionMeta["gh_consent_text_version"] === CONSENT_TEXT_VERSION) {
+          if (!evs.some((e) => e.event === "card_consent_given" && e.detail?.["text_version"] === CONSENT_TEXT_VERSION)) {
+            await logEventStrict(row?.id ?? null, bookingId, "client", "card_consent_given", {
+              text_version: CONSENT_TEXT_VERSION,
+              amount_cents: row?.amount_cents ?? null,
+              via: "checkout_session",
+            });
+          }
+          await dbUpdate("gh_visits", `booking_id=eq.${encodeURIComponent(bookingId)}`, {
+            consent_text_version: CONSENT_TEXT_VERSION,
+            consent_given_at: new Date().toISOString(),
+          });
         }
         if (booking) {
           booking.has_card = "1";

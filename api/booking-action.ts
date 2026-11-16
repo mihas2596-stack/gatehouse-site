@@ -42,6 +42,7 @@ import { paymentBasis, issueStateFrom, clientApprovedEvent, latestIssueDecision 
 import { confirmedDateOf, effectiveVisitDate, isFutureVisitDate, todayInNewYork, visitDateStartNYMs } from "./_visit_date.js";
 import { reconcileIntent, confirmIntent, getIntent, searchIntents, verifyIntentForObligation, type FoundIntent } from "./_payment_intent.js";
 import { chargeVisit } from "./_payment_obligation.js";
+import { formatDeadlineET, hasNewConsent } from "./_consent.js";
 import { listCustomerCards } from "./card-status.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { deleteAccess, revokeAccessForCleanerChange, saveAccess, saveAccessNote } from "./_visit_access.js";
@@ -129,7 +130,7 @@ type Res = {
 };
 
 const ActionSchema = z.object({
-  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "resend_owner_notification", "send_report", "decline_date", "set_cleaner", "set_access_notes", "set_access_secret", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "delete_visit"]),
+  action: z.enum(["invite_next_visit", "owner_cancel", "set_test_booking", "resend_status_email", "set_client_phone", "approve", "dispute", "resolve", "charge", "status", "confirm", "assign_confirm", "approve_request", "resend_confirmation", "resend_owner_notification", "send_report", "decline_date", "set_cleaner", "set_access_notes", "set_access_secret", "charge_fee", "delete_card", "cleaner_link", "get_cleaner_link", "revoke_cleaner_link", "client_link", "return_report", "preview_link", "owner_photo_sign", "owner_photo_register", "owner_photo_delete", "roster_add", "roster_update", "roster_import", "issue_request_payment", "issue_arrange_reclean", "issue_waive_charge", "issue_renotify", "issue_request_details", "issue_offer_reduced_amount", "issue_partial_refund", "delete_visit"]),
   // Roster actions carry no booking; the handler enforces booking_id
   // for every other action after the roster branch.
   booking_id: z.string().min(1).max(100).optional(),
@@ -149,6 +150,9 @@ const ActionSchema = z.object({
   // issue_request_payment / issue_arrange_reclean / issue_waive_charge:
   // the owner's decision text, shown to the client as "Our response".
   resolution: z.string().max(1000).optional(),
+  // issue_request_details: what the owner asks the client to clarify
+  // (required, <=1000 chars); issue_partial_refund reuses `reason`.
+  details_request: z.string().max(1000).optional(),
   // return_report: owner's note back to the cleaner.
   note: z.string().max(1000).optional(),
   // set_cleaner: name as the client should see it; photo only with the
@@ -308,6 +312,76 @@ export async function sendShortClientEmail(opts: {
     return resp.ok;
   } catch {
     return false;
+  }
+}
+
+// 16.11.2026 (spec 1.3): letter 2 — the details request. Sent ONLY
+// for new-consent visits (the caller enforces the gate). Verbatim
+// spec text; the Resend id is returned so the caller can journal it
+// (details_request_email_sent) and store it on the row. reply_to is
+// the per-visit address when configured, else hello@ (inbound is OFF
+// in prod, so a reply to hello@ is NOT counted automatically — see
+// the gate note in api/report.ts). The button goes straight to the
+// open issue (#issue anchor on /report).
+export async function sendDetailsRequestEmail(opts: {
+  secretKey: string;
+  customer: { email?: string; name?: string };
+  bookingId: string;
+  visitId: string | null;
+  amountCents: number;
+  deadlineAt: string;
+  requestText: string;
+}): Promise<string | null> {
+  const key = process.env["RESEND_API_KEY"];
+  const email = (opts.customer.email ?? "").trim();
+  if (!key || !email) return null;
+  const firstName = (opts.customer.name ?? "").trim().split(/\s+/)[0] || "there";
+  const amount = `$${(opts.amountCents / 100).toFixed(2).replace(/\.00$/, "")}`;
+  const deadlineET = formatDeadlineET(opts.deadlineAt);
+  const reportToken = encryptBookingPayload(bookingLinkSecret(opts.secretKey), {
+    bid: opts.bookingId,
+    email,
+    name: opts.customer.name ?? "",
+    ts: Math.floor(Date.now() / 1000),
+  });
+  const link = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}#issue`;
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": `gh-details-request-${opts.bookingId}`,
+      },
+      body: JSON.stringify({
+        from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+        to: [email],
+        reply_to: reportReplyAddress(opts.visitId ?? undefined) ?? "hello@gatehousehomecleaning.com",
+        subject: "Please add a detail about your cleaning concern",
+        text:
+          `Hi ${firstName},\n\nCould you tell us what you noticed and where? One short sentence is enough. Photos are optional. ` +
+          `Your payment is on hold until ${deadlineET}. ` +
+          `If we haven\u2019t received the requested details or heard that you dispute the charge by then, we\u2019ll charge ${amount} to your saved card after that deadline. ` +
+          `Use Add Details or reply to this email. If you\u2019re having trouble opening your report, reply here and we\u2019ll help.\n\nGatehouse Home Cleaning\n` +
+          `\nAdd Details: ${link}\n`,
+        html: emailDocument({
+          firstName,
+          heading: "Please add a detail",
+          paragraphs: [
+            `Could you tell us what you noticed and where? One short sentence is enough. Photos are optional.`,
+            `Your payment is on hold until ${deadlineET}. If we haven\u2019t received the requested details or heard that you dispute the charge by then, we\u2019ll charge ${amount} to your saved card after that deadline.`,
+            `If you\u2019re having trouble opening your report, reply here and we\u2019ll help.`,
+          ],
+          action: { url: link, label: "Add Details" },
+        }),
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) return null;
+    const j = (await resp.json()) as { id?: string };
+    return typeof j.id === "string" && j.id ? j.id : null;
+  } catch {
+    return null;
   }
 }
 
@@ -912,6 +986,25 @@ type BookingRow = {
   reclean_cleaner_name?: string | null;
   reclean_status?: string | null;
   stripe_customer_id?: string | null;
+  // 16.11.2026 (spec 1.3/1.5/1.6/2.1): details request, offer,
+  // partial refund, damage path and card-save consent (migration
+  // 20261116_issue_details_consent). Absent (not yet migrated) =
+  // undefined at runtime — the journal is the fallback.
+  consent_text_version?: string | null;
+  consent_given_at?: string | null;
+  issue_kind?: string | null;
+  issue_rooms?: unknown;
+  details_requested_at?: string | null;
+  details_deadline_at?: string | null;
+  details_request_text?: string | null;
+  details_email_id?: string | null;
+  issue_ack_email_id?: string | null;
+  offer_amount_cents?: number | null;
+  offer_status?: string | null;
+  partial_refund_cents?: number | null;
+  damage_reported_at?: string | null;
+  payment_intent_id?: string | null;
+  paid_at?: string | null;
 };
 type BookingEvent = { event: string; detail: Record<string, unknown> | null; created_at: string };
 // RA04: strict loaders that tell "no row" apart from "the DB could
@@ -2577,6 +2670,174 @@ export default async function handler(req: Req, res: Res) {
       }
       log("resolve", { booking: bookingId });
       return json(200, { ok: true, state: "approved" });
+    }
+
+    // 16.11.2026 (spec 1.3/1.5): the owner's newer issue actions —
+    // Request Details (letter 2, new-consent visits only, once per
+    // visit, NO auto-resume after the 48h deadline), Offer Reduced
+    // Amount (a lower charge the client accepts with an explicit
+    // Approve), and Partial Refund (paid visits only, idempotent).
+    // None of these charges the card or closes the issue on its own.
+    if (action === "issue_request_details" || action === "issue_offer_reduced_amount" || action === "issue_partial_refund") {
+      if (!row) return json(404, { ok: false, error: "visit_not_found" });
+      const openIssue = issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null).open;
+      const clientEmail = (customer.email ?? row.client_email ?? "").trim();
+      const clientName = (customer.name ?? row.client_name ?? "").trim();
+      const pinnedCents = typeof row.amount_cents === "number" && row.amount_cents > 0 ? row.amount_cents : null;
+      const pinnedStr = pinnedCents !== null ? `$${(pinnedCents / 100).toFixed(2).replace(/\.00$/, "")}` : null;
+      const reportLink = clientEmail
+        ? `https://www.gatehousehomecleaning.com/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+            bid: bookingId, email: clientEmail, name: clientName, ts: Math.floor(Date.now() / 1000),
+          }))}#issue`
+        : "";
+
+      if (action === "issue_request_details") {
+        if (!openIssue) {
+          logErr("issue_request_details", "blocked: no open issue");
+          return json(409, { ok: false, error: "nothing_to_resolve" });
+        }
+        // Spec 1.6: the 48h clarification is never applied to damage.
+        const openedEv = events.find((e) => e.event === "issue_opened");
+        const issueKind = row.issue_kind ?? (typeof openedEv?.detail?.["kind"] === "string" ? (openedEv.detail["kind"] as string) : "issue");
+        if (issueKind === "damage") {
+          return json(409, { ok: false, error: "details_not_available_for_damage" });
+        }
+        // Exactly ONE details request per visit — a retry after the
+        // first is a 409, never a second letter.
+        if (events.some((e) => e.event === "issue_details_requested") || row.details_requested_at) {
+          return json(409, { ok: false, error: "details_already_requested" });
+        }
+        const requestText = (parsed.data.details_request ?? "").trim().slice(0, 1000);
+        if (!requestText) {
+          return json(400, { ok: false, error: "details_request_required" });
+        }
+        // Letter 2 exists ONLY for new-consent visits. Old visits keep
+        // the manual path: the owner asks by email themselves.
+        if (!hasNewConsent(row)) {
+          return json(409, { ok: false, error: "details_request_requires_new_consent" });
+        }
+        if (pinnedCents === null) {
+          return json(409, { ok: false, error: "quote_missing" });
+        }
+        const requestedAt = new Date().toISOString();
+        const deadlineAt = new Date(Date.now() + 48 * 3600 * 1000).toISOString();
+        // Journal FIRST (deadline + request text), then the row
+        // mirror, then letter 2. After the deadline nothing happens
+        // automatically: the issue stays open and the owner decides
+        // manually — there is no auto-resume anywhere in the code.
+        const recorded = await logEventStrict(row.id, bookingId, "owner", "issue_details_requested", {
+          request: requestText, deadline_at: deadlineAt, requested_at: requestedAt,
+        });
+        if (!recorded) return json(502, { ok: false, error: "db_error" });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+          details_requested_at: requestedAt, details_deadline_at: deadlineAt, details_request_text: requestText,
+        });
+        const emailId = clientEmail
+          ? await sendDetailsRequestEmail({
+              secretKey: STRIPE_SECRET_KEY,
+              customer: { email: clientEmail, name: clientName },
+              bookingId, visitId: row.id, amountCents: pinnedCents, deadlineAt, requestText,
+            })
+          : null;
+        if (emailId) {
+          await logEvent(row.id, bookingId, "system", "details_request_email_sent", { email_id: emailId });
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, { details_email_id: emailId });
+        }
+        log("issue_request_details", { booking: bookingId, deadline_at: deadlineAt, emailSent: Boolean(emailId) });
+        return json(200, { ok: true, decision: "details_requested", deadline_at: deadlineAt, email_sent: Boolean(emailId) });
+      }
+
+      if (action === "issue_offer_reduced_amount") {
+        if (!openIssue) {
+          logErr("issue_offer_reduced_amount", "blocked: no open issue");
+          return json(409, { ok: false, error: "nothing_to_resolve" });
+        }
+        if (row.status === "paid" || row.status === "refunded") {
+          return json(409, { ok: false, error: row.status === "refunded" ? "already_refunded" : "already_paid" });
+        }
+        const offerCents = parsed.data.amount_cents;
+        if (!offerCents || pinnedCents === null || offerCents >= pinnedCents) {
+          return json(400, { ok: false, error: "invalid_offer_amount" });
+        }
+        // Same active offer twice = one journal event, one email.
+        const existingOffer = events.find((e) => e.event === "payment_offered");
+        if (existingOffer?.detail?.["offer_status"] === "offered"
+          && existingOffer.detail?.["offer_amount_cents"] === offerCents) {
+          return json(200, { ok: true, already: true, decision: "offered", offer_amount_cents: offerCents });
+        }
+        const offerText = (parsed.data.resolution ?? "").trim().slice(0, 1000);
+        const recorded = await logEventStrict(row.id, bookingId, "owner", "payment_offered", {
+          offer_amount_cents: offerCents, offer_status: "offered", resolution: offerText,
+        });
+        if (!recorded) return json(502, { ok: false, error: "db_error" });
+        await dbUpdate("gh_visits", `id=eq.${row.id}`, { offer_amount_cents: offerCents, offer_status: "offered" });
+        const offerStr = `$${(offerCents / 100).toFixed(2).replace(/\.00$/, "")}`;
+        const emailSent = clientEmail && reportLink
+          ? await sendShortClientEmail({
+              secretKey: STRIPE_SECRET_KEY,
+              customer: { email: clientEmail, name: clientName },
+              bookingId,
+              subject: "A reduced amount for your cleaning",
+              heading: "A reduced amount for your cleaning",
+              lines: [
+                "We've reviewed your concern about your cleaning.",
+                ...(offerText ? [`Our response: ${offerText}`] : []),
+                `We can close this visit for ${offerStr} instead of ${pinnedStr}.`,
+                "If you agree, approve the report — your saved card will be charged the reduced amount.",
+                "Nothing will be charged unless you approve the report.",
+              ],
+              buttonLabel: `Approve & pay ${offerStr}`,
+              buttonUrl: reportLink,
+            })
+          : false;
+        log("issue_offer_reduced_amount", { booking: bookingId, offer_amount_cents: offerCents, emailSent });
+        return json(200, { ok: true, decision: "offered", offer_amount_cents: offerCents, email_sent: emailSent });
+      }
+
+      // issue_partial_refund: paid visits only. The visit status stays
+      // "paid" — the refund is a money event, not a state flip. The
+      // Stripe call is idempotent per (booking, amount): a retry after
+      // an ambiguous outcome replays the same refund instead of
+      // minting a second one, and a repeated request for the same
+      // amount returns already:true without calling Stripe again.
+      if (row.status !== "paid") {
+        return json(409, { ok: false, error: "visit_not_paid" });
+      }
+      const refundCents = parsed.data.amount_cents;
+      const refundReason = (parsed.data.reason ?? parsed.data.resolution ?? "").trim().slice(0, 500);
+      if (!refundCents) {
+        return json(400, { ok: false, error: "amount_required" });
+      }
+      if (pinnedCents !== null && refundCents > pinnedCents) {
+        return json(400, { ok: false, error: "invalid_refund_amount" });
+      }
+      const paidEv = events.find((e) => e.event === "payment_succeeded");
+      const piId = row.payment_intent_id
+        ?? (typeof paidEv?.detail?.["payment_intent"] === "string" ? (paidEv.detail["payment_intent"] as string) : null);
+      if (!piId) {
+        return json(409, { ok: false, error: "no_payment_intent" });
+      }
+      if (events.some((e) => e.event === "partial_refund" && e.detail?.["amount_cents"] === refundCents)) {
+        return json(200, { ok: true, already: true, decision: "partial_refund", amount_cents: refundCents });
+      }
+      const refund = await stripePost(STRIPE_SECRET_KEY, "/refunds", {
+        payment_intent: piId,
+        amount: String(refundCents),
+      }, `gh-partial-refund-${bookingId}-${refundCents}`);
+      if (!refund.ok || typeof refund.data["id"] !== "string") {
+        logErr("issue_partial_refund", `stripe ${refund.status}`);
+        return json(502, { ok: false, error: "refund_failed" });
+      }
+      const refundId = refund.data["id"] as string;
+      const refundRecorded = await logEventStrict(row.id, bookingId, "owner", "partial_refund", {
+        amount_cents: refundCents, reason: refundReason, refund_id: refundId, payment_intent: piId,
+      });
+      if (!refundRecorded) return json(502, { ok: false, error: "db_error", refund_recorded: false });
+      await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        partial_refund_cents: (typeof row.partial_refund_cents === "number" ? row.partial_refund_cents : 0) + refundCents,
+      });
+      log("issue_partial_refund", { booking: bookingId, amount_cents: refundCents, refund_id: refundId });
+      return json(200, { ok: true, decision: "partial_refund", amount_cents: refundCents, refund_id: refundId });
     }
 
     if (action === "issue_request_payment" || action === "issue_arrange_reclean" || action === "issue_waive_charge" || action === "issue_renotify") {

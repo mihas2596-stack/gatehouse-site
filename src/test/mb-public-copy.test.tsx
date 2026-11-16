@@ -49,7 +49,10 @@ describe("MB-25 — social meta promises no fixed recurring slot", () => {
 describe("MB-26 — Terms §7 points damage claims at §10.2 (48h)", () => {
   it("§7 names the 48-hour damage-claims window", () => {
     render(<MemoryRouter><Terms /></MemoryRouter>);
-    expect(screen.getByText(/Damage claims by email follow Section 10\.2 \(48 hours\)/)).toBeInTheDocument();
+    // "Report Property Damage" appears in §7 and §10.2; the 48h
+    // window wording lives in §7.
+    expect(screen.getAllByText(/Report Property Damage/).length).toBe(2);
+    expect(screen.getAllByText(/within 48 hours of service completion/).length).toBe(2);
   });
 });
 
@@ -141,7 +144,9 @@ describe("LB-29 — /save-card formats the visit price to two decimals", () => {
       json: async () => ({ ok: true, booking: { first: "1.5", service: "Standard", date: "2026-11-15" } }),
     }));
     render(<MemoryRouter initialEntries={["/save-card?bt=v2.test-token"]}><SaveCard /></MemoryRouter>);
-    expect(await screen.findByText("$1.50")).toBeInTheDocument();
+    // $1.50 now renders twice: the booking summary and the payment
+    // summary's pinned visit price (spec 2.1) — both two decimals.
+    expect((await screen.findAllByText("$1.50")).length).toBe(2);
     expect(screen.queryByText("$1.5")).not.toBeInTheDocument();
   });
 });

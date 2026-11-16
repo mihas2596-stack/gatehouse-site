@@ -130,27 +130,29 @@ describe("shared issue form on /visit (idea 3)", () => {
   it("offers a photo upload and a room dropdown from the report's real rooms", async () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Report an issue" }));
-    expect(await screen.findByLabelText("Which room?")).toBeInTheDocument();
-    const select = screen.getByLabelText("Which room?") as HTMLSelectElement;
-    const options = Array.from(select.options).map((o) => o.textContent);
-    expect(options).toEqual(["Choose a room…", "Kitchen", "Bathrooms", "Other / not listed"]);
+    // 16.11.2026 (spec 3.1): several rooms at once (checkboxes over
+    // the report's REAL rooms plus "Other / not listed").
+    expect(await screen.findByText("Which areas need attention?")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Kitchen" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Bathrooms" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Other / not listed" })).toBeInTheDocument();
     // No hardcoded room names that don't match the report.
-    expect(options).not.toContain("Bathroom");
-    expect(options).not.toContain("Bedroom");
-    expect(options).not.toContain("Living areas");
-    expect(screen.getByLabelText(/Add a photo/)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Bathroom" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Bedroom" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Living areas" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Photos/)).toBeInTheDocument();
     expect(screen.getByText(/compressed on your phone before sending/)).toBeInTheDocument();
   });
 
   it("an oversized photo is compressed and attached, the message still goes through", async () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Report an issue" }));
-    const input = await screen.findByLabelText(/Add a photo/) as HTMLInputElement;
+    const input = await screen.findByLabelText(/Photos/) as HTMLInputElement;
     const big = new File(["x".repeat(1_000_001)], "big.jpg", { type: "image/jpeg" });
     fireEvent.change(input, { target: { files: [big] } });
     // No "too large" note: the photo was compressed instead of dropped.
     await waitFor(() => expect(screen.queryByText(/That photo is large/)).not.toBeInTheDocument());
-    fireEvent.change(await screen.findByLabelText("What isn't right?"), { target: { value: "The floor is still dirty." } });
+    fireEvent.change(await screen.findByLabelText("What did you notice?"), { target: { value: "The floor is still dirty." } });
     fireEvent.click(screen.getByRole("button", { name: "Send issue — pause payment" }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]["action"]).toBe("issue");
@@ -162,7 +164,7 @@ describe("shared issue form on /visit (idea 3)", () => {
     reportError = "issue_window_expired";
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Report an issue" }));
-    fireEvent.change(await screen.findByLabelText("What isn't right?"), { target: { value: "The floor is still dirty." } });
+    fireEvent.change(await screen.findByLabelText("What did you notice?"), { target: { value: "The floor is still dirty." } });
     fireEvent.click(screen.getByRole("button", { name: "Send issue — pause payment" }));
     await waitFor(() => expect(screen.getByText(/The 24-hour window for reporting an issue on this report has passed/)).toBeInTheDocument());
     expect(screen.getByText(/email us at hello@gatehousehomecleaning.com/)).toBeInTheDocument();

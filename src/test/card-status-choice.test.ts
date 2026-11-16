@@ -108,7 +108,7 @@ describe("saved-card choice (item 6)", () => {
   it("POST confirms the chosen card and reports its brand/last4", async () => {
     const res = response();
     await handler(
-      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", payment_method_id: "pm_2" } },
+      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", consent: true, consent_text_version: "2026-11-16-v1", payment_method_id: "pm_2" } },
       res,
     );
     expect(res.code).toBe(200);
@@ -120,7 +120,7 @@ describe("saved-card choice (item 6)", () => {
   it("POST refuses a card that is no longer on the customer", async () => {
     const res = response();
     await handler(
-      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", payment_method_id: "pm_999" } },
+      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", consent: true, consent_text_version: "2026-11-16-v1", payment_method_id: "pm_999" } },
       res,
     );
     expect(res.code).toBe(409);
@@ -130,7 +130,7 @@ describe("saved-card choice (item 6)", () => {
   it("POST without a choice refuses a blind confirm when several cards exist", async () => {
     const res = response();
     await handler(
-      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card" } },
+      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", consent: true, consent_text_version: "2026-11-16-v1" } },
       res,
     );
     expect(res.code).toBe(409);

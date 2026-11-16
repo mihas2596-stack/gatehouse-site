@@ -333,7 +333,7 @@ describe("report issue with room + photo", () => {
     expect(ownerMail).toBeTruthy();
     expect(ownerMail?.["attachments"]).toBeTruthy();
     const clientMail = resendCalls.find((c) => (c["to"] as string[]).includes("client@example.com"));
-    expect(String(clientMail?.["text"])).toContain("paused payment for this visit");
+    expect(String(clientMail?.["text"])).toContain("Your payment is on hold while we review it.");
     // view carries grouped photo items with rooms
     const view = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

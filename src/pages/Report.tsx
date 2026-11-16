@@ -52,6 +52,15 @@ type ReportData = {
   // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
+  // 16.11.2026 (spec 1.2/1.3/1.5/1.6): kind, rooms, active details
+  // request (with its ET deadline), active reduced offer, partial
+  // refunds and the new-consent flag.
+  issue_kind?: string;
+  issue_rooms?: string[];
+  details_request?: { requested_at: string; deadline_at: string | null; deadline_et: string | null; request_text: string; active: boolean } | null;
+  offer?: { amount_cents: number; amount: string | null; status: string } | null;
+  partial_refund_cents?: number | null;
+  consent_given?: boolean;
   no_photo_zones?: string[];
   receipt_sent?: boolean;
   checklist?: {
@@ -116,7 +125,9 @@ const Report = () => {
   const [followupOpen, setFollowupOpen] = useState(false);
   const [followupMsg, setFollowupMsg] = useState("");
   const [issueText, setIssueText] = useState("");
-  const [issueRoom, setIssueRoom] = useState("");
+  const [issueRooms, setIssueRooms] = useState<string[]>([]);
+  const [issueKind, setIssueKind] = useState<"issue" | "damage">("issue");
+  const [damageOpen, setDamageOpen] = useState(false);
   const [failedPhotos, setFailedPhotos] = useState<Set<string>>(new Set());
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
@@ -249,7 +260,10 @@ const Report = () => {
             // instead of charging for a newer report.
             seen_publication_id: action === "approve" ? (data?.publication_id ?? undefined) : undefined,
             reason: action === "issue" ? issueText : undefined,
-            room: action === "issue" ? issueRoom : undefined,
+            room: action === "issue" ? issueRooms[0] : undefined,
+            rooms: action === "issue" ? issueRooms : undefined,
+            kind: action === "issue" ? issueKind : undefined,
+            via_details_request: action === "issue" && data?.details_request?.active ? true : undefined,
             photo: action === "issue" && issuePhoto ? issuePhoto : undefined,
           }),
         });
@@ -302,7 +316,8 @@ const Report = () => {
           setFollowupMsg("Thanks — we've added this to your open issue and emailed the team. We'll reply within one business day.");
           setFollowupOpen(false);
           setIssueText("");
-          setIssueRoom("");
+          setIssueRooms([]);
+          setIssueKind("issue");
           setIssuePhoto("");
           setIssuePhotoNote("");
         } else if (j.already === true) {
@@ -312,9 +327,11 @@ const Report = () => {
           setActionError("We couldn't save your note — please email hello@gatehousehomecleaning.com and we'll add it to your issue.");
         } else {
           setIssueOpen(false);
+          setDamageOpen(false);
           setFollowupOpen(false);
           setIssueText("");
-          setIssueRoom("");
+          setIssueRooms([]);
+          setIssueKind("issue");
           setIssuePhoto("");
           setIssuePhotoNote("");
         }
@@ -606,7 +623,7 @@ const Report = () => {
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
               </p>
             )}
-            {!issueOpen ? (
+            {!issueOpen && !damageOpen ? (
               <>
               {/* B: the visit has not happened yet — no Approve for a
                   future visit. The server rejects an early Approve;
@@ -622,8 +639,11 @@ const Report = () => {
                   {busy ? "Processing payment…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
                 </Button>
                 )}
-                <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
+                <Button variant="outline" size="lg" disabled={busy} onClick={() => { setIssueKind("issue"); setIssueOpen(true); }}>
                   Report an issue
+                </Button>
+                <Button variant="outline" size="lg" disabled={busy} onClick={() => { setIssueKind("damage"); setDamageOpen(true); }}>
+                  Report Property Damage
                 </Button>
               </div>
               {!isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
@@ -631,17 +651,17 @@ const Report = () => {
             ) : (
               <IssueForm
                 rooms={reportRooms}
-                room={issueRoom}
-                onRoom={setIssueRoom}
+                roomsSelected={issueRooms}
+                onRooms={setIssueRooms}
                 text={issueText}
                 onText={setIssueText}
                 photoNote={issuePhotoNote}
                 onPhotoPick={onPhotoPick}
                 busy={busy}
-                submitLabel="Send — pause payment"
-                helper="Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one business day."
+                submitLabel={damageOpen ? "Report damage" : "Send — pause payment"}
+                helper={damageOpen ? "Damage claims must be reported within 48 hours of service completion. Photos help, but are not required to report." : "Sending this blocks the automatic charge for this visit. We&apos;ll confirm by email and reply within one business day."}
                 onSubmit={() => void act("issue")}
-                onCancel={() => setIssueOpen(false)}
+                onCancel={() => { setIssueOpen(false); setDamageOpen(false); }}
               />
             )}
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
@@ -692,7 +712,7 @@ const Report = () => {
         )}
 
         {!loading && data?.state === "issue_open" && (
-          <div>
+          <div id="issue" className="scroll-mt-24">
             <div className="text-center">
               <AlertTriangle className="w-16 h-16 text-sage-foreground mx-auto mb-6" strokeWidth={1.5} aria-hidden="true" />
               <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">
@@ -713,7 +733,7 @@ const Report = () => {
                 {data.issue_decision?.resolution ? (
                   <> Our response: “{data.issue_decision.resolution}”</>
                 ) : null}
-                {data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
+                {data.issue_rooms && data.issue_rooms.length > 0 ? <> You flagged: <strong>{data.issue_rooms.join(", ")}</strong>.</> : data.issue_room ? <> You flagged: <strong>{data.issue_room}</strong>.</> : null}
                 {data.issue_reason && data.issue_source === "client" ? (
                   <> You told us: “{data.issue_reason}”</>
                 ) : null}
@@ -723,6 +743,16 @@ const Report = () => {
                   Re-clean agreed for <strong>{data.reclean_date || data.resolution?.reclean_date}</strong>
                   {data.reclean_cleaner_name ? <> — {data.reclean_cleaner_name}</> : null}.
                 </p>
+              ) : null}
+              {data.details_request?.active && data.details_request.deadline_et ? (
+                <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left" role="status">
+                  <p className="text-base font-semibold">We asked for one more detail</p>
+                  <p className="mt-1 text-sm text-foreground">
+                    Your payment{data.amount ? ` of ${data.amount}` : ""} is on hold until <strong>{data.details_request.deadline_et}</strong>.
+                    {data.details_request.request_text ? <> We asked: “{data.details_request.request_text}”</> : null}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">Use Add Details below, or reply to our email. Your payment stays on hold while we wait.</p>
+                </div>
               ) : null}
               {summary}
               {actionError && (
@@ -739,7 +769,7 @@ const Report = () => {
                   : "Nothing will be charged while your issue is open — the automatic charge is blocked for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
               </p>
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
+                {busy ? "Processing payment…" : data.offer ? `Approve & Pay ${data.offer.amount}` : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
               </Button>
               <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>
             </div>
@@ -749,19 +779,19 @@ const Report = () => {
               )}
               {!followupOpen ? (
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setFollowupOpen(true)}>
-                  {data.issue_decision?.decision === "payment_requested" ? "My issue isn't resolved" : "Add more details"}
+                  {data.issue_decision ? "I Still Need Help" : data.details_request?.active ? "Add Details" : "Add more details"}
                 </Button>
               ) : (
                 <IssueForm
                   rooms={reportRooms}
-                  room={issueRoom}
-                  onRoom={setIssueRoom}
+                  roomsSelected={issueRooms}
+                  onRooms={setIssueRooms}
                   text={issueText}
                   onText={setIssueText}
                   photoNote={issuePhotoNote}
                   onPhotoPick={onPhotoPick}
                   busy={busy}
-                  submitLabel="Send"
+                  submitLabel={data.details_request?.active ? "Add Details" : data.issue_decision ? "I Still Need Help" : "Send"}
                   helper="This adds to your open issue — the charge stays blocked, and we'll reply within one business day."
                   onSubmit={() => void act("issue")}
                   onCancel={() => setFollowupOpen(false)}
@@ -912,9 +942,17 @@ const Report = () => {
                 <button
                   type="button"
                   className="text-xs underline text-muted-foreground/70"
-                  onClick={() => setPaidIssueOpen(true)}
+                  onClick={() => { setIssueKind("issue"); setPaidIssueOpen(true); }}
                 >
                   Something wasn&apos;t right? Report an issue with this visit
+                </button>
+                <span className="mx-2 text-xs text-muted-foreground">·</span>
+                <button
+                  type="button"
+                  className="text-xs underline text-muted-foreground/70"
+                  onClick={() => { setIssueKind("damage"); setPaidIssueOpen(true); }}
+                >
+                  Report property damage
                 </button>
               </>
             ) : (
@@ -929,14 +967,14 @@ const Report = () => {
                 )}
                 <IssueForm
                   rooms={reportRooms}
-                  room={issueRoom}
-                  onRoom={setIssueRoom}
+                  roomsSelected={issueRooms}
+                  onRooms={setIssueRooms}
                   text={issueText}
                   onText={setIssueText}
                   photoNote={issuePhotoNote}
                   onPhotoPick={onPhotoPick}
                   busy={busy}
-                  submitLabel="Send"
+                  submitLabel={issueKind === "damage" ? "Report damage" : "Send"}
                   helper="This adds to your visit record — we'll review it and reply by email within one business day."
                   onSubmit={() => void act("issue")}
                   onCancel={() => setPaidIssueOpen(false)}

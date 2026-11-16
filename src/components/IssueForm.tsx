@@ -3,16 +3,17 @@
 // at module level so typing never remounts it and loses focus. The uses
 // differ only in the submit label and the helper text.
 //
-// The room picker lists only the report's REAL rooms plus "Other / not
-// listed" — never a hardcoded room list (a hardcoded "Bathroom" next to
-// the report's "Bathrooms" / "Bathroom 1" would let the client pick a
-// room that isn't in the report).
+// 16.11.2026 (spec 1.2/3.1): several rooms at once (checkboxes over the
+// report's REAL rooms plus "Other / not listed" — never a hardcoded room
+// list, so the client cannot pick a room that isn't in the report). A
+// short description is enough ("The kitchen floor is still sticky.");
+// photos stay optional.
 import { Button } from "@/components/ui/button";
 
 export type IssueFormProps = {
   rooms: string[];
-  room: string;
-  onRoom: (v: string) => void;
+  roomsSelected: string[];
+  onRooms: (v: string[]) => void;
   text: string;
   onText: (v: string) => void;
   photoNote: string;
@@ -24,26 +25,41 @@ export type IssueFormProps = {
   onCancel: () => void;
 };
 
-export function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhotoPick, busy, submitLabel, helper, onSubmit, onCancel }: IssueFormProps) {
+export function IssueForm({ rooms, roomsSelected, onRooms, text, onText, photoNote, onPhotoPick, busy, submitLabel, helper, onSubmit, onCancel }: IssueFormProps) {
+  const toggleRoom = (r: string) => {
+    onRooms(roomsSelected.includes(r) ? roomsSelected.filter((x) => x !== r) : [...roomsSelected, r]);
+  };
   return (
     <div className="text-left">
-      <label htmlFor="issue-room" className="block font-semibold mb-2">
-        Which room?
-      </label>
-      <select
-        id="issue-room"
-        value={room}
-        onChange={(e) => onRoom(e.target.value)}
-        className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
-      >
-        <option value="">Choose a room…</option>
-        {rooms.map((r) => (
-          <option key={r} value={r}>{r}</option>
-        ))}
-        <option value="Other">Other / not listed</option>
-      </select>
+      <fieldset className="mb-3">
+        <legend className="block font-semibold mb-2">
+          Which areas need attention?
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          {rooms.map((r) => (
+            <label key={r} className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={roomsSelected.includes(r)}
+                onChange={() => toggleRoom(r)}
+                className="h-5 w-5 accent-primary"
+              />
+              {r}
+            </label>
+          ))}
+          <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={roomsSelected.includes("Other")}
+              onChange={() => toggleRoom("Other")}
+              className="h-5 w-5 accent-primary"
+            />
+            Other / not listed
+          </label>
+        </div>
+      </fieldset>
       <label htmlFor="issue-text" className="block font-semibold mb-2">
-        What isn&apos;t right?
+        What did you notice?
       </label>
       <textarea
         id="issue-text"
@@ -51,11 +67,11 @@ export function IssueForm({ rooms, room, onRoom, text, onText, photoNote, onPhot
         onChange={(e) => onText(e.target.value)}
         rows={4}
         maxLength={500}
-        placeholder="Tell us what we missed — the automatic charge is blocked for this visit."
+        placeholder="A short description is enough. For example, ‘The kitchen floor is still sticky.’"
         className="w-full rounded-xl border border-border bg-card p-3 text-sm mb-3"
       />
       <label htmlFor="issue-photo" className="block font-semibold mb-2">
-        Add a photo <span className="font-normal text-muted-foreground">(optional)</span>
+        Photos <span className="font-normal text-muted-foreground">(optional)</span>
       </label>
       <input
         id="issue-photo"

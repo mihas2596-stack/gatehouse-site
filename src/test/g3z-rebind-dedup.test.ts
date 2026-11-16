@@ -77,7 +77,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(
 const token = () => signBooking(LINK_SECRET, {
   bid: BID, email: "client@example.com", name: "Casey Client",
 }).token;
-const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token() } });
+const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token(), consent: true, consent_text_version: "2026-11-16-v1" } });
 
 describe("G3: rebind carries the dedup markers", () => {
   it("re-asserts gh_last_payment / gh_fee_last_payment and still clears other lifecycle keys", async () => {
