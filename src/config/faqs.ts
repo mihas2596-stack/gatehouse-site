@@ -42,7 +42,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if I'm not happy with the cleaning?",
     group: "Quality",
-    a: "Missed something on the checklist? We fix it free within 72 hours after you report it. Tap Report an issue on your photo report page within 24 hours after it is sent. This immediately blocks automatic payment. You can also email hello@gatehousehomecleaning.com; email needs a manual response, so use the report button for an immediate payment block. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
+    a: "Missed something on the checklist? We fix it free within 72 hours after you report it — one free re-clean visit for the confirmed missed work in the areas you flagged. Tap Report an issue on your photo report page within 24 hours after it is sent. You can flag several areas at once, and a short description is enough — for example, “The kitchen floor is still sticky.” Photos are optional. You can also email hello@gatehousehomecleaning.com, and a reply to our email counts the same as the form; email needs a manual response, so use the report button for an immediate payment block. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
   },
   {
     q: "Who will be cleaning my home?",
@@ -78,6 +78,6 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if something gets damaged?",
     group: "Quality",
-    a: "Send a written claim with photos to hello@gatehousehomecleaning.com within 48 hours of service completion. We'll review it with you directly. Two things worth knowing before you book: under our Terms, claims made after 48 hours can't be accepted, and disputes we can't resolve together go to binding arbitration (AAA) instead of court — see our Terms of Service for the details.",
+    a: "Use Report Property Damage on your report page, or send a written claim to hello@gatehousehomecleaning.com, within 48 hours of service completion — the report-page path is available even after the visit has been paid. Photos help us review the claim but are not required to report it. We'll review it with you directly. Two things worth knowing before you book: under our Terms, claims made after 48 hours can't be accepted, and disputes we can't resolve together go to binding arbitration (AAA) instead of court — see our Terms of Service for the details.",
   },
 ];

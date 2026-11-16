@@ -382,8 +382,15 @@ describe("issue decision actions", () => {
     expect(rows[0]["issue_ever"]).toBe(true);
     const clientMail = resendCalls.find((c) => c.to.includes("client@example.com"));
     expect(clientMail?.subject).toBe("We received your cleaning concern");
-    expect(clientMail?.text).toContain("We've received your message and paused payment for this visit.");
-    expect(clientMail?.text).toContain("We aim to provide a decision within 72 hours.");
-    expect(clientMail?.text).toContain("Your card won't be charged unless you approve the report.");
+    // 16.11.2026 (spec 3.2): letter 1 verbatim text, with a View Your
+    // Issue link straight to the open issue, and a journaled Resend id.
+    expect(clientMail?.text).toContain("We received your concern about your");
+    expect(clientMail?.text).toContain("Your payment is on hold while we review it.");
+    expect(clientMail?.text).toContain("We aim to respond within one business day.");
+    expect(clientMail?.text).toContain("If we need more information, we\u2019ll tell you what would help and give you a deadline to reply.");
+    expect(clientMail?.text).toContain("You can check the status using View Your Issue or reply to this email.");
+    expect(clientMail?.text).toContain("#issue");
+    const ack = events.find((e) => e.event === "issue_ack_email_sent");
+    expect(ack?.["detail"]).toMatchObject({ email_id: "email-1" });
   });
 });

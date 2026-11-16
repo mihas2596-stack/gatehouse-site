@@ -64,7 +64,7 @@ describe("report page issue states", () => {
     expect(screen.getByText(/Our response:/)).toBeInTheDocument();
     expect(screen.getByText(/“The original amount stays due.”/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve & Pay $149" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "My issue isn't resolved" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "I Still Need Help" })).toBeInTheDocument();
   });
 
   it("re-clean arranged: re-clean copy, no payment-request wording", async () => {

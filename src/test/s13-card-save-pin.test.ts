@@ -79,7 +79,7 @@ describe("S13: card-save pins stripe_customer_id on the booking row", () => {
     installFetch();
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler({ method: "POST", headers: {}, body: { bt: token() } } as any, res as any);
+    await handler({ method: "POST", headers: {}, body: { bt: token(), consent: true, consent_text_version: "2026-11-16-v1" } } as any, res as any);
     expect(res.code).toBe(200);
     expect(typeof res.body["url"]).toBe("string");
     expect(supabasePatches).toHaveLength(1);
@@ -93,7 +93,7 @@ describe("S13: card-save pins stripe_customer_id on the booking row", () => {
     installFetch({ reuseCustomer: { id: "cus_existing" } });
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler({ method: "POST", headers: {}, body: { bt: token() } } as any, res as any);
+    await handler({ method: "POST", headers: {}, body: { bt: token(), consent: true, consent_text_version: "2026-11-16-v1" } } as any, res as any);
     expect(res.code).toBe(200);
     expect(supabasePatches).toHaveLength(1);
     expect(supabasePatches[0].body["stripe_customer_id"]).toBe("cus_existing");
@@ -103,7 +103,7 @@ describe("S13: card-save pins stripe_customer_id on the booking row", () => {
     installFetch();
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler({ method: "POST", headers: {}, body: { name: NAME, email: EMAIL } } as any, res as any);
+    await handler({ method: "POST", headers: {}, body: { name: NAME, email: EMAIL, consent: true, consent_text_version: "2026-11-16-v1" } } as any, res as any);
     expect(res.code).toBe(200);
     expect(supabasePatches).toHaveLength(0);
   });
@@ -112,7 +112,7 @@ describe("S13: card-save pins stripe_customer_id on the booking row", () => {
     installFetch({ patchFails: true });
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await handler({ method: "POST", headers: {}, body: { bt: token() } } as any, res as any);
+    await handler({ method: "POST", headers: {}, body: { bt: token(), consent: true, consent_text_version: "2026-11-16-v1" } } as any, res as any);
     expect(res.code).toBe(200);
     expect(typeof res.body["url"]).toBe("string");
     expect(supabasePatches).toHaveLength(1);

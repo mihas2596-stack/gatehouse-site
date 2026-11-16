@@ -1,5 +1,5 @@
 // TASK 1 (fix6): the owner panel's open-issues block and decision
-// buttons — Request payment / Arrange re-clean / Waive charge /
+// buttons — Request payment / Schedule Free Re-clean / Waive charge /
 // Send reminder — with a payment confirmation before Request payment.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -93,7 +93,7 @@ describe("owner open issues", () => {
     // panel's "Latest decision" line, and in the events timeline.
     expect(screen.getAllByText(/The original amount stays due\./).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("button", { name: "Request payment" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Arrange re-clean" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule Free Re-clean" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Waive charge" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send reminder" })).toBeInTheDocument();
     // The old single "Resolve issue" button is gone.

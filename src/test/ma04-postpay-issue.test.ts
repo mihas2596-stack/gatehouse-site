@@ -186,8 +186,9 @@ describe("MA-04/MA-05: post-payment complaint sets the row flags", () => {
     expect(currentMeta["gh_issue_open"]).not.toBe("1");
     expect(currentMeta["gh_postpay_issue"]).toBe("1");
     expect(dbEvents.some((e) => e.event === "postpay_issue")).toBe(true);
-    // Owner email went out; the complaint is visible in triage now.
-    expect(resendCalls).toHaveLength(1);
+    // Owner email + client acknowledgement (letter 1, paid variant);
+    // the complaint is visible in triage now.
+    expect(resendCalls).toHaveLength(2);
     const view = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await reportHandler({ method: "GET", headers: {}, query: { bt } } as any, view as any);
@@ -235,29 +236,29 @@ describe("MA-04: second complaint is a follow-up, not a silent drop", () => {
   it("second complaint journals issue_followup and emails owner + client", async () => {
     const first = await postIssue({ reason: "found a streak", room: "Kitchen" });
     expect(first.code).toBe(200);
-    expect(resendCalls).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2);
     const second = await postIssue({ reason: "and the oven is still dirty", room: "Kitchen" });
     expect(second.code).toBe(200);
     expect(second.body["already"]).toBe(true);
     expect(second.body["followup_recorded"]).toBe(true);
     const followup = dbEvents.find((e) => e.event === "issue_followup");
     expect(followup?.detail?.["reason"]).toBe("and the oven is still dirty");
-    // Owner follow-up + client confirmation on top of the first email.
-    expect(resendCalls).toHaveLength(3);
+    // Owner follow-up + client confirmation on top of the first two.
+    expect(resendCalls).toHaveLength(4);
     expect(dbRows[0]["issue_open"]).toBe(true);
   });
 
   it("a follow-up whose journal write fails records nothing and sends no email", async () => {
     const first = await postIssue({ reason: "found a streak", room: "Kitchen" });
     expect(first.code).toBe(200);
-    expect(resendCalls).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2);
     failEventPost = true;
     const second = await postIssue({ reason: "and the oven is still dirty", room: "Kitchen" });
     expect(second.code).toBe(200);
     expect(second.body["already"]).toBe(true);
     expect(second.body["followup_recorded"]).toBeUndefined();
     expect(dbEvents.some((e) => e.event === "issue_followup")).toBe(false);
-    expect(resendCalls).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2);
   });
 
   it("an empty second complaint stays a plain already:true (pre-payment parity)", async () => {
@@ -267,7 +268,7 @@ describe("MA-04: second complaint is a follow-up, not a silent drop", () => {
     expect(second.code).toBe(200);
     expect(second.body["already"]).toBe(true);
     expect(second.body["followup_recorded"]).toBeUndefined();
-    expect(resendCalls).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2);
   });
 });
 

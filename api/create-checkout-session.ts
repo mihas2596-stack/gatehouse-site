@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
 import { carryDedupMarkers } from "./_stripe_customer.js";
+import { CONSENT_TEXT_VERSION } from "./_consent.js";
 
 type BookingPayload = {
   bid: string;
@@ -192,6 +193,9 @@ const SessionRequestSchema = z.object({
   // generated server-side and returned as a token).
   name: z.string().trim().min(1).max(255).optional(),
   email: z.string().trim().min(1).max(255).optional(),
+  // 16.11.2026 (spec 2.1): the card-save consent checkbox — required.
+  consent: z.boolean().optional(),
+  consent_text_version: z.string().max(50).optional(),
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -330,6 +334,13 @@ export default async function handler(req: Req, res: Res) {
         errors[k] = (v && v[0]) || "This field is not valid.";
       }
       return json(400, { ok: false, errors });
+    }
+    // 16.11.2026 (spec 2.1): no Checkout Session without the client's
+    // explicit consent checkbox (current text version). The consent
+    // travels in the session metadata so the return leg (card-status
+    // GET) can journal it with via "checkout_session".
+    if (parsed.data.consent !== true || parsed.data.consent_text_version !== CONSENT_TEXT_VERSION) {
+      return json(400, { ok: false, error: "consent_required" });
     }
 
     // Resolve booking identity. A signed token (from the booking flow) is
@@ -552,6 +563,8 @@ export default async function handler(req: Req, res: Res) {
         cancel_url: `${base}/save-card?canceled=1&bt=${encodeURIComponent(bt)}`,
         "metadata[source]": "gatehouse_save_card",
         "metadata[gh_booking_id]": bookingId,
+        "metadata[gh_consent]": "true",
+        "metadata[gh_consent_text_version]": CONSENT_TEXT_VERSION,
       }, `setup_${bookingId}`);
       if (!session.ok || typeof session.data["url"] !== "string") {
         logErr("checkout_session", `stripe ${session.status}: ${stripeErrMsg(session.data)}`);

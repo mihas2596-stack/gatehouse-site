@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PaymentSummary from "@/components/PaymentSummary";
+import { CONSENT_TEXT_VERSION, consentText } from "@/lib/consent";
 import SEO from "@/components/SEO";
 import { formatDateLong, formatArrivalWindow } from "@/lib/utils";
 import { trackFunnel } from "@/lib/measurement";
@@ -37,6 +38,10 @@ export default function SaveCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [selectedCard, setSelectedCard] = useState("");
+  // 16.11.2026 (spec 2.1): the card-save consent checkbox. No card
+  // is saved or confirmed without it — the server refuses both calls
+  // with consent_required, and the buttons stay disabled until ticked.
+  const [consentChecked, setConsentChecked] = useState(false);
   const load = useCallback(async () => {
     if (!bt && !returning) { setStatus("ready"); return; }
     if (returning && !sessionId) { setStatus("unknown"); return; }
@@ -58,8 +63,12 @@ export default function SaveCard() {
     if (busy || !bt) return;
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/card-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bt, action: "confirm_card", ...(selectedCard ? { payment_method_id: selectedCard } : {}) }) });
+      const r = await fetch("/api/card-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bt, action: "confirm_card", consent: true, consent_text_version: CONSENT_TEXT_VERSION, ...(selectedCard ? { payment_method_id: selectedCard } : {}) }) });
       const data = await r.json();
+      if (data?.error === "consent_required") {
+        setError("Please tick the authorization box above before confirming your card.");
+        return;
+      }
       if (r.ok === false || !data.ok) {
         // The chosen card disappeared between the list and the
         // confirm (deleted, or moved): re-read the list and say so.
@@ -86,8 +95,13 @@ export default function SaveCard() {
     setErrors(fields); if (Object.keys(fields).length) return;
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt } : { name: name.trim(), email: email.trim() }) });
+      const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt, consent: true, consent_text_version: CONSENT_TEXT_VERSION } : { name: name.trim(), email: email.trim(), consent: true, consent_text_version: CONSENT_TEXT_VERSION }) });
       const data = await r.json();
+      if (data?.error === "consent_required") {
+        setError("Please tick the authorization box above before adding your card.");
+        setBusy(false);
+        return;
+      }
       if (!r.ok || !data.ok || typeof data.url !== "string") throw new Error("checkout");
       window.location.href = data.url;
     } catch { setError("We couldn't open Stripe's secure page. Your request is saved — please try again."); setBusy(false); }
@@ -172,8 +186,14 @@ export default function SaveCard() {
               all is the safe "add a card" fallback — never a blind
               confirm of an unknown card. The payment block stands
               above the button in both scenarios. */}
-          {choice && !blocked && <div className="mb-6"><PaymentSummary showCard /></div>}
-          {choice && cardIdentified && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy} onClick={() => void confirm()}>{busy ? "Confirming…" : `Use ${cardLabel} for this booking`}</Button>}
+          {choice && !blocked && <div className="mb-6"><PaymentSummary showCard amount={booking?.first ? fmtMoney(booking.first) : undefined} /></div>}
+          {choice && (
+            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-4 text-left">
+              <input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-primary" />
+              <span className="text-base leading-relaxed">{consentText(booking?.first ? fmtMoney(booking.first) : "this visit's price")}</span>
+            </label>
+          )}
+          {choice && cardIdentified && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy || !consentChecked} onClick={() => void confirm()}>{busy ? "Confirming…" : `Use ${cardLabel} for this booking`}</Button>}
           {choice && !cardIdentified && cardOptions.length > 0 && (
             <div className="mb-3 text-left" role="radiogroup" aria-label="Choose a card for this visit">
               {cardOptions.map((c) => {
@@ -190,7 +210,7 @@ export default function SaveCard() {
               })}
             </div>
           )}
-          {choice && !cardIdentified && cardOptions.length > 0 && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy || !selectedCard} onClick={() => void confirm()}>{busy ? "Confirming…" : "Use selected card"}</Button>}
+          {choice && !cardIdentified && cardOptions.length > 0 && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy || !selectedCard || !consentChecked} onClick={() => void confirm()}>{busy ? "Confirming…" : "Use selected card"}</Button>}
           {choice && !cardIdentified && cardOptions.length === 0 && (
             <>
               <p className="mb-4 text-base">We couldn&rsquo;t identify a saved card for this visit. Add a card to continue.</p>
@@ -199,14 +219,18 @@ export default function SaveCard() {
           )}
           {hasCard && !entry && <Button variant={done ? "link" : "outline"} size="lg" className={done ? "underline" : "w-full mb-4"} onClick={() => setEntry(true)}>Add a different card</Button>}
           {showForm && <>
-            {!blocked && <div className="mb-6"><PaymentSummary showCard /></div>}
+            {!blocked && <div className="mb-6"><PaymentSummary showCard amount={booking?.first ? fmtMoney(booking.first) : undefined} /></div>}
+            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-4 text-left">
+              <input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-primary" />
+              <span className="text-base leading-relaxed">{consentText(booking?.first ? fmtMoney(booking.first) : "this visit's price")}</span>
+            </label>
             {params.get("canceled") === "1" && <p className="mb-6">Card entry was cancelled. You can try again when you're ready.</p>}
             <form onSubmit={submit} className="text-left space-y-4" noValidate>
               {!bt && <>
                 <div><label className="block font-medium mb-1" htmlFor="sc-name">Full name</label><input className="w-full rounded-lg border p-3 text-base" id="sc-name" value={name} autoComplete="name" onChange={(e) => setName(e.target.value)} aria-invalid={!!errors.name} aria-describedby={errors.name ? "sc-name-error" : undefined} />{errors.name && <p id="sc-name-error" className="text-destructive">{errors.name}</p>}</div>
                 <div><label className="block font-medium mb-1" htmlFor="sc-email">Email</label><input className="w-full rounded-lg border p-3 text-base" id="sc-email" type="email" value={email} autoComplete="email" onChange={(e) => setEmail(e.target.value)} aria-invalid={!!errors.email} aria-describedby={errors.email ? "sc-email-error" : undefined} />{errors.email && <p id="sc-email-error" className="text-destructive">{errors.email}</p>}</div>
               </>}
-              <Button type="submit" variant="hero" size="lg" className="w-full" disabled={busy}>{busy ? "Opening Stripe's secure page…" : "Add card"}</Button>
+              <Button type="submit" variant="hero" size="lg" className="w-full" disabled={busy || !consentChecked}>{busy ? "Opening Stripe's secure page…" : "Add card"}</Button>
               <p className="text-base text-muted-foreground text-center">You'll enter your card securely on Stripe. No Link account is required.</p>
             </form>
           </>}

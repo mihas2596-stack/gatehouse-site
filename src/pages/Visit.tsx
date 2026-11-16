@@ -119,6 +119,12 @@ type ReportData = {
   // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
+  // 16.11.2026 (spec 1.2/1.3/1.5/1.6): kind, rooms, active details
+  // request and active reduced offer — same payload as /report.
+  issue_kind?: string;
+  issue_rooms?: string[];
+  details_request?: { requested_at: string; deadline_at: string | null; deadline_et: string | null; request_text: string; active: boolean } | null;
+  offer?: { amount_cents: number; amount: string | null; status: string } | null;
   // The owner's latest decision on the issue (payment_requested /
   // reclean / waived, with its text) and the resolution record
   // (resolved_at + reclean_date) — same payload as /report.
@@ -172,7 +178,8 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   // leads to the existing confirm_card flow (/save-card).
   const [needsCardChoice, setNeedsCardChoice] = useState(false);
   const [issueText, setIssueText] = useState("");
-  const [issueRoom, setIssueRoom] = useState("");
+  const [issueRooms, setIssueRooms] = useState<string[]>([]);
+  const [issueKind, setIssueKind] = useState<"issue" | "damage">("issue");
   const [showIssue, setShowIssue] = useState(false);
   const [issuePhoto, setIssuePhoto] = useState("");
   const [issuePhotoNote, setIssuePhotoNote] = useState("");
@@ -324,7 +331,8 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         if (payload.action === "issue") {
           setShowIssue(false);
           setIssueText("");
-          setIssueRoom("");
+          setIssueRooms([]);
+          setIssueKind("issue");
           setIssuePhoto("");
           setIssuePhotoNote("");
         }
@@ -541,6 +549,9 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           {rep.issue_reason && rep.issue_source === "client" ? (
             <> You told us: “{rep.issue_reason}”.</>
           ) : null}
+          {rep.details_request?.active && rep.details_request.deadline_et ? (
+            <> We asked for one more detail — your payment{rep.amount ? ` of ${rep.amount}` : ""} is on hold until <strong>{rep.details_request.deadline_et}</strong>. Use Add Details on your report page, or reply to our email.</>
+          ) : null}
         </p>
       )}
       {rep.state === "issue_open" && rep.issue_decision && (
@@ -565,7 +576,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           {/* B: no Approve for a future visit (see the note above). */}
           {!isFutureVisit && (
           <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-            {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
+            {busy ? "Processing payment…" : rep.offer ? `Approve & Pay ${rep.offer.amount}` : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
           </Button>
           )}
           <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
@@ -658,8 +669,11 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             {busy ? "Processing payment…" : rep.amount ? `Approve & pay ${rep.amount}` : "Approve & pay"}
           </Button>
           )}
-          <Button variant="outline" disabled={busy} onClick={() => setShowIssue((v) => !v)}>
+          <Button variant="outline" disabled={busy} onClick={() => { setIssueKind("issue"); setShowIssue((v) => !v); }}>
             Report an issue
+          </Button>
+          <Button variant="outline" disabled={busy} onClick={() => { setIssueKind("damage"); setShowIssue(true); }}>
+            Report Property Damage
           </Button>
         </div>
       )}
@@ -673,16 +687,16 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         <div className="mt-4">
           <IssueForm
             rooms={reportRooms}
-            room={issueRoom}
-            onRoom={setIssueRoom}
+            roomsSelected={issueRooms}
+            onRooms={setIssueRooms}
             text={issueText}
             onText={setIssueText}
             photoNote={issuePhotoNote}
             onPhotoPick={onPhotoPick}
             busy={busy}
-            submitLabel="Send issue — pause payment"
-            helper="Sending this blocks the automatic charge for this visit. We'll confirm by email and reply within one business day."
-            onSubmit={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}
+            submitLabel={issueKind === "damage" ? "Report damage" : "Send issue — pause payment"}
+            helper={issueKind === "damage" ? "Damage claims must be reported within 48 hours of service completion. Photos help, but are not required to report." : "Sending this blocks the automatic charge for this visit. We'll confirm by email and reply within one business day."}
+            onSubmit={() => void act({ action: "issue", reason: issueText.trim(), room: issueRooms[0] ?? "", rooms: issueRooms, kind: issueKind, ...(rep?.details_request?.active ? { via_details_request: true } : {}) })}
             onCancel={() => setShowIssue(false)}
           />
         </div>

@@ -346,6 +346,11 @@ const Owner = () => {
   // TASK 1 (fix6): the owner's decision text for the open issue —
   // shown to the client as "Our response".
   const [decisionResolution, setDecisionResolution] = useState("");
+  // 16.11.2026 (spec 1.3/1.5): details-request text, reduced-offer
+  // amount (dollars) and partial-refund amount (dollars).
+  const [detailsRequestText, setDetailsRequestText] = useState("");
+  const [offerDollars, setOfferDollars] = useState("");
+  const [refundDollars, setRefundDollars] = useState("");
   // Task 4: the re-clean date for "Arrange re-clean" (optional —
   // empty keeps the old behaviour, a re-clean with no date).
   const [recleanDate, setRecleanDate] = useState("");
@@ -1810,6 +1815,34 @@ const Owner = () => {
                             Mark resolved
                           </Button>
                         </div>
+                        <label htmlFor="issue-partial-refund" className="block text-sm font-medium mt-4 mb-1">Partial refund ($, optional)</label>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            id="issue-partial-refund"
+                            type="number"
+                            min="1"
+                            step="0.01"
+                            value={refundDollars}
+                            onChange={(e) => setRefundDollars(e.target.value)}
+                            placeholder="e.g. 25"
+                            className="w-28 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={acting !== "" || !refundDollars.trim() || !(parseFloat(refundDollars) > 0)}
+                            onClick={() => {
+                              void (async () => {
+                                const cents = Math.round(parseFloat(refundDollars) * 100);
+                                if (!(await askConfirm("Partial refund", `Refund $${refundDollars} to the client for this paid visit? The visit stays paid — only the money moves.`, "Refund"))) return;
+                                void runAction("Partial refund", { action: "issue_partial_refund", booking_id: v.booking_id, amount_cents: cents, reason: decisionResolution }, () => setRefundDollars(""));
+                              })();
+                            }}
+                          >
+                            Refund part of the payment
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">A partial refund moves money back through Stripe. The visit stays paid; the refund is recorded in the activity log.</p>
                         <p className="text-xs text-muted-foreground mt-1">Marking resolved closes the issue here. No email is sent by this button — tell the client yourself what you decided (refund or re-clean).</p>
                       </>
                     ) : (
@@ -1853,10 +1886,10 @@ const Owner = () => {
                         size="sm"
                         disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
-                          void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
+                          void runAction("Schedule Free Re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
                         }}
                       >
-                        Arrange re-clean
+                        Schedule Free Re-clean
                       </Button>
                       <Button
                         variant="outline"
@@ -1871,6 +1904,61 @@ const Owner = () => {
                       >
                         Waive charge
                       </Button>
+                    <div className="mt-4">
+                      <label htmlFor="issue-details-request" className="block text-sm font-medium mb-1">Ask for one detail (new-consent visits only, once per visit)</label>
+                      <textarea
+                        id="issue-details-request"
+                        value={detailsRequestText}
+                        onChange={(e) => setDetailsRequestText(e.target.value)}
+                        rows={2}
+                        maxLength={1000}
+                        placeholder="e.g. Which room is still sticky, and what did you notice there?"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">The client gets 48 hours to reply. Their payment stays on hold while we wait — nothing is charged automatically after the deadline; you decide manually.</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={acting !== "" || !detailsRequestText.trim()}
+                          onClick={() => {
+                            void runAction("Request details", { action: "issue_request_details", booking_id: v.booking_id, details_request: detailsRequestText }, () => setDetailsRequestText(""));
+                          }}
+                        >
+                          Request details
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <label htmlFor="issue-offer-amount" className="block text-sm font-medium mb-1">Offer a reduced amount ($)</label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          id="issue-offer-amount"
+                          type="number"
+                          min="1"
+                          step="0.01"
+                          value={offerDollars}
+                          onChange={(e) => setOfferDollars(e.target.value)}
+                          placeholder="e.g. 99"
+                          className="w-28 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={acting !== "" || !offerDollars.trim() || !(parseFloat(offerDollars) > 0)}
+                          onClick={() => {
+                            void (async () => {
+                              const cents = Math.round(parseFloat(offerDollars) * 100);
+                              if (!(await askConfirm("Offer reduced amount", `Offer the client $${offerDollars} instead of ${money(v.amount_cents)}? Nothing is charged now — the client approves the reduced amount to pay.`, "Offer reduced amount"))) return;
+                              void runAction("Offer reduced amount", { action: "issue_offer_reduced_amount", booking_id: v.booking_id, amount_cents: cents, resolution: decisionResolution }, () => setOfferDollars(""));
+                            })();
+                          }}
+                        >
+                          Offer reduced amount
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">The client approves the reduced amount on their report page — a lower amount is never charged without that explicit approval.</p>
+                    </div>
                       {latestDecision && (latestDecision.decision === "payment_requested" || latestDecision.decision === "reclean") && (
                         <Button
                           variant="outline"

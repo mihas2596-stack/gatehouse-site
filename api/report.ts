@@ -19,11 +19,13 @@
 // issue is open is the client withdrawing their own issue — allowed, and it
 // re-checks happen server-side at charge time anyway.
 
-import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
+import { createHmac, timingSafeEqual, createDecipheriv, createCipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom, latestIssueDecision, everWaivedDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail } from "./_owner_email.js";
+import { detailsRequestActive, formatDeadlineET, hasNewConsent } from "./_consent.js";
+import { reportReplyAddress } from "./_report_reply.js";
 
 import { chargeVisit, reopenIssueAfterUnsettledCharge } from "./_payment_obligation.js";
 import { listCustomerCards } from "./card-status.js";
@@ -57,6 +59,24 @@ type BookingRow = {
   // (migration 20261112_reclean_fields). Absent (not yet migrated) =
   // undefined at runtime, which reads as "no re-clean arranged" and
   // the journal (issue_resolved / issue_decision) is the fallback.
+  // 16.11.2026 (spec 1.3/1.5/1.6/2.1): details request, offer,
+  // partial refund, damage path and card-save consent (migration
+  // 20261116_issue_details_consent). Absent (not yet migrated) =
+  // undefined at runtime, which reads as "no request / no offer /
+  // no new consent" — the journal is the fallback.
+  consent_text_version?: string | null;
+  consent_given_at?: string | null;
+  issue_kind?: string | null;
+  issue_rooms?: unknown;
+  details_requested_at?: string | null;
+  details_deadline_at?: string | null;
+  details_request_text?: string | null;
+  details_email_id?: string | null;
+  issue_ack_email_id?: string | null;
+  offer_amount_cents?: number | null;
+  offer_status?: string | null;
+  partial_refund_cents?: number | null;
+  damage_reported_at?: string | null;
   reclean_date?: string | null;
   reclean_cleaner_id?: string | null;
   reclean_cleaner_name?: string | null;
@@ -317,6 +337,52 @@ function decryptBookingPayload(secret: string, token: string): BookingPayload | 
   } catch {
     return null;
   }
+}
+
+function encryptBookingPayload(secret: string, payload: BookingPayload): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", tokenKey(secret), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v2.${Buffer.concat([iv, tag, ct]).toString("base64url")}`;
+}
+
+const bookingLinkSecret = (stripeKey: string): string =>
+  process.env["BOOKING_LINK_SECRET"] || stripeKey;
+
+// 16.11.2026: the latest ACTIVE reduced-amount offer — a payment_offered
+// event with offer_status "offered" and no later accept/decline. The
+// journal is the authority; the row columns are only a mirror.
+function latestActiveOffer(events: BookingEvent[]): { amount_cents: number; created_at: string } | null {
+  const offered = events.find((e) => e.event === "payment_offered");
+  if (!offered) return null;
+  if (offered.detail?.["offer_status"] !== "offered") return null;
+  const amount = offered.detail?.["offer_amount_cents"];
+  if (typeof amount !== "number" || amount <= 0) return null;
+  const superseded = events.some(
+    (e) =>
+      (e.event === "offer_accepted" || e.event === "offer_declined") &&
+      e.created_at >= offered.created_at,
+  );
+  return superseded ? null : { amount_cents: amount, created_at: offered.created_at };
+}
+
+// 16.11.2026: the rooms of the open issue — row jsonb first, then the
+// journal event, then the legacy single room.
+function issueRoomsOf(row: BookingRow | null, events: BookingEvent[]): string[] {
+  const raw = row?.issue_rooms;
+  if (Array.isArray(raw)) return raw.filter((r): r is string => typeof r === "string").slice(0, 20);
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((r): r is string => typeof r === "string").slice(0, 20);
+    } catch { /* fall through */ }
+  }
+  const opened = events.find((e) => e.event === "issue_opened" || e.event === "postpay_issue");
+  const rooms = opened?.detail?.["rooms"];
+  if (Array.isArray(rooms)) return rooms.filter((r): r is string => typeof r === "string").slice(0, 20);
+  const single = typeof opened?.detail?.["room"] === "string" ? (opened.detail["room"] as string) : "";
+  return single ? [single] : [];
 }
 
 function verifyBooking(
@@ -598,6 +664,36 @@ export default async function handler(req: Req, res: Res) {
       JSON.stringify({ requestId, step, error: err instanceof Error ? err.message : String(err) }),
     );
 
+  // 16.11.2026 (spec 3.2): the client acknowledgement email (letter 1)
+  // is sent through this sender so its Resend id is captured and
+  // journaled (issue_ack_email_sent) — the fire-and-forget sendMail
+  // below cannot return an id.
+  const sendResend = async (payload: Record<string, unknown>): Promise<string | null> => {
+    const key = process.env["RESEND_API_KEY"];
+    if (!key) return null;
+    try {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!resp.ok) return null;
+      const j = (await resp.json()) as { id?: string };
+      return typeof j.id === "string" && j.id ? j.id : null;
+    } catch {
+      return null;
+    }
+  };
+  // The "View Your Issue" link for letters 1 and 2 — straight to the
+  // open issue on the report page (anchor #issue).
+  const issueLink = (secretKey: string, bid: string, email: string, name: string): string => {
+    const token = encryptBookingPayload(bookingLinkSecret(secretKey), {
+      bid, email, name, ts: Math.floor(Date.now() / 1000),
+    });
+    return `https://www.gatehousehomecleaning.com/report?bt=${token}#issue`;
+  };
+
   try {
     const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
     if (!STRIPE_SECRET_KEY) {
@@ -614,6 +710,9 @@ export default async function handler(req: Req, res: Res) {
     let action = "";
     let reason = "";
     let room = "";
+    let rooms: string[] = [];
+    let kind = "";
+    let viaDetailsRequest = false;
     let photoB64 = "";
     let seenPublicationId = "";
     if (req.method === "GET") {
@@ -624,6 +723,18 @@ export default async function handler(req: Req, res: Res) {
       action = typeof body["action"] === "string" ? body["action"] : "";
       reason = typeof body["reason"] === "string" ? body["reason"].slice(0, 500) : "";
       room = typeof body["room"] === "string" ? body["room"].slice(0, 60) : "";
+      // 16.11.2026 (spec 1.2/3.1): several rooms (checkboxes), a damage
+      // kind, and the Add-Details flag for answering a details request.
+      rooms = Array.isArray(body["rooms"])
+        ? (body["rooms"] as unknown[])
+            .filter((r): r is string => typeof r === "string")
+            .map((r) => r.slice(0, 60))
+            .slice(0, 20)
+        : room
+          ? [room]
+          : [];
+      kind = body["kind"] === "damage" ? "damage" : "";
+      viaDetailsRequest = body["via_details_request"] === true;
       seenPublicationId = typeof body["seen_publication_id"] === "string" ? body["seen_publication_id"] : "";
       // Optional photo from the client (data URL or raw base64, ~1MB cap).
       // A failed or oversized photo NEVER blocks the issue itself.
@@ -915,7 +1026,37 @@ export default async function handler(req: Req, res: Res) {
         // moved AND the complaint is still open (RA07 honest state).
         paid: row?.status === "paid" || meta["gh_state"] === "paid",
         issue_reason: meta["gh_issue_open"] === "1" ? meta["gh_issue_reason"] ?? "" : "",
-        // C10: "client" = the client's own words ("You told us");
+        // 16.11.2026 (spec 1.2/1.5/1.6/3.1): kind, rooms, active
+        // details request (with its ET deadline), active reduced
+        // offer and partial-refund total for the client pages.
+        issue_kind: row?.issue_kind ?? (typeof latestEvent(events, "issue_opened")?.detail?.["kind"] === "string" ? (latestEvent(events, "issue_opened")?.detail?.["kind"] as string) : "issue"),
+        issue_rooms: issueRoomsOf(row, events),
+        details_request: (() => {
+          const reqEv = events.find((e) => e.event === "issue_details_requested");
+          const requestedAt = row?.details_requested_at ?? (reqEv ? reqEv.created_at : null);
+          if (!requestedAt) return null;
+          const deadlineAt = row?.details_deadline_at
+            ?? (typeof reqEv?.detail?.["deadline_at"] === "string" ? (reqEv.detail["deadline_at"] as string) : null);
+          return {
+            requested_at: requestedAt,
+            deadline_at: deadlineAt,
+            deadline_et: deadlineAt ? formatDeadlineET(deadlineAt) : null,
+            request_text: row?.details_request_text
+              ?? (typeof reqEv?.detail?.["request"] === "string" ? (reqEv.detail["request"] as string) : ""),
+            active: detailsRequestActive(
+              { details_requested_at: requestedAt, details_deadline_at: deadlineAt },
+              events,
+            ),
+          };
+        })(),
+        offer: (() => {
+          const offer = latestActiveOffer(events);
+          return offer
+            ? { amount_cents: offer.amount_cents, amount: money(String(offer.amount_cents)), status: "offered" }
+            : null;
+        })(),
+        partial_refund_cents: row?.partial_refund_cents ?? null,
+        consent_given: row ? hasNewConsent(row) : false,        // C10: "client" = the client's own words ("You told us");
         // "operator" or "" = an operator note — never render it as
         // the client's words.
         issue_source: meta["gh_issue_open"] === "1" ? meta["gh_issue_source"] ?? "" : "",
@@ -1120,9 +1261,13 @@ export default async function handler(req: Req, res: Res) {
       const postpaySentAt = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
       const postpayReportEnds = reportIssueWindowEnds(postpaySentAt);
       const postpayDamageEnds = damageClaimWindowEnds(row, postpaySentAt);
-      const postpayTimely =
-        (postpayReportEnds !== null && Date.now() <= postpayReportEnds) ||
-        (postpayDamageEnds !== null && Date.now() <= postpayDamageEnds);
+      // 16.11.2026 (spec 1.6): a damage report is judged ONLY by the
+      // 48h damage window (end of the visit day); a missed-item report
+      // keeps the either-window rule below.
+      const postpayTimely = kind === "damage"
+        ? (postpayDamageEnds !== null && Date.now() <= postpayDamageEnds)
+        : (postpayReportEnds !== null && Date.now() <= postpayReportEnds) ||
+          (postpayDamageEnds !== null && Date.now() <= postpayDamageEnds);
       const postpayEnforceable = postpayReportEnds !== null || postpayDamageEnds !== null;
       if (postpayEnforceable && !postpayTimely) {
         res.status(409).json({
@@ -1149,8 +1294,13 @@ export default async function handler(req: Req, res: Res) {
           `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
         );
         if (vrows[0]) {
+          if (kind === "damage") {
+            await logEvent(vrows[0].id, payload.bid, "client", "damage_reported", {
+              room: room.slice(0, 60), rooms, reason: reason.slice(0, 200), kind: "damage",
+            });
+          }
           await logEvent(vrows[0].id, payload.bid, "client", "postpay_issue", {
-            room: room.slice(0, 60), reason: reason.slice(0, 200),
+            room: room.slice(0, 60), rooms, reason: reason.slice(0, 200), kind: kind || "issue",
           });
           // MA-04/MA-05: the row flags are what the owner queue, the
           // charge gates and both photo-retention filters read — the
@@ -1169,6 +1319,13 @@ export default async function handler(req: Req, res: Res) {
             return;
           }
           await storePostpayPhoto(vrows[0].id);
+          // 16.11.2026: tolerant row mirror of the damage/rooms facts
+          // (migration 20261116 pending = best-effort, never blocking).
+          await dbUpdate("gh_visits", `id=eq.${vrows[0].id}`, {
+            issue_kind: kind || "issue",
+            issue_rooms: rooms,
+            ...(kind === "damage" ? { damage_reported_at: new Date().toISOString() } : {}),
+          });
         }
       }
       if (RESEND_PP) {
@@ -1179,8 +1336,7 @@ export default async function handler(req: Req, res: Res) {
             body: JSON.stringify({
               from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
               to: [ownerNotificationEmail()],
-              subject: `POST-PAYMENT issue reported — ${customer.name ?? payload.bid}`,
-              text:
+              subject: `POST-PAYMENT issue reported — ${customer.name ?? payload.bid}`,               text:
                 `A client reported an issue AFTER the visit was paid.\n\n` +
                 `Booking: ${payload.bid}\nRoom: ${room}\nWhat they said: ${reason}\n` +
                 (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) +
@@ -1193,6 +1349,35 @@ export default async function handler(req: Req, res: Res) {
             signal: AbortSignal.timeout(15000),
           });
         } catch { /* the issue is recorded server-side regardless */ }
+      }
+      // 16.11.2026 (spec 3.2, paid variant): the client acknowledgement
+      // for a post-payment concern — the payment already moved, so the
+      // text says so and promises a review, not a pause.
+      if (RESEND_PP && customer.email) {
+        const paidAmount = money(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "");
+        const paidFirstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
+        const ackId = await sendResend({
+          from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+          to: [customer.email],
+          reply_to: reportReplyAddress(row?.id) ?? "hello@gatehousehomecleaning.com",
+          subject: "We received your cleaning concern",
+          text:
+            `Hi ${paidFirstName},
+
+We received your concern about your ${payload.date ?? "recent"} cleaning. ` +
+            `Your payment${paidAmount ? ` of ${paidAmount}` : ""} has already been processed. ` +
+            `We’ll review your concern and follow up with next steps.
+
+` +
+            `You can check the status using View Your Issue or reply to this email.\n\nView Your Issue: ${issueLink(STRIPE_SECRET_KEY, payload.bid, customer.email, customer.name ?? "")}
+
+Gatehouse Home Cleaning
+`,
+        });
+        if (ackId && row) {
+          await logEvent(row.id, payload.bid, "system", "issue_ack_email_sent", { email_id: ackId, paid: true });
+          await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_ack_email_id: ackId });
+        }
       }
       res.status(200).json({ ...view(), postpay: true });
       return;
@@ -1366,6 +1551,11 @@ export default async function handler(req: Req, res: Res) {
       // Row-backed bookings charge through the single shared flow
       // (RA01-RA13): pinned amount, journal version, atomic claim,
       // reconcile-before-create, verified paid write.
+      // 16.11.2026 (spec 1.5): accepting a reduced-amount offer is an
+      // Approve with the offer amount — chargeVisit charges it only
+      // when a payment_offered event with exactly that amount is
+      // active; anything else is price_review_required there.
+      const activeOffer = latestActiveOffer(events);
       if (row) {
         const outcome = await chargeVisit({
           secretKey: STRIPE_SECRET_KEY,
@@ -1375,6 +1565,7 @@ export default async function handler(req: Req, res: Res) {
           paymentMethod,
           source: "client_approve",
           allowedBases: ["client_approved"],
+          requestedAmountCents: activeOffer ? activeOffer.amount_cents : null,
           seenPublicationId: seenPublicationId || null,
           nowMs: Date.now(),
           deps: {
@@ -1397,6 +1588,12 @@ export default async function handler(req: Req, res: Res) {
           },
         });
         if (outcome.outcome === "paid") {
+          if (activeOffer) {
+            await logEvent(row.id, payload.bid, "client", "offer_accepted", {
+              offer_amount_cents: activeOffer.amount_cents,
+            });
+            await dbUpdate("gh_visits", `id=eq.${row.id}`, { offer_status: "accepted" });
+          }
           Object.assign(meta, { gh_state: "paid", gh_last_payment: outcome.payment_intent });
           if (outcome.receipt_sent) {
             meta["gh_receipt_email_id"] = meta["gh_receipt_email_id"] || "sent";
@@ -1507,12 +1704,28 @@ export default async function handler(req: Req, res: Res) {
       // The old code returned already:true here and the message never
       // reached anyone.
       let followupRecorded = false;
+      let detailsProvided = false;
       if (reason.trim()) {
         followupRecorded = row
           ? await logEventStrict(row.id, payload.bid, "client", "issue_followup", {
-              reason: reason.slice(0, 200), room: room.slice(0, 60),
+              reason: reason.slice(0, 200), room: room.slice(0, 60), rooms,
+              ...(viaDetailsRequest ? { via_details_request: true } : {}),
             })
           : true;
+        // 16.11.2026 (spec 1.3): an Add Details answer to an active
+        // details request is journaled as issue_details_provided and
+        // clears the deadline — judged by receipt time (created_at),
+        // not by when the owner reads it. The payment pause is KEPT:
+        // nothing here re-arms the timer or closes the issue.
+        if (followupRecorded && viaDetailsRequest && row
+          && detailsRequestActive(row, events)) {
+          detailsProvided = await logEventStrict(row.id, payload.bid, "client", "issue_details_provided", {
+            via: "add_details_form",
+          });
+          if (detailsProvided) {
+            await dbUpdate("gh_visits", `id=eq.${row.id}`, { details_deadline_at: null });
+          }
+        }
         if (followupRecorded) {
           await sendMail({
             from: "Gatehouse site <info@gatehousehomecleaning.com>",
@@ -1544,7 +1757,7 @@ export default async function handler(req: Req, res: Res) {
           }
         }
       }
-      res.status(200).json({ ...view(), already: true, ...(followupRecorded ? { followup_recorded: true } : {}) });
+      res.status(200).json({ ...view(), already: true, ...(followupRecorded ? { followup_recorded: true } : {}), ...(detailsProvided ? { details_provided: true } : {}) });
       return;
     }
     // C26 / Terms §7 + §10.2 (MB-13/DA-40): the "Report an issue"
@@ -1561,9 +1774,12 @@ export default async function handler(req: Req, res: Res) {
     const issueSentAt = row?.report_sent_at ?? meta["gh_report_sent_at"] ?? null;
     const issueWindowEnds = reportIssueWindowEnds(issueSentAt);
     const issueDamageEnds = damageClaimWindowEnds(row, issueSentAt);
-    const issueTimely =
-      (issueWindowEnds !== null && Date.now() <= issueWindowEnds) ||
-      (issueDamageEnds !== null && Date.now() <= issueDamageEnds);
+    // 16.11.2026 (spec 1.6): a damage report is judged ONLY by the
+    // 48h damage window (end of the visit day).
+    const issueTimely = kind === "damage"
+      ? (issueDamageEnds !== null && Date.now() <= issueDamageEnds)
+      : (issueWindowEnds !== null && Date.now() <= issueWindowEnds) ||
+        (issueDamageEnds !== null && Date.now() <= issueDamageEnds);
     const issueEnforceable = issueWindowEnds !== null || issueDamageEnds !== null;
     // True only when the 24h report window has already closed and the
     // complaint is saved by the 48h damage window.
@@ -1589,9 +1805,17 @@ export default async function handler(req: Req, res: Res) {
     // If either durable write fails, the client gets an error and
     // retries — never a 200 for a complaint that was not recorded.
     if (row) {
+      // 16.11.2026 (spec 1.6): a damage report is its own journal event
+      // (damage_reported) AND an issue_opened with window "damage".
+      if (kind === "damage") {
+        await logEvent(row.id, payload.bid, "client", "damage_reported", {
+          reason: reason.slice(0, 200), room: room.slice(0, 60), rooms, kind: "damage",
+        });
+      }
       const journaled = await logEventStrict(row.id, payload.bid, "client", "issue_opened", {
-        reason: reason.slice(0, 200), room: room.slice(0, 60),
-        window: viaDamageWindow ? "damage" : "report",
+        reason: reason.slice(0, 200), room: room.slice(0, 60), rooms,
+        kind: kind || "issue",
+        window: kind === "damage" || viaDamageWindow ? "damage" : "report",
       });
       const flagged = journaled
         ? await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true })
@@ -1601,6 +1825,13 @@ export default async function handler(req: Req, res: Res) {
         res.status(502).json({ requestId, ok: false, error: "db_error" });
         return;
       }
+      // 16.11.2026: tolerant row mirror of kind/rooms/damage
+      // (migration 20261116 pending = best-effort, never blocking).
+      await dbUpdate("gh_visits", `id=eq.${row.id}`, {
+        issue_kind: kind || "issue",
+        issue_rooms: rooms,
+        ...(kind === "damage" ? { damage_reported_at: new Date().toISOString() } : {}),
+      });
     }
     const upd = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
       "metadata[gh_state]": "issue_open",
@@ -1673,24 +1904,42 @@ export default async function handler(req: Req, res: Res) {
           ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
           : {}),
       });
-      // Client: the confirmation promised on the page. Subject and
-      // body are the spec's "Issue received" text verbatim; the
+      // Client: letter 1 (spec 3.2, verbatim text). The
       // payment-in-flight variant keeps its honest separate wording
-      // (the spec does not cover a charge already moving).
+      // (the spec does not cover a charge already moving). The Resend
+      // id is captured and journaled as issue_ack_email_sent; the
+      // reply_to is the per-visit address when configured, else hello@.
       if (customer.email) {
-        await sendMail({
-          from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-          to: [customer.email],
-          reply_to: "hello@gatehousehomecleaning.com",
-          subject: paymentInFlight
-            ? "We received your report — a payment was already in progress"
-            : "We received your cleaning concern",
-          text:
-            `Hi ${firstName},\n\n${paymentInFlight ? "A payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right.\n\nWe'll reply within one business day." : "We've received your message and paused payment for this visit.\n\nWe'll review your concern and reply within one business day. We aim to provide a decision within 72 hours.\n\nYour card won't be charged unless you approve the report."}\n\n` +
-            (room ? `Room: ${room}\n` : "") +
-            (reason ? `What you told us: ${reason}\n\n` : "\n") +
-            `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,
-        });
+        if (paymentInFlight) {
+          await sendMail({
+            from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+            to: [customer.email],
+            reply_to: "hello@gatehousehomecleaning.com",
+            subject: "We received your report — a payment was already in progress",
+            text:
+              `Hi ${firstName},\n\nA payment was already in progress when your report arrived, so it may still complete — we will review it right away and make it right (a re-clean or a refund) if the visit wasn't right.\n\nWe'll reply within one business day.\n\n` +
+              (room ? `Room: ${room}\n` : "") +
+              (reason ? `What you told us: ${reason}\n\n` : "\n") +
+              `You can check the status any time on your report page — the same link as before.\n\nGatehouse Home Cleaning\n`,
+          });
+        } else {
+          const serviceDateLabel = payload.date || row?.visit_date || "";
+          const ackId = await sendResend({
+            from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
+            to: [customer.email],
+            reply_to: reportReplyAddress(row?.id) ?? "hello@gatehousehomecleaning.com",
+            subject: "We received your cleaning concern",
+            text:
+              `Hi ${firstName},\n\nWe received your concern about your ${serviceDateLabel ? `${serviceDateLabel} ` : ""}cleaning. ` +
+              `Your payment is on hold while we review it. We aim to respond within one business day. ` +
+              `If we need more information, we\u2019ll tell you what would help and give you a deadline to reply. ` +
+              `You can check the status using View Your Issue or reply to this email.\n\nView Your Issue: ${issueLink(STRIPE_SECRET_KEY, payload.bid, customer.email, customer.name ?? "")}\n\nGatehouse Home Cleaning\n`,
+          });
+          if (ackId && row) {
+            await logEvent(row.id, payload.bid, "system", "issue_ack_email_sent", { email_id: ackId });
+            await dbUpdate("gh_visits", `id=eq.${row.id}`, { issue_ack_email_id: ackId });
+          }
+        }
       }
     }
     res.status(200).json(paymentInFlight ? { ...view(), payment_in_flight: true } : view());

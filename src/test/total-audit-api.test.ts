@@ -71,7 +71,7 @@ beforeEach(()=>{
  }));
 });
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();vi.restoreAllMocks();vi.useRealTimers();});
-const cardPost=async()=>{const r=response();await cardHandler({method:"POST",headers:{},body:{action:"confirm_card",bt:token()}},r as never);return r;};
+const cardPost=async()=>{const r=response();await cardHandler({method:"POST",headers:{},body:{action:"confirm_card",bt:token(),consent: true, consent_text_version: "2026-11-16-v1"}},r as never);return r;};
 const cron=async()=>{const r=response();await cronHandler({method:"GET",headers:{authorization:"Bearer audit-cron"}},r as never);return r;};
 
 
