@@ -102,15 +102,21 @@ describe("owner detail simplification", () => {
     expect(within(summary).getByText(/Parking\/building notes: Gate code 1234; park in the driveway/)).toBeInTheDocument();
   });
 
-  it("shows the phone as compact inline links (requested)", async () => {
+  it("shows the phone as separate 44px buttons (requested)", async () => {
     await openVisit("Dana Requested");
+    // Cabinets audit (fix 4): the compact line is the same three
+    // actions as the full view, as separate 44px buttons — the old
+    // inline text links wrapped into ~17px fragments.
     expect(screen.queryByRole("link", { name: "Call client" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Text client" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy number" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "(770) 555-0134" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Call client Dana Requested" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Text client Dana Requested" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    const call = screen.getByRole("link", { name: "Call client Dana Requested" });
+    expect(call.className).toContain("min-h-[44px]");
+    const text = screen.getByRole("link", { name: "Text client Dana Requested" });
+    expect(text.className).toContain("min-h-[44px]");
+    const copy = screen.getByRole("button", { name: "Copy number" });
+    expect(copy.className).toContain("min-h-[44px]");
     // The mailto link and "Update client phone" stay.
     expect(screen.getByRole("link", { name: "dana@example.com" })).toBeInTheDocument();
     expect(screen.getByText("Update client phone")).toBeInTheDocument();

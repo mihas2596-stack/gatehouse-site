@@ -169,7 +169,7 @@ describe("P7: waive / return_report refuse while a charge is in flight", () => {
 
   it("waive succeeds once the charge has settled (status back to report_sent)", async () => {
     rows[0]["status"] = "report_sent";
-    const r = await call({ action: "issue_waive_charge", booking_id: BID });
+    const r = await call({ action: "issue_waive_charge", booking_id: BID, resolution: "We've waived the charge for this visit — nothing will be charged." });
     expect(r.body["ok"]).toBe(true);
     expect(rows[0]["issue_open"]).toBe(false);
     expect(events.some((e) => e.event === "issue_decision" && e.detail?.["decision"] === "waived")).toBe(true);

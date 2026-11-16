@@ -2705,10 +2705,10 @@ export default async function handler(req: Req, res: Res) {
       }
       // Request payment and Arrange re-clean must say what the
       // decision IS — the text is what the client reads as "Our
-      // response". Waive has a fixed default.
-      const decisionText = resolution || (decision === "waived"
-        ? "We've waived the charge for this visit — nothing will be charged."
-        : "");
+      // response". Waive is held to the same rule (confirmed owner
+      // decision 16.11): a waive with no response is refused, so the
+      // owner can never tap it blindly.
+      const decisionText = resolution;
       if (!decisionText) {
         return json(400, { ok: false, error: "resolution_required" });
       }

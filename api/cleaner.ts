@@ -527,14 +527,22 @@ async function view(visit: VisitRow, restricted = false) {
     `visit_id=eq.${visit.id}&order=created_at.asc&limit=200`,
   )).filter((p) => isCleanerPhotoKind(p.kind));
   const withUrls = await Promise.all(
-    photos.map(async (p) => ({
-      id: p.id,
-      room: p.room,
-      kind: p.kind,
-      note: p.note,
-      created_at: p.created_at,
-      url: await storageSignDownload(p.storage_path, CLEANER_PHOTO_URL_TTL_SECONDS),
-    })),
+    photos.map(async (p) => {
+      const url = await storageSignDownload(p.storage_path, CLEANER_PHOTO_URL_TTL_SECONDS);
+      // Cabinets audit (fix 6): the grid loads a small variant; the
+      // full size is requested only for zoom. A failed transform sign
+      // falls back to the full URL.
+      const thumb = url ? await storageSignDownload(p.storage_path, CLEANER_PHOTO_URL_TTL_SECONDS, { width: 480 }) : null;
+      return {
+        id: p.id,
+        room: p.room,
+        kind: p.kind,
+        note: p.note,
+        created_at: p.created_at,
+        url,
+        ...(thumb ? { thumb_url: thumb } : {}),
+      };
+    }),
   );
   const events = await strictSelect<{ detail: { note?: string } | null }>(
     "gh_events",

@@ -15,19 +15,19 @@ export default function ClientContact({ phone, label = "Client phone", compact =
     if (!navigator.clipboard?.writeText) { setCopyUnavailable(true); return; }
     void navigator.clipboard.writeText(phone).then(() => { setCopied(true); setCopyUnavailable(false); }).catch(() => setCopyUnavailable(true));
   };
-  // Compact: one inline line of text links (owner cabinet) instead of
-  // three large buttons. The cleaner cabinet keeps the buttons.
+  // Compact: the same three actions as the full view, as separate
+  // 44px buttons (cabinets audit fix 4) — the old inline links
+  // wrapped into ~17px fragments on a phone.
   if (compact) {
     return <div className="text-base">
       <p>
         <span className="font-semibold">{label}:</span> <a className="underline" href={`tel:${target}`}>{formatted}</a>
-        {" · "}
-        <a className="underline text-sm" href={`tel:${target}`}>Call {person}</a>
-        {" · "}
-        <a className="underline text-sm" href={`sms:${target}`}>Text {person}</a>
-        {" · "}
-        <button type="button" className="underline text-sm" onClick={copy}>Copy</button>
       </p>
+      <div className="flex flex-wrap gap-2 mt-2">
+        <a className="inline-flex min-h-[44px] items-center rounded-lg border border-border px-4 font-semibold" href={`tel:${target}`}>Call {person}</a>
+        <a className="inline-flex min-h-[44px] items-center rounded-lg border border-border px-4 font-semibold" href={`sms:${target}`}>Text {person}</a>
+        <button type="button" className="min-h-[44px] rounded-lg border border-border px-4" onClick={copy}>{copied ? "Copied" : "Copy number"}</button>
+      </div>
       {copied && <p role="status">Phone number copied.</p>}
       {copyUnavailable && <p role="status">Select the phone number above to copy it.</p>}
     </div>;

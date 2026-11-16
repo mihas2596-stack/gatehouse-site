@@ -22,7 +22,7 @@ type ReportStateName =
   | "waived"
   | "refunded";
 
-type PhotoItem = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
+type PhotoItem = { url: string | null; thumb_url?: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 
 type ReportData = {
   ok: boolean;
@@ -53,6 +53,10 @@ type ReportData = {
   // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
+  // Cabinets audit (fix 1): photos the client attached to the
+  // complaint. Null = unknown — the page shows no attachment line
+  // rather than a possibly-wrong "none".
+  issue_photo_count?: number | null;
   no_photo_zones?: string[];
   receipt_sent?: boolean;
   checklist?: {
@@ -446,7 +450,7 @@ const Report = () => {
             photoItems={data.photo_items}
             checklist={data.checklist}
             excludedRooms={data.no_photo_zones ?? []}
-            renderPhoto={(p: PhotoItem) => (
+            renderPhoto={(p: PhotoItem, _i, ctx) => (
               <figure>
                 {p.unavailable || !p.url ? (
                   unavailablePhoto(p)
@@ -465,18 +469,30 @@ const Report = () => {
                     </button>
                   </div>
                 ) : (
-                  <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
+                  <ZoomablePhoto
+                    src={p.url}
+                    alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                    photos={ctx.photos}
+                    index={ctx.index}
+                  >
                     <img
-                      src={p.url}
+                      // Cabinets audit (fix 6): the grid loads the
+                      // small variant; the full size is requested
+                      // only for zoom. A failed thumbnail falls back
+                      // to the full URL instead of a broken tile.
+                      src={p.thumb_url ?? p.url}
                       alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
                       loading="lazy"
-                      onError={() => setFailedPhotos((prev) => new Set(prev).add(p.url))}
+                      onError={(e) => {
+                        if (p.thumb_url && e.currentTarget.src !== p.url) e.currentTarget.src = p.url;
+                        else setFailedPhotos((prev) => new Set(prev).add(p.url));
+                      }}
                       className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                     />
                   </ZoomablePhoto>
                 )}
                 <figcaption className="text-xs text-muted-foreground mt-1">
-                  <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                  <span className="font-semibold text-foreground">{ctx.frameLabel}</span>
                   {p.note ? <> — {p.note}</> : null}
                 </figcaption>
               </figure>
@@ -486,7 +502,13 @@ const Report = () => {
       ) : data?.photos && data.photos.length > 0 ? (
         <div className="grid grid-cols-2 gap-3 mb-6">
           {data.photos.map((src, i) => (
-            <ZoomablePhoto key={i} src={src} alt={`Cleaning photo ${i + 1}`}>
+            <ZoomablePhoto
+              key={i}
+              src={src}
+              alt={`Cleaning photo ${i + 1}`}
+              photos={data.photos!.map((s, j) => ({ src: s, alt: `Cleaning photo ${j + 1}` }))}
+              index={i}
+            >
               <img
                 src={src}
                 alt={`Cleaning photo ${i + 1}`}
@@ -720,6 +742,13 @@ const Report = () => {
                 {data.issue_reason && data.issue_source === "client" ? (
                   <> You told us: “{data.issue_reason}”</>
                 ) : null}
+                {typeof data.issue_photo_count === "number" ? (
+                  <> {data.issue_photo_count === 0
+                    ? "No photos attached to your message."
+                    : data.issue_photo_count === 1
+                      ? "1 photo attached to your message."
+                      : `${data.issue_photo_count} photos attached to your message.`}</>
+                ) : null}
               </p>
               {data.issue_decision?.decision === "reclean" && (data.reclean_date || data.resolution?.reclean_date) ? (
                 <p className="text-base text-foreground mb-6">
@@ -738,8 +767,8 @@ const Report = () => {
               )}
               <p className="text-base text-foreground mb-6">
                 {data.issue_decision?.decision === "payment_requested"
-                  ? "Nothing will be charged until you approve — the automatic charge stays blocked for this visit."
-                  : "Nothing will be charged while your issue is open — the automatic charge is blocked for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
+                  ? "Nothing will be charged until you approve — the automatic charge stays paused for this visit."
+                  : "Nothing will be charged while your issue is open — the automatic charge is paused for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
               </p>
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
@@ -874,22 +903,28 @@ const Report = () => {
                   photoItems={data.photo_items ?? []}
                   checklist={data.checklist}
                   excludedRooms={data.no_photo_zones ?? []}
-                  renderPhoto={(p: PhotoItem) => (
+                  renderPhoto={(p: PhotoItem, _i, ctx) => (
                     <figure>
                       {p.unavailable || !p.url ? (
                         unavailablePhoto(p)
                       ) : (
-                      <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
+                      <ZoomablePhoto
+                        src={p.url}
+                        alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                        photos={ctx.photos}
+                        index={ctx.index}
+                      >
                         <img
-                          src={p.url}
+                          src={p.thumb_url ?? p.url}
                           alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
                           loading="lazy"
+                          onError={(e) => { if (p.thumb_url && e.currentTarget.src !== p.url) e.currentTarget.src = p.url; }}
                           className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                         />
                       </ZoomablePhoto>
                       )}
                       <figcaption className="text-xs text-muted-foreground mt-1">
-                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                        <span className="font-semibold text-foreground">{ctx.frameLabel}</span>
                         {p.note ? <> — {p.note}</> : null}
                       </figcaption>
                     </figure>
@@ -965,22 +1000,28 @@ const Report = () => {
                   photoItems={data.photo_items ?? []}
                   checklist={data.checklist}
                   excludedRooms={data.no_photo_zones ?? []}
-                  renderPhoto={(p: PhotoItem) => (
+                  renderPhoto={(p: PhotoItem, _i, ctx) => (
                     <figure>
                       {p.unavailable || !p.url ? (
                         unavailablePhoto(p)
                       ) : (
-                      <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}>
+                      <ZoomablePhoto
+                        src={p.url}
+                        alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
+                        photos={ctx.photos}
+                        index={ctx.index}
+                      >
                         <img
-                          src={p.url}
+                          src={p.thumb_url ?? p.url}
                           alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning photo`}
                           loading="lazy"
+                          onError={(e) => { if (p.thumb_url && e.currentTarget.src !== p.url) e.currentTarget.src = p.url; }}
                           className="w-full h-40 md:h-52 object-cover rounded-xl border border-border"
                         />
                       </ZoomablePhoto>
                       )}
                       <figcaption className="text-xs text-muted-foreground mt-1">
-                        <span className="font-semibold text-foreground">{p.kind === "before" ? "Before" : "After"}</span>
+                        <span className="font-semibold text-foreground">{ctx.frameLabel}</span>
                         {p.note ? <> — {p.note}</> : null}
                       </figcaption>
                     </figure>

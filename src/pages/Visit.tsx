@@ -100,7 +100,7 @@ const STATE_HEADLINE: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-type ReportPhoto = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
+type ReportPhoto = { url: string | null; thumb_url?: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 type ReportChecklist = { rooms: Array<{ name: string; items: Array<{ label: string; done: boolean }>; skip_reason?: string }>; problem_note?: string };
 type ReportData = {
   ok: boolean;
@@ -120,6 +120,10 @@ type ReportData = {
   // only the client's own words render (as "You told us").
   issue_source?: string;
   issue_room?: string;
+  // Cabinets audit (fix 1): photos the client attached to the
+  // complaint. Null = unknown — the page shows no attachment line
+  // rather than a possibly-wrong "none".
+  issue_photo_count?: number | null;
   // The owner's latest decision on the issue (payment_requested /
   // reclean / waived, with its text) and the resolution record
   // (resolved_at + reclean_date) — same payload as /report.
@@ -429,6 +433,30 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+      {/* Cabinets audit (fix 1): the dispute status comes FIRST, above
+          the card details — the client must see at a glance that the
+          payment is paused, what they reported, and when we reply,
+          before any "Card we'll charge" line. */}
+      {rep.state === "issue_open" && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4" role="status">
+          <p className="font-semibold mb-1">Issue received. Automatic payment is paused for this visit.</p>
+          {rep.issue_room && <p className="text-sm">Room: {rep.issue_room}</p>}
+          {rep.issue_reason && rep.issue_source === "client" && (
+            <p className="text-sm">You told us: “{rep.issue_reason}”.</p>
+          )}
+          {typeof rep.issue_photo_count === "number" && (
+            <p className="text-sm">
+              {rep.issue_photo_count === 0
+                ? "No photos attached to your message."
+                : rep.issue_photo_count === 1
+                  ? "1 photo attached to your message."
+                  : `${rep.issue_photo_count} photos attached to your message.`}
+            </p>
+          )}
+          <p className="text-sm mt-1">We&apos;ll confirm by email and reply within one business day.</p>
+          <p className="text-sm">Questions? Email <a className="underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a> or call <a className="underline" href="tel:+17705258599">(770) 525-8599</a>.</p>
+        </div>
+      )}
       <div className="rounded-xl border border-border bg-background p-4 mb-4">
         <dl className="space-y-1.5">
           {visitDate && (
@@ -468,11 +496,14 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           )}
           {cardLabel && !isWaived && (
             <div className="flex justify-between gap-4 text-sm">
-              <dt className="text-muted-foreground">{visitState === "paid" ? "Card charged" : "Card we'll charge"}</dt>
+              {/* Cabinets audit (fix 1): while a dispute is open the
+                  card is on file, not "to be charged" — the top block
+                  already says the payment is paused. */}
+              <dt className="text-muted-foreground">{visitState === "paid" ? "Card charged" : visitState === "issue_open" ? "Card on file" : "Card we'll charge"}</dt>
               <dd className="font-semibold text-right">
                 {cardLabel}
                 {cardActionable && (
-                  <> · <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`} className="underline">Change card</Link></>
+                  <> · <Link to={`/save-card?bt=${encodeURIComponent(bt)}&mode=change`} className="underline inline-flex min-h-[44px] items-center">Change card</Link></>
                 )}
               </dd>
             </div>
@@ -538,10 +569,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       )}
       {rep.state === "issue_open" && !rep.issue_decision && (
         <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
-          Issue reported — automatic payment is blocked for this visit.
-          {rep.issue_reason && rep.issue_source === "client" ? (
-            <> You told us: “{rep.issue_reason}”.</>
-          ) : null}
+          Automatic payment is paused for this visit — the details of your issue are shown above.
         </p>
       )}
       {rep.state === "issue_open" && rep.issue_decision && (
@@ -558,9 +586,6 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           ) : null}
           {rep.issue_decision.decision === "reclean" && (rep.reclean_date || rep.resolution?.reclean_date) ? (
             <p className="mb-2">Re-clean agreed for <strong>{fmtDateUS(rep.reclean_date || rep.resolution?.reclean_date || "")}</strong>{rep.reclean_cleaner_name ? <> — {rep.reclean_cleaner_name}</> : null}.</p>
-          ) : null}
-          {rep.issue_reason && rep.issue_source === "client" ? (
-            <p className="mb-2">You told us: “{rep.issue_reason}”.</p>
           ) : null}
           <p className="mb-3">Nothing will be charged until you approve — the automatic charge stays blocked for this visit.</p>
           {/* B: no Approve for a future visit (see the note above). */}
@@ -591,7 +616,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         photoItems={rep.photo_items ?? []}
         checklist={rep.checklist}
         excludedRooms={rep.no_photo_zones ?? []}
-        renderPhoto={(p) =>
+        renderPhoto={(p, _i, ctx) =>
           // M7: a null-url photo (the server could not sign it) renders
           // an honest placeholder — same wording as /report — instead
           // of a broken <img src="null">. The tile keeps its place in
@@ -611,11 +636,18 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
               </button>
             </div>
           ) : (
-          <ZoomablePhoto src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`}>
+          <ZoomablePhoto
+            src={p.url}
+            alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`}
+            photos={ctx.photos}
+            index={ctx.index}
+          >
             <figure>
-              <img src={p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" />
+              {/* Cabinets audit (fix 6): the grid loads the small
+                  variant; the full size is requested only for zoom. */}
+              <img src={p.thumb_url ?? p.url} alt={`${p.room ?? "Your home"} — ${p.kind === "before" ? "before" : "after"} cleaning`} className="w-full rounded-lg object-cover aspect-[4/3]" loading="lazy" onError={(e) => { if (p.thumb_url && e.currentTarget.src !== p.url) e.currentTarget.src = p.url; }} />
               <figcaption className="mt-1 text-xs text-muted-foreground">
-                {p.kind === "before" ? "Before" : "After"}{p.note ? ` — ${p.note}` : ""}
+                {ctx.frameLabel}{p.note ? ` — ${p.note}` : ""}
               </figcaption>
             </figure>
           </ZoomablePhoto>
@@ -626,7 +658,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         <p className="mb-3 text-sm text-muted-foreground">After photos only — no before photos were taken for this visit.</p>
       )}
       {rep.state === "awaiting" && rep.charge_timer_block_reason === "issue_ever" && (
-        <p className="mb-3 text-sm">Automatic payment is disabled for this visit because an issue was reported.</p>
+        <p className="mb-3 text-sm">Automatic payment is paused for this visit because an issue was reported.</p>
       )}
       {rep.deadline && rep.state === "awaiting" && !rep.charge_timer_blocked && (
         <p className="mb-3 text-sm">
@@ -682,7 +714,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             onPhotoPick={onPhotoPick}
             busy={busy}
             submitLabel="Send issue — pause payment"
-            helper="Sending this blocks the automatic charge for this visit. We'll confirm by email and reply within one business day."
+            helper="Sending this pauses the automatic charge for this visit. We'll confirm by email and reply within one business day."
             onSubmit={() => void act({ action: "issue", reason: issueText.trim(), room: issueRoom.trim() })}
             onCancel={() => setShowIssue(false)}
           />

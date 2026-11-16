@@ -203,14 +203,22 @@ export default async function handler(req: Req, res: Res) {
       if (!photosRes.ok) return json(502, { ok: false, error: "db_error" });
       const photos = photosRes.rows;
       const photosWithUrls = await Promise.all(
-        photos.map(async (ph) => ({
-          id: ph.id,
-          room: ph.room,
-          kind: ph.kind,
-          note: ph.note,
-          created_at: ph.created_at,
-          url: await storageSignDownload(ph.storage_path, 3600),
-        })),
+        photos.map(async (ph) => {
+          const url = await storageSignDownload(ph.storage_path, 3600);
+          // Cabinets audit (fix 6): the grid loads a small variant;
+          // the full size is requested only for zoom. A failed
+          // transform sign falls back to the full URL.
+          const thumb = url ? await storageSignDownload(ph.storage_path, 3600, { width: 480 }) : null;
+          return {
+            id: ph.id,
+            room: ph.room,
+            kind: ph.kind,
+            note: ph.note,
+            created_at: ph.created_at,
+            url,
+            ...(thumb ? { thumb_url: thumb } : {}),
+          };
+        }),
       );
       const eventsRes = await dbSelectStrict(
         "gh_events",
@@ -357,18 +365,25 @@ export default async function handler(req: Req, res: Res) {
     const visits = page.slice(0, 100);
     const ids = visits.map((v) => v.id);
     const counts = new Map<string, number>();
+    // Cabinets audit (fix 2): report photos and the client's own
+    // complaint attachments are counted separately — the list labels
+    // them "Cleaning report: N photos" and "Issue attachments: N".
+    const issuePhotoCounts = new Map<string, number>();
     // MB-06/MB-19: a failed aux read is a 502 (never a silent zero),
     // and the read is paged (never one capped page that drops the
     // oldest visits' signals). signalsTruncated is reported below.
     let signalsTruncated = false;
     if (ids.length > 0) {
-      const photosRes = await dbSelectPaged<{ visit_id: string }>(
+      const photosRes = await dbSelectPaged<{ visit_id: string; kind: string }>(
         "gh_photos",
         `visit_id=in.(${ids.join(",")})`,
       );
       if (!photosRes.ok) return json(502, { ok: false, error: "db_error" });
       signalsTruncated ||= photosRes.truncated;
-      for (const ph of photosRes.rows) counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
+      for (const ph of photosRes.rows) {
+        if (ph.kind === "client") issuePhotoCounts.set(ph.visit_id, (issuePhotoCounts.get(ph.visit_id) ?? 0) + 1);
+        else counts.set(ph.visit_id, (counts.get(ph.visit_id) ?? 0) + 1);
+      }
     }
     // O5 (list): opened binds to each row's current issuance. The query
     // returns desc, so the first matching open per visit is its latest.
@@ -589,6 +604,7 @@ export default async function handler(req: Req, res: Res) {
         return {
           ...annotateVisit(v, opened.get(v.id) ?? null),
           photo_count: counts.get(v.id) ?? 0,
+          issue_photo_count: issuePhotoCounts.get(v.id) ?? 0,
           payment_failed: failed.has(v.id),
           visit_confirmed: confirmed.has(v.id),
           request_approved: approved.has(v.id),

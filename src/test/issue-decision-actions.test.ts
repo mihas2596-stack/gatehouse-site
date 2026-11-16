@@ -277,6 +277,15 @@ describe("issue decision actions", () => {
     expect(events.some((e) => e.event === "issue_decision")).toBe(false);
   });
 
+  it("waive without a resolution is refused (cabinets audit B1)", async () => {
+    const r = await callAction({ action: "issue_waive_charge", booking_id: BID });
+    expect(r.code).toBe(400);
+    expect(r.body["error"]).toBe("resolution_required");
+    expect(events.some((e) => e.event === "issue_decision")).toBe(false);
+    expect(rows[0]["issue_open"]).toBe(true);
+    expect(piCreates).toBe(0);
+  });
+
   it("a decision with no open issue is refused", async () => {
     seed({ issueOpen: false });
     // The journal is the authority: a resolved issue (issue_opened
@@ -320,7 +329,7 @@ describe("issue decision actions", () => {
   });
 
   it("waive closes the visit without payment; a later charge and a later Approve are refused", async () => {
-    const r = await callAction({ action: "issue_waive_charge", booking_id: BID });
+    const r = await callAction({ action: "issue_waive_charge", booking_id: BID, resolution: "We've waived the charge for this visit — nothing will be charged." });
     expect(r.code).toBe(200);
     expect(r.body["decision"]).toBe("waived");
     expect(r.body["email_sent"]).toBe(true);
@@ -348,7 +357,7 @@ describe("issue decision actions", () => {
   });
 
   it("repeating a waive on an already-waived visit is a no-op", async () => {
-    await callAction({ action: "issue_waive_charge", booking_id: BID });
+    await callAction({ action: "issue_waive_charge", booking_id: BID, resolution: "We've waived the charge for this visit — nothing will be charged." });
     const callsAfterFirst = resendCalls.length;
     const r = await callAction({ action: "issue_waive_charge", booking_id: BID });
     expect(r.code).toBe(200);

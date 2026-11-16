@@ -537,7 +537,7 @@ function deriveState(meta: Record<string, string>): ReportState {
   return "not_ready";
 }
 
-export type PhotoItem = { url: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
+export type PhotoItem = { url: string | null; thumb_url?: string | null; room?: string; note?: string; kind?: string; unavailable?: boolean };
 
 function readPhotoItems(meta: Record<string, string>): PhotoItem[] {
   let json = "";
@@ -739,6 +739,11 @@ export default async function handler(req: Req, res: Res) {
     // and sign fresh download URLs on every view — a link from an old
     // email keeps working for the whole 90-day retention window.
     let dbPhotoItems: PhotoItem[] | null = null;
+    // Cabinets audit (fix 1): how many photos the client attached to
+    // the complaint (kind "client" in gh_photos). Null = unknown (DB
+    // branch not used or the count read failed) — the page then shows
+    // no attachment line instead of a possibly-wrong "none".
+    let dbIssuePhotoCount: number | null = null;
     // M7: a photo whose signed URL could not be minted is NOT silently
     // dropped — it stays in the list as unavailable, and the response
     // carries a partial-load flag, so the client sees 7/8 WITH the
@@ -778,9 +783,14 @@ export default async function handler(req: Req, res: Res) {
               for (const r of photosRes.rows) {
                 if (r.kind === "client") continue; // customer-submitted photos are not part of the report
                 const url = await storageSignDownload(r.storage_path, 24 * 3600);
+                // Cabinets audit (fix 6): the grid loads a small
+                // variant; the full size is requested only for zoom.
+                // A failed transform sign falls back to the full URL.
+                const thumb = url ? await storageSignDownload(r.storage_path, 24 * 3600, { width: 480 }) : null;
                 if (url) {
                   items.push({
                     url,
+                    ...(thumb ? { thumb_url: thumb } : {}),
                     room: r.room,
                     kind: r.kind === "before" ? "before" : "after",
                     ...(r.note ? { note: r.note } : {}),
@@ -798,6 +808,17 @@ export default async function handler(req: Req, res: Res) {
                 }
               }
               dbPhotoItems = items;
+              // Cabinets audit (fix 1): count the client's own
+              // complaint photos for this visit (kind "client").
+              try {
+                const issuePhotosRes = await dbSelectStrict<{ id: string }>(
+                  "gh_photos",
+                  `visit_id=eq.${vid}&kind=eq.client&select=id&limit=10`,
+                );
+                if (issuePhotosRes.ok) dbIssuePhotoCount = issuePhotosRes.rows.length;
+              } catch {
+                dbIssuePhotoCount = null;
+              }
             }
           }
         }
@@ -920,6 +941,10 @@ export default async function handler(req: Req, res: Res) {
         // the client's words.
         issue_source: meta["gh_issue_open"] === "1" ? meta["gh_issue_source"] ?? "" : "",
         issue_room: meta["gh_issue_open"] === "1" ? meta["gh_issue_room"] ?? "" : "",
+        // Cabinets audit (fix 1): photos the client attached to the
+        // complaint. Null = unknown — the page shows no attachment
+        // line rather than a possibly-wrong "none".
+        issue_photo_count: dbIssuePhotoCount,
         // TASK 1 (fix6): the owner's latest decision on the issue
         // (payment_requested / reclean / waived, with its text) — the
         // report page renders its state from this, never from a stale
