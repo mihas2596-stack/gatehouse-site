@@ -67,13 +67,14 @@ describe("fix8 — clarity: tier wording", () => {
     expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
-  it("hero links the sample photo report right under the first See My Price", () => {
+  it("sample photo report opens from its toggle after When you pay, not from the hero", () => {
     renderPage(<Index />);
-    // Sample starts closed.
+    // No sample link in the hero any more (16.11 item 1): the single
+    // toggle sits after "When you pay", and the sample starts closed.
+    expect(screen.queryByRole("button", { name: "See a sample photo report" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Hide sample report" })).not.toBeInTheDocument();
-    // The hero link opens it.
-    fireEvent.click(screen.getByRole("button", { name: "See a sample photo report" }));
+    fireEvent.click(screen.getByRole("button", { name: "View sample report" }));
     expect(screen.getByRole("button", { name: "Hide sample report" })).toBeInTheDocument();
   });
 

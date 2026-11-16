@@ -1291,11 +1291,19 @@ export default async function handler(req: Req, res: Res) {
       // date. The two gates must never disagree about which date
       // allows a report.
       const recleanDate = rowRecleanScheduled ? (visit.reclean_date as string) : journalDate;
+      // 16.11: the journal is append-only and confirm logs a NEW
+      // visit_confirmed event on every confirmation — including a
+      // date change (owner Change -> confirm). The gate must read the
+      // LATEST event, not the first: the old unordered limit=1 read
+      // the ORIGINAL confirmation date, so after a move 30.11 -> today
+      // the submit gate still saw 30.11 (report_too_early) while the
+      // whole UI showed today and enabled Finish. report.ts already
+      // reads the latest event; this mirrors it.
       const confirmedDate = recleanDate
         ? ""
         : confirmedDateOf(await dbSelect<{ event: string; detail: { date?: string } | null }>(
             "gh_events",
-            `visit_id=eq.${visit.id}&event=eq.visit_confirmed&limit=1`,
+            `visit_id=eq.${visit.id}&event=eq.visit_confirmed&order=created_at.desc&limit=1`,
           ));
       const gateDate = effectiveGateDate(recleanDate, confirmedDate, visit.visit_date);
       if (isFutureVisitDate(gateDate)) {

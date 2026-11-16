@@ -78,10 +78,10 @@ const expectInCardMoreActions = (el: HTMLElement) => {
 };
 
 describe("owner detail simplification", () => {
-  it("leads with Approve request and tucks Copy / Cancel / Delete / issue into More actions (requested)", async () => {
+  it("leads with Accept request for scheduling and tucks Copy / Cancel / Delete / issue into More actions (requested)", async () => {
     await openVisit("Dana Requested");
     // Approve is the primary action and is not inside a disclosure.
-    const approve = screen.getByRole("button", { name: "Approve request" });
+    const approve = screen.getByRole("button", { name: "Accept request for scheduling" });
     expect(approve.closest("details")).toBeNull();
     // The rarely-used controls live in the card-level More actions.
     expectInCardMoreActions(screen.getByText("Copy client link (visit + payment)"));
@@ -108,8 +108,8 @@ describe("owner detail simplification", () => {
     expect(screen.queryByRole("link", { name: "Text client" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy number" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "(770) 555-0134" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Call" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Text" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Call client Dana Requested" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Text client Dana Requested" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
     // The mailto link and "Update client phone" stay.
     expect(screen.getByRole("link", { name: "dana@example.com" })).toBeInTheDocument();

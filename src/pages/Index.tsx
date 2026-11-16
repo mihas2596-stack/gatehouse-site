@@ -24,11 +24,9 @@ const howItWorks = [
   {
     n: "03",
     title: "Review your clean",
-    text: "Get a private photo report and checklist after the visit. Approve to pay — or your card is charged automatically 24 hours after the report is sent if you haven't reported an issue.",
+    text: "Get a private photo report and checklist after the visit. You can approve the report to pay.",
   },
 ];
-
-const sectionClass = "border-b border-border/60 py-8 md:py-10";
 
 const Index = () => {
   const [sampleOpen, setSampleOpen] = useState(false);
@@ -42,12 +40,6 @@ const Index = () => {
   const closeSample = () => {
     setSampleOpen(false);
     sampleToggleRef.current?.focus();
-  };
-  // From the hero CTA: open the sample report and scroll to it, so a
-  // visitor sees what they get right after the first "See My Price".
-  const openSample = () => {
-    setSampleOpen(true);
-    document.getElementById("sample-report")?.scrollIntoView?.({ behavior: "smooth" });
   };
   return (
   <div className="bg-background">
@@ -89,15 +81,6 @@ const Index = () => {
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
             <p className="mt-3 text-base text-muted-foreground">No email or card needed to see your price.</p>
-            <p className="mt-1">
-              <button
-                type="button"
-                onClick={openSample}
-                className="inline-flex min-h-[44px] items-center font-semibold text-primary underline"
-              >
-                See a sample photo report
-              </button>
-            </p>
           </div>
           <figure>
             <img
@@ -132,7 +115,18 @@ const Index = () => {
               </li>
             ))}
           </ol>
-          <div id="sample-report" className="mt-6 scroll-mt-24">
+          {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
+          <section id="when-you-pay" aria-labelledby="when-you-pay-heading" className="mt-9 scroll-mt-24 rounded-2xl border border-border bg-card p-5 sm:mt-10 sm:p-8">
+            <h3 id="when-you-pay-heading" className="font-heading !text-[1.625rem] font-bold leading-tight text-sage-foreground sm:!text-[1.875rem] lg:!text-[2rem]">When you pay</h3>
+            <p className="mt-3 text-[1.25rem] leading-relaxed text-sage-foreground sm:text-[1.375rem]"><strong>Save your card at booking — you pay $0 today.</strong></p>
+            <p className="mt-3 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">
+              See your photo report before payment. Approve to pay, or report an issue.{" "}
+              <br />
+              If no issue is reported, your card is charged automatically 24 hours after the report is sent.
+            </p>
+          </section>
+          {/* Sample report — one entry point, after When you pay. */}
+          <div id="sample-report" className="mt-9 scroll-mt-24 sm:mt-10">
             <Button
               ref={sampleToggleRef}
               variant="outline"
@@ -144,6 +138,9 @@ const Index = () => {
             >
               {sampleOpen ? "Hide sample report" : "View sample report"}
             </Button>
+            <Link to="/whats-included" className="ml-4 inline-flex min-h-[48px] items-center font-semibold text-primary underline">
+              See what&rsquo;s included
+            </Link>
           </div>
           {sampleOpen && (
             <div id="home-sample-report" className="mt-6">
@@ -155,36 +152,7 @@ const Index = () => {
               </div>
             </div>
           )}
-          {/* 3. WHEN YOU PAY — always visible, no manual-only implication. */}
-          <section id="when-you-pay" aria-labelledby="when-you-pay-heading" className="mt-9 scroll-mt-24 rounded-2xl border border-border bg-card p-5 sm:mt-10 sm:p-8">
-            <h3 id="when-you-pay-heading" className="font-heading !text-[1.625rem] font-bold leading-tight text-sage-foreground sm:!text-[1.875rem] lg:!text-[2rem]">When you pay</h3>
-            <p className="mt-3 text-[1.25rem] leading-relaxed text-sage-foreground sm:text-[1.375rem]"><strong>Save your card at booking — you pay $0 today.</strong></p>
-            <p className="mt-3 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">
-              See your photo report before payment. Approve to pay, or report an issue.{" "}
-              <br />
-              If no issue is reported, your card is charged automatically 24 hours after the report is sent.
-            </p>
-          </section>
         </div>
-      </div>
-    </section>
-
-    <section className={sectionClass} aria-label="What we clean">
-      <div className="container mx-auto max-w-2xl text-center">
-        <p>We clean your kitchen, bathrooms, bedrooms, and living areas.</p>
-        <Link to="/whats-included" className="inline-flex min-h-[44px] items-center font-semibold text-primary underline">
-          View the room-by-room checklist
-        </Link>
-      </div>
-    </section>
-
-    <section id="areas" className={`${sectionClass} scroll-mt-16 bg-background md:scroll-mt-24`}>
-      <div className="container max-w-4xl text-center">
-        <h2 className="font-heading text-2xl font-bold text-sage-foreground md:text-heading-secondary">Areas we serve</h2>
-        <p className="mt-3">{cities.join(", ")}.</p>
-        <Link to="/areas" className="inline-flex min-h-[44px] items-center font-semibold text-primary underline">
-          Check our service area
-        </Link>
       </div>
     </section>
 
@@ -196,6 +164,15 @@ const Index = () => {
         <p className="mt-3"><Link to="/faq" className="inline-flex min-h-[44px] items-center font-semibold text-primary underline">Read the FAQ</Link></p>
       </div>
     </section>
+
+    {/* Compact areas line — the cities stay on the homepage as one
+        quiet line under the final CTA, not a standalone section. */}
+    <p id="areas" className="scroll-mt-16 px-4 pb-10 text-center text-base text-muted-foreground">
+      Serving {cities.join(", ")}.
+      <Link to="/areas" className="ml-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">
+        Check our service area
+      </Link>
+    </p>
   </div>
   );
 };

@@ -98,12 +98,12 @@ const Header = () => {
           <div className="flex shrink-0 items-center gap-4">
             <a
               href="tel:+17705258599"
-              aria-label="Call (770) 525-8599"
+              aria-label="Call Gatehouse Home Cleaning (770) 525-8599"
               className="flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-primary underline"
             >
               <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span className="hidden sm:inline">(770) 525-8599</span>
-              <span className="sm:hidden">Call</span>
+              <span className="sm:hidden">Call Gatehouse</span>
             </a>
             <a
               href="mailto:hello@gatehousehomecleaning.com"

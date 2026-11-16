@@ -24,7 +24,7 @@ const About = () => {
           <p className="text-base text-foreground/80 max-w-2xl mx-auto mt-4">
             <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>
             {" · "}
-            <a href="tel:+17705258599" className="font-semibold text-primary underline">(770) 525-8599</a>
+            <a href="tel:+17705258599" aria-label="Call Gatehouse Home Cleaning (770) 525-8599" className="font-semibold text-primary underline">(770) 525-8599</a>
           </p>
         </div>
       </section>

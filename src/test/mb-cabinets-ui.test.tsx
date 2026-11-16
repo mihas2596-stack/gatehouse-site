@@ -540,8 +540,11 @@ describe("MB-15/B8/LB-32: city pages — unique copy, From price, no dead sectio
     expect(screen.getByText("7 North Atlanta Suburbs").className).toContain("block");
   });
 
-  it("live-run #8: How it works names the 24-hour auto-charge next to the pay step", () => {
+  it("live-run #8: the 24-hour auto-charge rule is stated on the home page (in When you pay, not in How it works step 3)", () => {
     render(<HelmetProvider><MemoryRouter><Index /></MemoryRouter></HelmetProvider>);
-    expect(screen.getByText(/Approve to pay — or your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    // 16.11 item 2 (owner decision): step 3 no longer carries the
+    // auto-charge clause; the rule stays visible in "When you pay".
+    expect(screen.getByText(/your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    expect(screen.queryByText(/Approve to pay — or your card is charged automatically/)).not.toBeInTheDocument();
   });
 });

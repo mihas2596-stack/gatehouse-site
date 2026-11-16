@@ -101,6 +101,17 @@ const Cleaner = () => {
   const [data, setData] = useState<CleanerView | null>(null);
   const [error, setError] = useState("");
   const [openRoom, setOpenRoom] = useState<string | null | undefined>(undefined);
+  // Item 10: opening a room scrolls it to the top of the screen (with
+  // an offset under the sticky header), so the cleaner starts at the
+  // room's first step instead of its middle. Only on an explicit
+  // open — never on first load, on close, or on a background refresh.
+  const roomRefs = useRef<Record<string, HTMLElement | null>>({});
+  const scrollToRoom = useCallback((name: string) => {
+    const el = roomRefs.current[name];
+    if (!el) return;
+    const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }, []);
   const [checklist, setChecklist] = useState<Checklist>({ rooms: [] });
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploads, setUploads] = useState<Record<string, UploadState>>({});
@@ -440,6 +451,15 @@ const Cleaner = () => {
         setSubmitError("Some rooms still need a photo or a reason they were skipped:");
         return;
       }
+      // 16.11: the server's date gate is the backstop for the disabled
+      // button — show its date instead of the generic connection text,
+      // so a cleaner who moved past the client-side gate (e.g. after
+      // an owner date change) sees why the server refused.
+      if (r.error === "report_too_early") {
+        const d = typeof r["visit_date"] === "string" ? (r["visit_date"] as string) : null;
+        setSubmitError(d ? `This visit is on ${fmtDate(d)} — Finish unlocks after the visit.` : "This visit hasn't happened yet — Finish unlocks after the visit.");
+        return;
+      }
       setSubmitError("Couldn't submit. Check your connection and try again.");
     } catch {
       // G5 (cleaner half): busy always resets; re-read state before any
@@ -457,6 +477,15 @@ const Cleaner = () => {
     return Number.isNaN(d.getTime())
       ? iso
       : d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  };
+
+  // Short date for the disabled Finish label ("Finish unlocks on Nov 30").
+  const fmtDateShort = (iso: string | null): string => {
+    if (!iso) return "";
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
 
   // Extension #2/#10: the warning icon used to sit under the fixed site
@@ -528,6 +557,11 @@ const Cleaner = () => {
   const allRoomsReady = checklist.rooms.length > 0 && checklist.rooms.every((r) =>
     roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)).ready,
   );
+  // Item 12: counts for the Finish button label (shared with section 3).
+  const uploadingCount = Object.values(uploads).filter((u) => u.status === "working").length;
+  const notReadyCount = checklist.rooms.filter((r) =>
+    !roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)).ready,
+  ).length;
 
   return (
     <div className="min-h-screen bg-background page-shell">
@@ -601,21 +635,75 @@ const Cleaner = () => {
               </a>
             </div>
           )}
-          {!locked && <ClientContact phone={v.client_phone} />}
-          {v.entry && (
-            <div className="text-base space-y-1">
-              <p><span className="font-semibold">Entry:</span>{` ${v.entry.method === "home" ? "Client will be home to let you in." : v.entry.method === "someone" ? "Someone else will meet you." : "Arrange entry before the visit."}`}</p>
-              {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
-              {v.entry.secret && <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>}
-              {!v.entry.secret && v.entry.secret_undecryptable && <p><span className="font-semibold">Entry details:</span> The saved entry code couldn&apos;t be read — contact the owner for the code before the visit.</p>}
-            </div>
-          )}
-          {!v.entry && v.entry_choice?.method && (
-            <div className="text-base space-y-1">
-              <p><span className="font-semibold">Entry choice:</span> {v.entry_choice.method === "home" ? "Client will be home to let you in." : v.entry_choice.method === "other_person" ? "Someone else will meet you." : v.entry_choice.method === "arrange_before" ? `Arrange entry before the visit${v.entry_choice.detail === "door_code" ? " (Door code / smart lock)" : v.entry_choice.detail === "lockbox" ? " (Lockbox)" : v.entry_choice.detail === "other" ? " (Other arrangement)" : ""}.` : "Client will decide later — contact the owner."}</p>
-              {v.entry_choice.notes && <p><span className="font-semibold">Note:</span> {v.entry_choice.notes}</p>}
-            </div>
-          )}
+          {!locked && <ClientContact phone={v.client_phone} name={v.client_name ?? v.client_first_name ?? null} />}
+          {/* Item 9: one "Getting in" card — the agreed way in when it
+              exists, a plain "contact the client" state when the code
+              or the arrangement is still missing. The client's number
+              sits inside the card for the missing states, so the
+              cleaner does not have to hunt for it. */}
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="font-heading text-lg font-bold mb-2">Getting in</p>
+            {(() => {
+              const contact = !locked ? <ClientContact phone={v.client_phone} name={v.client_name ?? v.client_first_name ?? null} compact /> : null;
+              if (v.entry) {
+                if (v.entry.method === "home") return (
+                  <div className="text-base space-y-1">
+                    <p>Client will be home to let you in.</p>
+                    {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
+                  </div>
+                );
+                if (v.entry.method === "someone") return (
+                  <div className="text-base space-y-1">
+                    <p>Someone else will meet you.</p>
+                    {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
+                  </div>
+                );
+                if (v.entry.secret) return (
+                  <div className="text-base space-y-1">
+                    <p><span className="font-semibold">Entry details:</span> {v.entry.secret}</p>
+                    {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
+                  </div>
+                );
+                if (v.entry.secret_undecryptable) return <p className="text-base">Contact Gatehouse about entry before you leave — the saved entry code couldn&apos;t be read.</p>;
+                return (
+                  <div className="text-base space-y-1">
+                    <p>No entry code has been provided. Contact the client before you leave.</p>
+                    {contact}
+                    {v.entry.note && <p><span className="font-semibold">Note:</span> {v.entry.note}</p>}
+                  </div>
+                );
+              }
+              const choice = v.entry_choice;
+              if (choice?.method === "home") return (
+                <div className="text-base space-y-1">
+                  <p>Client will be home to let you in.</p>
+                  {choice.notes && <p><span className="font-semibold">Note:</span> {choice.notes}</p>}
+                </div>
+              );
+              if (choice?.method === "other_person") return (
+                <div className="text-base space-y-1">
+                  <p>Someone else will meet you.</p>
+                  {choice.notes && <p><span className="font-semibold">Note:</span> {choice.notes}</p>}
+                </div>
+              );
+              if (choice?.method === "arrange_before" && (choice.detail === "door_code" || choice.detail === "lockbox")) {
+                return (
+                  <div className="text-base space-y-1">
+                    <p>No entry code has been provided. Contact the client before you leave.</p>
+                    {contact}
+                    {choice.notes && <p><span className="font-semibold">Note:</span> {choice.notes}</p>}
+                  </div>
+                );
+              }
+              return (
+                <div className="text-base space-y-1">
+                  <p>Entry arrangements are still missing. Contact the client before you leave.</p>
+                  {contact}
+                  {choice?.notes && <p><span className="font-semibold">Note:</span> {choice.notes}</p>}
+                </div>
+              );
+            })()}
+          </div>
           {v.client_notes && (
             <p className="text-base"><span className="font-semibold">Customer notes:</span> {v.client_notes}</p>
           )}
@@ -625,8 +713,10 @@ const Cleaner = () => {
         </div>
         )}
         {/* C: the help line lives outside "Before you go" so it stays
-            visible after the report is submitted too. */}
-        <p className="text-sm text-muted-foreground mt-4"><span className="font-semibold">Need help?</span> Call or text Gatehouse <a className="underline" href="tel:+17705258599">(770) 525-8599</a> — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
+            visible after the report is submitted too. One support
+            block: the call names the owner, and texting gets its own
+            sms: link instead of sharing the tel: one. */}
+        <p className="text-base text-muted-foreground mt-4"><span className="font-semibold">Need help?</span> <a className="underline" href="tel:+17705258599">Call Gatehouse (owner Nick)</a> or <a className="underline" href="sms:+17705258599">Text Gatehouse</a> — (770) 525-8599 — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
 
         {!locked && saveState !== "idle" && (
           <p className="text-base text-muted-foreground mt-4" role="status">
@@ -643,23 +733,20 @@ const Cleaner = () => {
           </p>
         )}
 
-        {data.confirmed && data.cancelled !== true && data.report_status !== "submitted" && data.report_status !== "sent" && !v.entry && (!v.entry_choice?.method || v.entry_choice.method === "decide_later" || v.entry_choice.method === "arrange_before") && (
-          <div className="rounded-xl border border-amber-500/60 bg-amber-50 p-4 mt-4">
-            <p className="text-base font-semibold">Entry not arranged yet</p>
-            <p className="text-base text-muted-foreground">Contact Gatehouse before leaving. Entry must be agreed first. Call or text <a className="underline" href="tel:+17705258599">(770) 525-8599</a> or email <a className="underline" href="mailto:hello@gatehousehomecleaning.com">hello@gatehousehomecleaning.com</a>.</p>
-          </div>
-        )}
+        {/* Item 9: the "Entry not arranged yet" warning used to live
+            here as a second copy of the entry state — the "Getting
+            in" card above carries it now, so the duplicate is gone. */}
 
-        {/* C: "How photos work" is a quiet collapsed note, not a card —
+        {/* C: "Photo guidelines" is a quiet collapsed note, not a card —
             the room steps already explain the photos. */}
         <details className="mt-4">
-          <summary className="text-sm text-muted-foreground cursor-pointer">How photos work</summary>
-          <p className="text-sm text-muted-foreground mt-2">
+          <summary className="text-base text-muted-foreground cursor-pointer min-h-[44px] flex items-center">Photo guidelines</summary>
+          <p className="text-base text-muted-foreground mt-2">
             Please don&apos;t photograph people, documents, bank cards, alarm codes or other
             personal items. Photos go only into the client&apos;s report for this visit — they are
             never used for marketing without separate consent.
           </p>
-          <p className="text-sm text-muted-foreground mt-2">
+          <p className="text-base text-muted-foreground mt-2">
             Take a “before” photo of each area before you start, and an “after” photo when
             you finish — from a similar angle, so the client can compare. Add a close-up only
             where it helps (inside the oven, a stain you couldn&apos;t remove, damage you found).
@@ -821,9 +908,12 @@ const Cleaner = () => {
               </div>
             );
             return (
-              <details key={room.name} open={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="rounded-xl border border-border bg-card p-4 mt-4">
-                <summary aria-expanded={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); setOpenRoom((openRoom === undefined ? roomIdx === 0 : openRoom === room.name) ? null : room.name); }}>
-                  <span className="font-heading text-xl font-bold">{room.name}</span>
+              <details key={room.name} ref={(el) => { roomRefs.current[room.name] = el; }} open={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="rounded-xl border border-border bg-card p-4 mt-4 scroll-mt-24">
+                <summary aria-expanded={openRoom === undefined ? roomIdx === 0 : openRoom === room.name} className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 cursor-pointer list-none" onClick={(e) => { e.preventDefault(); const isOpen = openRoom === undefined ? roomIdx === 0 : openRoom === room.name; setOpenRoom(isOpen ? null : room.name); if (!isOpen) requestAnimationFrame(() => scrollToRoom(room.name)); }}>
+                  <span className="flex flex-col">
+                    <span className="font-heading text-xl font-bold">{room.name}</span>
+                    <span className="text-sm text-muted-foreground">Room {roomIdx + 1} of {checklist.rooms.length}</span>
+                  </span>
                   <span className="flex flex-wrap items-center gap-2">
                     {room.skip_reason ? (
                       <span className="text-base bg-sky-100 text-sky-900 px-2 py-0.5 rounded font-semibold">Reason added</span>
@@ -1007,6 +1097,18 @@ const Cleaner = () => {
                         : "This room still needs a photo or a reason."}
                   </p>
                 )}
+                {/* Item 11: once a room is ready, one tap moves to the
+                    next room — no hunting through the list. */}
+                {ready && roomIdx < checklist.rooms.length - 1 && (
+                  <Button variant="outline" size="lg" className="w-full mt-4 min-h-[48px]" onClick={() => {
+                    const next = checklist.rooms[roomIdx + 1];
+                    if (!next) return;
+                    setOpenRoom(next.name);
+                    requestAnimationFrame(() => scrollToRoom(next.name));
+                  }}>
+                    Next room — {checklist.rooms[roomIdx + 1]?.name}
+                  </Button>
+                )}
               </details>
             );
           })}
@@ -1060,7 +1162,7 @@ const Cleaner = () => {
               const missingRooms = statuses.filter((s) => !s.ready).map((s) => s.name);
               const missingBefore = statuses.filter((s) => !s.beforeOk).map((s) => s.name);
               const missingAfter = statuses.filter((s) => s.beforeOk && !s.afterOk).map((s) => s.name);
-              const uploading = Object.values(uploads).filter((u) => u.status === "working").length;
+              const uploading = uploadingCount;
               return (
                 <div className="rounded-xl border border-border bg-card p-4 mt-4 text-base" role="status">
                   <h2 className="font-heading text-xl font-bold mb-2">3. Finish your job</h2>
@@ -1079,8 +1181,20 @@ const Cleaner = () => {
                 </div>
               );
             })()}
-            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || isFutureVisit || !allRoomsReady || Object.values(uploads).some((u) => u.status === "working")} onClick={() => void submit()}>
-              {busy ? "Sending…" : "Finish & send report"}
+            {/* Item 12: the button itself states why it is disabled —
+                the cleaner must not have to guess. */}
+            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || isFutureVisit || !allRoomsReady || uploadingCount > 0} onClick={() => void submit()}>
+              {busy
+                ? "Sending report…"
+                : isFutureVisit
+                  ? `Finish unlocks on ${fmtDateShort(v.date)}`
+                  : uploadingCount > 0
+                    ? "Uploading photos…"
+                    : checklist.rooms.length === 0
+                      ? "Finish & send report"
+                      : !allRoomsReady
+                        ? `Complete ${notReadyCount} more room${notReadyCount === 1 ? "" : "s"}`
+                        : "Finish & send report"}
             </Button>
             <p className="text-base text-muted-foreground text-center mt-2">
               Your work saves automatically. Finish sends the report, or passes it to Gatehouse if review is needed.

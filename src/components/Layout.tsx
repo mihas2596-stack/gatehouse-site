@@ -24,7 +24,7 @@ const Layout = () => {
             <span>Gatehouse Home Cleaning — North Atlanta</span>
             <span className="flex flex-wrap items-center gap-4">
               <a href="mailto:hello@gatehousehomecleaning.com" className="underline">hello@gatehousehomecleaning.com</a>
-              <a href="tel:+17705258599" className="underline">(770) 525-8599</a>
+              <a href="tel:+17705258599" aria-label="Call Gatehouse Home Cleaning (770) 525-8599" className="underline">(770) 525-8599</a>
               <Link to="/privacy" className="underline">Privacy</Link>
               <Link to="/terms" className="underline">Terms</Link>
             </span>

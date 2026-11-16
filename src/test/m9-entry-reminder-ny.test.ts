@@ -145,7 +145,7 @@ describe("M9 entry reminder window is America/New_York", () => {
       "client-1@example.com",
       "client-2@example.com",
     ]);
-    expect(resendCalls.every((c) => c.subject.includes("arrange entry"))).toBe(true);
+    expect(resendCalls.every((c) => c.subject.includes("Entry details for your cleaning"))).toBe(true);
     // The out-of-window visits were never claimed.
     expect(visitRows[2]["entry_reminder_sent"]).toBeNull();
     expect(visitRows[3]["entry_reminder_sent"]).toBeNull();

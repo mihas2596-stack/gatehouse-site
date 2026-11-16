@@ -106,9 +106,11 @@ describe("fix7 — UX audit fixes", () => {
     render(<HelmetProvider><MemoryRouter><Index /></MemoryRouter></HelmetProvider>);
     expect(screen.getByText("We’ll email you to confirm your date, arrival window and who’s coming.")).toBeInTheDocument();
     expect(screen.getByText(/Get a private photo report and checklist after the visit\./)).toBeInTheDocument();
-    // Live-run #8: the 24-hour auto-charge caveat sits next to the
-    // payment step in How it works, not only in "When you pay" below.
-    expect(screen.getByText(/Approve to pay — or your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    // 16.11 item 2 (owner decision): step 3 no longer carries the
+    // auto-charge clause — it lives in "When you pay" below, and step 3
+    // only says the report can be approved to pay.
+    expect(screen.getByText(/your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    expect(screen.queryByText(/Approve to pay — or your card is charged automatically/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Check our service area" })).toBeInTheDocument();
     expect(document.getElementById("when-you-pay")).not.toBeNull();
     const ctas = screen.getAllByRole("link", { name: "See My Price" });
@@ -177,7 +179,7 @@ describe("fix7 — UX audit fixes", () => {
   it("SaveCard: standalone save shows the unified one-line status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, verified: true, status: "saved", booking: null }) }));
     render(<MemoryRouter initialEntries={["/save-card?saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);
-    await screen.findByRole("heading", { name: "Card saved — $0 charged today" });
+    await screen.findByRole("heading", { name: "Card saved" });
     expect(screen.getByText(/Card: saved ✓ · Visit: not requested yet/)).toBeInTheDocument();
     expect(screen.queryByText(/Your date is awaiting confirmation/)).toBeNull();
   });

@@ -51,7 +51,7 @@ describe("group 1(b): cleaner page joins", () => {
     expect(screen.getByText("Standard · for Test MaxHigh")).toBeInTheDocument();
     expect(screen.getByText("This visit is on Wednesday, November 25 — you can send the report after the visit.")).toBeInTheDocument();
     // "Entry:" lives in a <span>, so match the <p> by its full text.
-    expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Entry: Client will be home to let you in.")).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Client will be home to let you in.")).toBeInTheDocument();
     expect(screen.getAllByText("Rooms ready: 0 of 6")).toHaveLength(2);
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/November 25·7/);

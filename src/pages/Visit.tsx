@@ -999,7 +999,7 @@ const Visit = () => {
             )}
             {data.state === "awaiting_confirmation" && !cardChoiceNeeded && (
               <p className="text-lg text-foreground mb-6 text-center">
-                Your card is saved and nothing is charged. Your requested date is{" "}
+                Your requested date is{" "}
                 <strong>not confirmed yet</strong> — we check it and reply within one business day.
                 If it doesn&apos;t work, we&apos;ll offer alternatives here — no forms to refill.
               </p>
@@ -1098,7 +1098,7 @@ const Visit = () => {
                   <p className="font-heading text-xl font-bold">{data.cleaner.name}</p>
                   {data.cleaner.phone && (
                     <p className="text-sm">
-                      <a className="underline" href={`tel:${data.cleaner.phone.replace(/\D/g, "")}`}>{data.cleaner.phone}</a>
+                      <a className="underline" href={`tel:${data.cleaner.phone.replace(/\D/g, "")}`}>Call cleaner {data.cleaner.name}</a> · {data.cleaner.phone}
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">

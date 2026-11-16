@@ -275,7 +275,13 @@ async function stripePost(
 // whole list instead. As a backstop, the booking's confirmed card is
 // fetched directly by id when it is not on any page — it is never
 // silently dropped.
-type StripeCardRow = { id: string; card?: { brand?: string; last4?: string } };
+type StripeCardRow = { id: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } };
+// 16.11 (item 6): a displayable saved-card option for an explicit
+// client choice. Only masked data leaves the server (brand, last4,
+// expiry); the id is the selection value — the POST re-verifies
+// ownership against the booking-bound Customer, so the choice is
+// bound to the booking by the bt token that authenticates the call.
+type SavedCardOption = { id: string; brand: string; last4: string; exp_month?: number; exp_year?: number };
 export async function listCustomerCards(secretKey: string, customerId: string): Promise<StripeCardRow[]> {
   const all: StripeCardRow[] = [];
   let startingAfter: string | undefined;
@@ -628,7 +634,26 @@ export default async function handler(req: Req, res: Res) {
         cust = { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name };
       }
     }
-    const card = await reconcileCard(STRIPE_SECRET_KEY, cust, confirmedPaymentMethodId(events), { allowWrite: true });
+    // 16.11 (item 6): an explicit client choice of a saved card.
+    // The selection is bound to this booking by the bt token that
+    // authenticated the call; re-verify ownership here — a card that
+    // no longer belongs to this Customer (deleted, or another
+    // customer's) is refused, never confirmed. reconcileCard below
+    // then persists the choice through the same path as any confirmed
+    // card, so the charge path uses the selected card unchanged.
+    const selectedPmId = typeof body["payment_method_id"] === "string" ? (body["payment_method_id"] as string) : "";
+    if (selectedPmId) {
+      if (!selectedPmId.startsWith("pm_")) {
+        res.status(400).json({ ok: false, error: "invalid_card" });
+        return;
+      }
+      const owned = await ownedCard(STRIPE_SECRET_KEY, cust.id, selectedPmId);
+      if (!owned) {
+        res.status(409).json({ ok: false, error: "card_unavailable" });
+        return;
+      }
+    }
+    const card = await reconcileCard(STRIPE_SECRET_KEY, cust, selectedPmId || confirmedPaymentMethodId(events), { allowWrite: true });
     if (isAmbiguousCard(card)) {
       res.status(409).json({ ok: false, error: "card_confirmation_required" });
       return;
@@ -659,6 +684,9 @@ export default async function handler(req: Req, res: Res) {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
     return;
   }
+  // Item 6: the card-choice response is never cached — a card deleted
+  // after the list was read must not linger in a stale response.
+  res.setHeader("Cache-Control", "no-store");
 
   const requestId = Math.random().toString(36).slice(2);
   const logErr = (step: string, err: unknown) =>
@@ -685,7 +713,9 @@ export default async function handler(req: Req, res: Res) {
     // Verify the booking token FIRST (before the session branch), so that
     // /save-card?bt=<token> without a session_id still gets its booking
     // summary. The token alone never counts as payment verification.
-    let booking: Record<string, string> | null = null;
+    // Item 6: the booking may also carry the masked saved-card options
+    // (booking.cards) for an explicit client choice.
+    let booking: (Record<string, string> & { cards?: SavedCardOption[] }) | null = null;
     let bookingId: string | null = null;
     let tokenPayload: BookingPayload | null = null;
     if (bt) {
@@ -747,6 +777,24 @@ export default async function handler(req: Req, res: Res) {
               // owner sees that a choice is waiting, not a guessed card.
               booking.has_card = "1";
               booking.card_state = "card_confirmation_required";
+              // 16.11 (item 6): when the booking is bound to one Stripe
+              // Customer, offer the masked list for an explicit choice.
+              // No list without a confirmed binding — the UI then falls
+              // back to "add a card".
+              if (boundCust) {
+                try {
+                  const options = await listCustomerCards(revisitKey, boundCust.id);
+                  booking.cards = options
+                    .map((c) => ({
+                      id: c.id,
+                      brand: String(c.card?.brand ?? ""),
+                      last4: String(c.card?.last4 ?? ""),
+                      ...(typeof c.card?.exp_month === "number" ? { exp_month: c.card.exp_month } : {}),
+                      ...(typeof c.card?.exp_year === "number" ? { exp_year: c.card.exp_year } : {}),
+                    }))
+                    .filter((c) => c.brand !== "" && c.last4 !== "");
+                } catch { /* no list — the UI falls back to "add a card" */ }
+              }
             } else if (card) {
               booking.has_card = "1";
               booking.card_state = "card_ready";

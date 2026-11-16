@@ -55,8 +55,8 @@ describe("cancelled visits never get pipeline actions", () => {
 describe("live visits keep their pipeline actions", () => {
   it("requested + unapproved → approve item and row action", () => {
     const v = { ...base, status: "requested" };
-    expect(attentionItems(v).map((i) => i.label)).toContain("Open to approve request");
-    expect(nextActionFor(v, false)).toBe("Approve request");
+    expect(attentionItems(v).map((i) => i.label)).toContain("Open to accept request for scheduling");
+    expect(nextActionFor(v, false)).toBe("Accept request for scheduling");
   });
 
   it("approved + no cleaner → assign item and row action", () => {
@@ -147,5 +147,5 @@ describe("visitBadgeLabel follows the report, not just the row status", () => {
 it("routes an unfinished past visit to review before assignment", () => {
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T12:00:00Z"));
   expect(nextActionFor({ status: "requested", report_status: "none", visit_date: "2026-11-01" }, false)).toBe("Review the past visit date");
-  expect(nextActionFor({ status: "requested", report_status: "none", visit_date: "2026-11-07" }, false)).toBe("Approve request");
+  expect(nextActionFor({ status: "requested", report_status: "none", visit_date: "2026-11-07" }, false)).toBe("Accept request for scheduling");
 });

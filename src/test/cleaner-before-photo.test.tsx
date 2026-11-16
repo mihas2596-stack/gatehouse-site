@@ -74,8 +74,8 @@ describe("cleaner before-photo flow", () => {
     expect(screen.getByText("Still need a before photo (or a reason): Kitchen")).toBeInTheDocument();
     // Idea 13: Finish is disabled while rooms are not ready, so the
     // submit error is never reached by tapping it.
-    expect(screen.getByRole("button", { name: "Finish & send report" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
+    expect(screen.getByRole("button", { name: "Complete 1 more room" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Complete 1 more room" }));
     expect(posts.filter((p) => p.action === "submit")).toHaveLength(0);
   });
 
@@ -87,8 +87,8 @@ describe("cleaner before-photo flow", () => {
     expect(screen.getAllByText("Rooms ready: 0 of 1")).toHaveLength(2);
     expect(screen.getByText("Still need an after photo (or a reason): Kitchen")).toBeInTheDocument();
     // Idea 13: Finish stays disabled until the after photo exists.
-    expect(screen.getByRole("button", { name: "Finish & send report" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
+    expect(screen.getByRole("button", { name: "Complete 1 more room" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Complete 1 more room" }));
     expect(posts.filter((p) => p.action === "submit")).toHaveLength(0);
   });
 

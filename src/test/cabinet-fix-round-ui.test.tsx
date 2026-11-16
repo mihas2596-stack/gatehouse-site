@@ -85,7 +85,7 @@ describe("cleaner cabinet: full client name and future-visit gate", () => {
     cleanerData = cleanerFixture({ visit: { date: FUTURE } });
     openCleaner();
     await screen.findByText(/This visit is on .* — you can send the report after the visit\./);
-    const finish = await screen.findByRole("button", { name: /Finish & send report/ });
+    const finish = await screen.findByRole("button", { name: /Finish unlocks on/ });
     expect(finish).toBeDisabled();
   });
 
@@ -96,7 +96,7 @@ describe("cleaner cabinet: full client name and future-visit gate", () => {
     expect(screen.queryByText(/you can send the report after the visit/)).not.toBeInTheDocument();
     // Finish is still disabled by the photo rule (no photos yet), not
     // by the date gate — the date message is what must be absent.
-    const finish = await screen.findByRole("button", { name: /Finish & send report/ });
+    const finish = await screen.findByRole("button", { name: /Complete \d+ more rooms?/ });
     expect(finish).toBeDisabled();
   });
 });

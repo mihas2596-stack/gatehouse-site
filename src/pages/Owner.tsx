@@ -269,7 +269,7 @@ const initials = (name: string): string => {
 const digitsOnly = (phone: string): string => phone.replace(/\D/g, "");
 
 const EVENT_LABELS: Record<string, string> = {
-  request_approved: "Request approved",
+  request_approved: "Request accepted for scheduling",
   cleaner_assigned: "Cleaner assigned",
   cleaner_link_opened: "Cleaner opened the job link",
   cleaner_link_issued: "Cleaner link issued",
@@ -1891,27 +1891,28 @@ const Owner = () => {
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <a className="text-base underline break-all" href={`mailto:${v.client_email ?? ""}`}>{v.client_email ?? ""}</a>
                 </div>
-                <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} compact /></div>
+                <div className="mt-4"><ClientContact key={`${v.id}:${v.client_phone ?? ""}`} phone={v.client_phone} name={v.client_name ?? null} compact /></div>
                 {/* C: "Update client phone" lives in "More actions"
                     below, not as a standalone disclosure on the card. */}
-                {/* Task 7: "Approve request" is for taking a request
-                    into the pipeline — once the visit is confirmed it
-                    no longer applies (the server would even log a
-                    redundant request_approved event). The visit_confirmed
-                    guard matches nextActionFor, which already gates the
-                    same step on it — so the button also hides in the
-                    stale window where the row status still reads
-                    "requested" but the confirmation already landed. */}
+                {/* Task 7: "Accept request for scheduling" takes a
+                    request into the pipeline — once the visit is
+                    confirmed it no longer applies (the server would
+                    even log a redundant request_approved event). The
+                    visit_confirmed guard matches nextActionFor, which
+                    already gates the same step on it — so the button
+                    also hides in the stale window where the row status
+                    still reads "requested" but the confirmation already
+                    landed. */}
                 {v.status === "requested" && !v.request_approved && !v.visit_confirmed && (
                   <div className="mt-3">
-                    <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Approve request", { action: "approve_request", booking_id: v.booking_id })}>
-                      Approve request
+                    <Button variant="hero" disabled={acting !== ""} onClick={() => void runAction("Accept request for scheduling", { action: "approve_request", booking_id: v.booking_id })}>
+                      Accept request for scheduling
                     </Button>
-                    <p className="text-xs text-muted-foreground mt-1">Approving takes the request into your pipeline. It does not assign a cleaner or confirm the date — those come next.</p>
+                    <p className="text-xs text-muted-foreground mt-1">Use this while you coordinate with a cleaner. The client gets a confirmation after you assign a cleaner and confirm the visit.</p>
                   </div>
                 )}
                 {v.request_approved && v.status === "requested" && !v.visit_confirmed && (
-                  <p className="text-sm text-muted-foreground mt-2">Request approved — the date is not confirmed yet. Assign a cleaner and confirm the visit below.</p>
+                  <p className="text-sm text-muted-foreground mt-2">Accepted for scheduling. Assign a cleaner and confirm the visit when the date is set.</p>
                 )}
                 {/* Extension bug #4: the owner-notification status for
                     a new request. A failed (or missing) notification is
@@ -2082,7 +2083,7 @@ const Owner = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="font-semibold">{v.cleaner_name}</p>
-                          {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>{phone}</a></p>}
+                          {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a> · {phone}</p>}
                         </div>
                       </div>
                     ) : (
@@ -2155,7 +2156,7 @@ const Owner = () => {
                       </div>
                       <div className="min-w-0">
                         <p className="font-semibold">{v.cleaner_name}</p>
-                        {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>{phone}</a></p>}
+                        {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a> · {phone}</p>}
                       </div>
                       <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={() => { setChangeCleanerId(v.cleaner_id ?? roster.find((r) => r.name === v.cleaner_name)?.id ?? ""); setFormError(""); setCleanerChanging(true); }}>
                         Change

@@ -113,7 +113,7 @@ export const nextActionFor = (v: AttentionVisit, paymentFailed: boolean): string
   if (isPastUnfinishedVisit(v) && (!v.report_status || ["none", "draft", "returned"].includes(v.report_status))) return "Review the past visit date";
   if (!v.visit_confirmed) {
     if (v.report_status === "sent" || v.report_status === "submitted") return "Review the visit record";
-    if (v.status === "requested" && !v.request_approved) return "Approve request";
+    if (v.status === "requested" && !v.request_approved) return "Accept request for scheduling";
     if (!v.cleaner_name) return "Assign a cleaner";
     return "Confirm the date";
   }
@@ -151,7 +151,7 @@ export const attentionItems = (v: AttentionVisit): AttentionItem[] => {
   // needs an explicit review-and-repair confirmation, not a routine
   // date confirmation.
   const needsReview = !v.visit_confirmed && (v.report_status === "submitted" || v.report_status === "sent");
-  if (v.status === "requested" && !v.request_approved) items.push({ label: "Open to approve request", focus: "summary" });
+  if (v.status === "requested" && !v.request_approved) items.push({ label: "Open to accept request for scheduling", focus: "summary" });
   if (!v.cleaner_name) items.push({ label: "Open to assign a cleaner", focus: "schedule" });
   else if (needsReview) items.push({ label: "Open: needs review", focus: "schedule" });
   else if (!v.visit_confirmed) items.push({ label: "Open to confirm the date", focus: "schedule" });

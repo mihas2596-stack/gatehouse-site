@@ -6,8 +6,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import autoChargeHandler from "../../api/auto-charge";
 
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-28T10:00:00Z"));
-
 type Row = Record<string, unknown>;
 type Ev = { event: string; detail: Record<string, unknown> | null; created_at: string };
 type Acc = Record<string, unknown>;
@@ -28,7 +26,7 @@ function res() {
   };
 }
 
-const ev = (event: string, created_at: string): Ev => ({ event, detail: {}, created_at });
+const ev = (event: string, created_at: string, detail: Record<string, unknown> = {}): Ev => ({ event, detail, created_at });
 const confirmed = () => ev("visit_confirmed", "2026-10-27T10:00:00.000Z");
 
 function makeVisit(over: Row = {}): Row {
@@ -36,12 +34,16 @@ function makeVisit(over: Row = {}): Row {
     id: "visit-1", booking_id: "bid-rem", client_email: "client@example.com",
     cleaner_name: "Taylor Allen", visit_date: "2026-10-29", window: "midday",
     status: "confirmed", report_sent_at: null, entry_reminder_sent: null,
-    entry_method: null,
+    entry_method: null, entry_detail: null, entry_notes: null,
     ...over,
   };
 }
 
 beforeEach(() => {
+  // The fixture clock: 2026-10-28 10:00 UTC = 06:00 Atlanta, so the
+  // fixture visit (2026-10-29) is "tomorrow". Re-installed here
+  // because afterEach restores all mocks.
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-28T10:00:00Z"));
   vi.stubEnv("CRON_SECRET", "cron-secret");
   vi.stubEnv("RESEND_API_KEY", "re_test");
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_x");
@@ -70,14 +72,28 @@ beforeEach(() => {
     if (u.hostname === "test.supabase.co") {
       if (u.pathname.includes("/rest/v1/gh_visits")) {
         if (method === "PATCH") {
-          // CAS: the claim wins only when the flag is not already true.
+          // A CAS claim: PostgREST semantics — `neq.true` never
+          // matches NULL, while the `or=(is.null,eq.false)` claim
+          // matches null or false. Any other PATCH applies its body
+          // (claim release on a failed send, flag reset on a date
+          // move).
           const qId = u.searchParams.get("id");
           const row = visitRows.find((r) => qId === `eq.${r["id"]}`);
-          if (row && row["entry_reminder_sent"] !== true) {
-            row["entry_reminder_sent"] = true;
-            return okRes([row]);
+          const body = JSON.parse(String(init?.body ?? "{}")) as Row;
+          const orClause = u.searchParams.get("or");
+          const neqTrue = u.searchParams.get("entry_reminder_sent") === "neq.true";
+          if (orClause || neqTrue) {
+            const claimable = orClause
+              ? row && (row["entry_reminder_sent"] === null || row["entry_reminder_sent"] === false)
+              : row && row["entry_reminder_sent"] === false;
+            if (claimable) {
+              row["entry_reminder_sent"] = true;
+              return okRes([row]);
+            }
+            return okRes([]);
           }
-          return okRes([]);
+          if (row) Object.assign(row, body);
+          return okRes(row ? [row] : []);
         }
         // The reminder pass queries by visit_date; every other
         // gh_visits read in this handler returns nothing here.
@@ -93,8 +109,8 @@ beforeEach(() => {
       }
       if (u.pathname.includes("/rest/v1/gh_events")) {
         if (method === "POST") {
-          const body = JSON.parse(String(init?.body ?? "{}")) as { event?: string };
-          events.push({ event: body.event ?? "", detail: {}, created_at: new Date().toISOString() });
+          const body = JSON.parse(String(init?.body ?? "{}")) as { event?: string; detail?: Record<string, unknown> | null };
+          events.push({ event: body.event ?? "", detail: body.detail ?? {}, created_at: new Date().toISOString() });
           return okRes([{ id: events.length }]);
         }
         const qVid = u.searchParams.get("visit_id");
@@ -129,7 +145,7 @@ describe("entry reminder guard", () => {
     expect(r.code).toBe(200);
     expect(r.body["entry_reminded"]).toBe(1);
     expect(resendCalls).toHaveLength(1);
-    expect(resendCalls[0].subject).toContain("arrange entry");
+    expect(resendCalls[0].subject).toContain("Entry details for your cleaning");
   });
 
   it("skips meeting choices (home / other_person)", async () => {
@@ -167,6 +183,52 @@ describe("entry reminder guard", () => {
     events = [confirmed(), ev("entry_reminder_sent", "2026-10-28T09:00:00.000Z")];
     const r = await call();
     expect(r.body["entry_reminded"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+  });
+
+  // Item 9: "arrange" alone is NOT settled — a code must be saved.
+  it("reminds when the client chose arrange but saved no code", async () => {
+    visitRows = [makeVisit({ entry_method: "arrange_before", entry_detail: "door_code" })];
+    accessRows = [{ visit_id: "visit-1", entry_method: "arrange" }];
+    const r = await call();
+    expect(r.body["entry_reminded"]).toBe(1);
+    expect(resendCalls).toHaveLength(1);
+  });
+
+  it("settles 'other' with an instruction, reminds without one", async () => {
+    visitRows = [makeVisit({ entry_method: "arrange_before", entry_detail: "other", entry_notes: "Side gate, code 1234" })];
+    expect((await call()).body["entry_reminded"]).toBe(0);
+    expect(resendCalls).toHaveLength(0);
+
+    visitRows = [makeVisit({ entry_method: "arrange_before", entry_detail: "other" })];
+    accessRows = [];
+    resendCalls = [];
+    expect((await call()).body["entry_reminded"]).toBe(1);
+    expect(resendCalls).toHaveLength(1);
+  });
+
+  // Item 9: the reminder is bound to the visit AND its date.
+  it("reminds again after the visit moves to a new date", async () => {
+    visitRows = [makeVisit({ visit_date: "2026-10-30", entry_reminder_sent: true })];
+    events = [confirmed(), ev("entry_reminder_sent", "2026-10-28T09:00:00.000Z", { visit_date: "2026-10-29" })];
+    const r = await call();
+    expect(r.body["entry_reminded"]).toBe(1);
+    expect(resendCalls).toHaveLength(1);
+  });
+
+  // Item 9: the day-of run is the safety net — a visit confirmed
+  // after the last day-before run still gets its one reminder on
+  // the morning of the visit; the dedup (not a date check) is what
+  // stops a second one.
+  it("reminds a same-day visit when no reminder went out yet", async () => {
+    visitRows = [makeVisit({ visit_date: "2026-10-28" })];
+    events = [confirmed()];
+    expect((await call()).body["entry_reminded"]).toBe(1);
+
+    visitRows = [makeVisit({ visit_date: "2026-10-28", entry_reminder_sent: true })];
+    events = [confirmed(), ev("entry_reminder_sent", "2026-10-27T14:00:00.000Z", { visit_date: "2026-10-28" })];
+    resendCalls = [];
+    expect((await call()).body["entry_reminded"]).toBe(0);
     expect(resendCalls).toHaveLength(0);
   });
 });

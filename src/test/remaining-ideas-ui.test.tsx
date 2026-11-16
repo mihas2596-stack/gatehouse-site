@@ -174,13 +174,13 @@ describe("remaining ideas: /cleaner", () => {
     expect(await screen.findByText(/Need help\?/)).toBeInTheDocument();
     // The line is permanent: it is there even when the conditional
     // "Entry not arranged yet" banner also shows the number.
-    expect(screen.getAllByText("(770) 525-8599").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/\(770\) 525-8599/).length).toBeGreaterThanOrEqual(1);
   });
 
   it("idea 13: Finish is disabled until every room is ready", async () => {
     cleanerFixture = makeCleanerView();
     openCleaner();
-    const finish = await screen.findByRole("button", { name: "Finish & send report" });
+    const finish = await screen.findByRole("button", { name: "Complete 1 more room" });
     expect(finish).toBeDisabled();
   });
 

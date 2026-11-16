@@ -29,7 +29,7 @@ const Footer = ({ children }: { children?: ReactNode }) => {
               <Mail className="w-4 h-4 text-[#3D2B1F]" />
               hello@gatehousehomecleaning.com
             </a>
-            <a href="tel:+17705258599" className="flex min-h-[44px] items-center gap-2 text-[#3D2B1F] hover:text-[#5C3D2E] transition-colors font-medium md:min-h-0">
+            <a href="tel:+17705258599" aria-label="Call Gatehouse Home Cleaning (770) 525-8599" className="flex min-h-[44px] items-center gap-2 text-[#3D2B1F] hover:text-[#5C3D2E] transition-colors font-medium md:min-h-0">
               <Phone className="w-4 h-4 text-[#3D2B1F]" />
               (770) 525-8599
             </a>

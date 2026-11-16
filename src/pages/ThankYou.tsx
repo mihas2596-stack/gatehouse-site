@@ -23,6 +23,7 @@ type SubmissionState = {
   serverPriceChanged?: boolean;
 };
 
+type SavedCardOption = { id: string; brand: string; last4: string; exp_month?: number; exp_year?: number };
 type CardStatusBooking = {
   first?: string;
   recurring?: string;
@@ -39,6 +40,7 @@ type CardStatusBooking = {
   confirmed_window?: string;
   confirm_by?: string;
   visit_state?: string;
+  cards?: SavedCardOption[];
 };
 
 // Card states, always driven by the server (card-status reconciles with
@@ -150,19 +152,28 @@ const ThankYou = () => {
 
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState(false);
+  const [confirmUnavailable, setConfirmUnavailable] = useState(false);
+  const [selectedCard, setSelectedCard] = useState("");
   const confirmCard = async () => {
     if (!bt || confirming) return;
     setConfirming(true);
     setConfirmError(false);
+    setConfirmUnavailable(false);
     try {
       const res = await fetch("/api/card-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bt, action: "confirm_card" }),
+        body: JSON.stringify({ bt, action: "confirm_card", ...(selectedCard ? { payment_method_id: selectedCard } : {}) }),
       });
-      const data = (await res.json()) as { ok?: boolean };
+      const data = (await res.json()) as { ok?: boolean; error?: string };
       if (res.ok && data.ok) {
         setCard((c) => (c.kind === "choice" ? { kind: "saved", booking: c.booking } : c));
+      } else if (data.error === "card_unavailable") {
+        // The chosen card disappeared between the list and the
+        // confirm: re-read the list and say so.
+        setConfirmUnavailable(true);
+        setSelectedCard("");
+        checkCard();
       } else {
         setConfirmError(true);
       }
@@ -353,7 +364,7 @@ const ThankYou = () => {
           <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">{card.kind === "confirmed" ? "Your visit is confirmed" : "Request received"}</h1>
           {emailNotice}
           <p className="text-lg text-foreground mb-2">
-            <strong>Card saved · $0 charged today</strong>
+            <strong>Card saved. $0 charged today.</strong>
           </p>
           <p className="text-lg text-foreground mb-6">
             {card.kind === "confirmed" ? (
@@ -381,15 +392,19 @@ const ThankYou = () => {
           <h2 className="font-heading text-xl font-bold">What happens next</h2>
           <p className="mt-2 text-lg">{card.kind === "confirmed" ? "Your cleaner arrives during the confirmed window. After cleaning, we email your photo report." : "We check availability and email your confirmation. You can follow the status on your visit page."}</p>
         </div>
-        <p className="mb-6 text-base leading-relaxed">Nothing is charged today — you&apos;ll approve your photo report after the clean.</p>
+        <p className="mb-6 text-base leading-relaxed">Nothing is charged today. After the clean, approve your photo report to pay — if you haven&rsquo;t approved or reported an issue, we&rsquo;ll charge your card automatically 24 hours after we send the report.</p>
       </>,
     );
   }
 
   // State C2 — a card is on file, but NOT yet confirmed for THIS booking.
   if (card.kind === "choice") {
-    const brand = card.booking?.card_brand ? card.booking.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "Card";
+    // Item 6: never render "Card" without digits — an unidentified
+    // saved card is a choice list (or the safe "add a card" fallback).
+    const brand = card.booking?.card_brand ? card.booking.card_brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "";
     const last4 = card.booking?.card_last4 ?? "";
+    const cardIdentified = Boolean(brand && last4);
+    const cardOptions = card.booking?.cards ?? [];
     return shell(
       <>
         <div className="text-center">
@@ -399,30 +414,59 @@ const ThankYou = () => {
         </div>
         {summaryCard}
         <p className="mb-6 text-base leading-relaxed">
-          We found a card on file for your email{last4 ? <> — <strong>{brand} ending in ••••{last4}</strong></> : null}.
-          A card saved earlier is never used for a new booking without your say-so. Choose it for this booking,
-          or add a different card. Nothing is charged today either way.
+          {cardIdentified ? (
+            <>We found a card on file for your email — <strong>{brand} ending in ••••{last4}</strong>. A card saved earlier is never used for a new booking without your say-so. Choose it for this booking, or add a different card. Nothing is charged today either way.</>
+          ) : cardOptions.length > 0 ? (
+            <>We found several cards on file for your email. Choose one for this booking — a card saved earlier is never used for a new booking without your say-so. Nothing is charged today either way.</>
+          ) : (
+            <>We couldn&rsquo;t identify a saved card for this visit. Add a card to continue.</>
+          )}
         </p>
         {confirmError && (
           <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
             We couldn't confirm that card. Please try again, or add a different card.
           </p>
         )}
+        {confirmUnavailable && (
+          <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+            This card is no longer available. Choose another card or add a new one.
+          </p>
+        )}
+        {!cardIdentified && cardOptions.length > 0 && (
+          <div className="mb-3 text-left" role="radiogroup" aria-label="Choose a card for this booking">
+            {cardOptions.map((c) => {
+              const label = `${c.brand ? c.brand.replace(/\b\w/g, (ch) => ch.toUpperCase()) : "Card"} ending in ••••${c.last4}`;
+              return (
+                <label key={c.id} className="mb-2 flex min-h-[48px] cursor-pointer items-center gap-3 rounded-xl border border-border bg-card p-3">
+                  <input type="radio" name="saved-card" value={c.id} checked={selectedCard === c.id} onChange={() => setSelectedCard(c.id)} className="h-5 w-5 accent-primary" />
+                  <span className="text-base font-semibold">{label}</span>
+                  {typeof c.exp_month === "number" && typeof c.exp_year === "number" && (
+                    <span className="text-sm text-muted-foreground">Expires {String(c.exp_month).padStart(2, "0")}/{c.exp_year}</span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        )}
         {startError && (
           <p className="mb-4 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
             Something went wrong opening the secure card page. Your request is saved — please try again.
           </p>
         )}
-        <Button variant="hero" size="xl" className="w-full mb-3" onClick={confirmCard} disabled={confirming || !bt}>
-          {confirming ? (
-            <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
-              Confirming…
-            </>
-          ) : (
-            "Use this card for this booking"
-          )}
-        </Button>
+        {(cardIdentified || cardOptions.length > 0) && (
+          <Button variant="hero" size="xl" className="w-full mb-3" onClick={confirmCard} disabled={confirming || !bt || (!cardIdentified && !selectedCard)}>
+            {confirming ? (
+              <>
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
+                Confirming…
+              </>
+            ) : cardIdentified ? (
+              "Use this card for this booking"
+            ) : (
+              "Use selected card"
+            )}
+          </Button>
+        )}
         <Button variant="outline" size="xl" className="w-full" onClick={startCard} disabled={starting || !bt}>
           {starting ? (
             <>

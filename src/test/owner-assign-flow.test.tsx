@@ -10,7 +10,7 @@
 //    Root cause: runAction re-opened the visit from the PRE-action list
 //    snapshot via a fire-and-forget list reload, so the card flashed
 //    (and on a slow connection stuck on) the stale object.
-// 3. "Approve request" stays visible after the visit is confirmed.
+// 3. "Accept request for scheduling" stays visible after the visit is confirmed.
 //    Root cause: the button's condition lacked the !visit_confirmed
 //    guard that nextActionFor already has.
 // The fetch mock below is STATEFUL: assign_confirm mutates the server
@@ -166,24 +166,24 @@ describe("owner assign flow (task 7 findings)", () => {
     expect(screen.queryByText("Requested")).not.toBeInTheDocument();
   });
 
-  it("finding 3: Approve request is hidden once the visit is confirmed", async () => {
+  it("finding 3: Accept request for scheduling is hidden once the visit is confirmed", async () => {
     setup();
     await openDetail();
     // Before confirming, the button is there (the request genuinely
     // needs approval).
-    expect(screen.getByRole("button", { name: "Approve request" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept request for scheduling" })).toBeInTheDocument();
     await assignDanielle();
     await screen.findByText("Confirmed", {}, { timeout: 5000 });
-    expect(screen.queryByRole("button", { name: "Approve request" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept request for scheduling" })).not.toBeInTheDocument();
   });
 
-  it("finding 3: Approve request is hidden when the visit is confirmed even if the row status still reads requested", async () => {
+  it("finding 3: Accept request for scheduling is hidden when the visit is confirmed even if the row status still reads requested", async () => {
     // The stale window: confirmation landed (visit_confirmed) but the
     // row status has not caught up yet. The button must not offer an
     // action that no longer applies.
     setup({ ...requestedVisit, visit_confirmed: true });
     await openDetail();
-    expect(screen.queryByRole("button", { name: "Approve request" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept request for scheduling" })).not.toBeInTheDocument();
     expect(screen.queryByText(/the date is not confirmed yet/)).not.toBeInTheDocument();
   });
 });

@@ -30,7 +30,7 @@ import { dbConfigured, dbSelect, dbSelectStrict, dbDelete, dbDeleteCount, dbUpda
 import { chargeVisit } from "./_payment_obligation.js";
 import { isFutureVisitDate } from "./_visit_date.js";
 import { pickCustomerByEmail, pickCard, resolveCustomerByRowId } from "./_stripe_customer.js";
-import { loadAccess } from "./_visit_access.js";
+import { loadAccess, type AccessRow } from "./_visit_access.js";
 import { cleanupOrphanPhotos } from "./_storage-cleanup.js";
 import { reconcileIntent, confirmIntent, getIntent, verifyIntentForObligation } from "./_payment_intent.js";
 import { listCustomerCards } from "./card-status.js";
@@ -1200,6 +1200,26 @@ export default async function handler(req: Req, res: Res) {
     // (twice daily), so a visit inside the next ~24-48h is caught.
     // The email contains NO entry details — only the date, window,
     // cleaner name and the instruction to choose on the visit page.
+    //
+    // Item 9: "arrange" alone is NOT settled — a code (door/lockbox)
+    // or an instruction ("other") must actually be saved. The access
+    // row's entry_method is the SAVED arrangement (home/someone/
+    // arrange); the quote-time detail (door_code/lockbox/other) and
+    // notes live on the visit row.
+    const entryIsSettled = (
+      acc: AccessRow | null,
+      row: { entry_method: string | null; entry_detail: string | null; entry_notes: string | null },
+    ): boolean => {
+      if (acc?.entry_method === "home" || acc?.entry_method === "someone") return true;
+      if (acc?.entry_method === "arrange") {
+        if (row.entry_detail === "other") return Boolean(acc.entry_note?.trim() || row.entry_notes?.trim());
+        return Boolean(acc.entry_secret);
+      }
+      // No saved arrangement yet: an "other" instruction written in
+      // the quote is the arrangement.
+      if (row.entry_method === "arrange_before" && row.entry_detail === "other") return Boolean(row.entry_notes?.trim());
+      return false;
+    };
     let entryReminded = 0;
     let entryCleaned = 0;
     try {
@@ -1230,7 +1250,7 @@ export default async function handler(req: Req, res: Res) {
           id: string; booking_id: string; client_email: string | null; client_name?: string | null; cleaner_name: string | null;
           visit_date: string | null; window: string | null; status: string | null; report_sent_at: string | null;
           entry_reminder_sent: boolean | null;
-          entry_method: string | null;
+          entry_method: string | null; entry_detail: string | null; entry_notes: string | null;
         }>(
           "gh_visits",
           `visit_date=gte.${today}&visit_date=lte.${tomorrow}&limit=50`,
@@ -1239,17 +1259,32 @@ export default async function handler(req: Req, res: Res) {
         for (const r of rows) {
           if (!r.booking_id || !r.client_email || !r.cleaner_name) continue;
           if (r.status === "cancelled" || r.report_sent_at) continue;
-          if (r.entry_reminder_sent) continue;
           // Quote-time choice settles the reminder too: a meeting
           // choice needs no code, so reminding would be noise.
           if (r.entry_method === "home" || r.entry_method === "other_person") continue;
           const evs = await bookingEvents(r.booking_id);
           if (!evs.some((e) => e.event === "visit_confirmed")) continue;
-          if (evs.some((e) => e.event === "entry_reminder_sent")) continue;
+          // Item 9: the day-of run is the safety net, not a second
+          // reminder — the dedup below already stops it when the
+          // day-before reminder went out. A visit confirmed after
+          // the last day-before run (or a failed run the day before)
+          // still gets its one reminder on the morning of the visit.
+          // (A "confirmed today only" gate would have dropped exactly
+          // those late confirmations, so there is no date check here.)
+          // Item 9: the reminder is bound to the visit AND its date —
+          // a visit moved after a reminder gets a fresh reminder for
+          // the new date. An old event without a date is treated as
+          // sent for this date (never re-send on a guess).
+          const lastReminder = latestEvent(evs, "entry_reminder_sent");
+          const reminderDate = typeof lastReminder?.detail?.["visit_date"] === "string" ? lastReminder.detail["visit_date"] : undefined;
+          if (lastReminder && (reminderDate === undefined || reminderDate === r.visit_date)) continue;
+          if (r.entry_reminder_sent && lastReminder && reminderDate !== undefined && reminderDate !== r.visit_date) {
+            // Date moved after the reminder: release the flag so the
+            // CAS below can claim a fresh reminder for the new date.
+            await dbUpdate("gh_visits", `id=eq.${r.id}`, { entry_reminder_sent: false });
+          }
           const acc = await loadAccess(r.id);
-          if (acc?.entry_method) continue;
-          // Arrange-before WITH saved details is settled as well.
-          if (r.entry_method === "arrange_before" && acc?.entry_secret) continue;
+          if (entryIsSettled(acc, r)) continue;
           if (!RESEND_KEY) continue;
           // N12: ATOMIC claim before sending. The two daily cron
           // runs used to both see "no journal event" and both email.
@@ -1258,12 +1293,23 @@ export default async function handler(req: Req, res: Res) {
           // outcome is unknown, the claim is RELEASED (false) so a
           // later run retries — an unknown send never becomes a
           // duplicate and never becomes a lost reminder.
+          // Item 9: the old flag is NULL on old rows — `neq.true`
+          // never matches NULL in PostgREST, so those rows could
+          // never be claimed. Claim false OR null.
           const claimed = await dbUpdateCount(
             "gh_visits",
-            `id=eq.${r.id}&entry_reminder_sent=neq.true`,
+            `id=eq.${r.id}&or=(entry_reminder_sent.is.null,entry_reminder_sent.eq.false)`,
             { entry_reminder_sent: true },
           );
           if (claimed !== 1) continue;
+          // Item 9: re-check the entry state after the claim — the
+          // client may have saved entry details between the first
+          // read and the send. If settled now, release the claim.
+          const accAfterClaim = await loadAccess(r.id);
+          if (entryIsSettled(accAfterClaim, r)) {
+            await dbUpdate("gh_visits", `id=eq.${r.id}`, { entry_reminder_sent: false });
+            continue;
+          }
           let sent = false;
           try {
             const resp = await fetch("https://api.resend.com/emails", {
@@ -1273,9 +1319,9 @@ export default async function handler(req: Req, res: Res) {
                 from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
                 to: [r.client_email],
                 reply_to: "hello@gatehousehomecleaning.com",
-                subject: `Before your cleaning ${emailDate(r.visit_date ?? "")} — arrange entry`,
-                html: emailDocument({ firstName: (r.client_name ?? "there").split(/\s+/)[0], heading: "How should your cleaner get in?", paragraphs: [`Your visit: ${emailDate(r.visit_date ?? "")} · ${emailArrivalWindow(r.window ?? "")}. Cleaner: ${r.cleaner_name}.`, "You can meet your cleaner — no code needed. Open your visit page to choose how to arrange entry. Entry details are never included in this email."], action: { url: clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" }), label: "Arrange entry" } }),
-                text: `Hi there,\n\nYour cleaning is coming up on ${emailDate(r.visit_date ?? "")}${r.window ? ` (${emailArrivalWindow(r.window)})` : ""} with ${r.cleaner_name}.\n\nWe still need to know how your cleaner should get in. Please open your visit page: ${clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" })}\n\nChoose one: you will be home, someone else will meet the cleaner, or you will arrange entry before the visit.\n\nIf you will be home, no codes are needed.\n\nGatehouse Home Cleaning\n`,
+                subject: `Entry details for your cleaning on ${emailDate(r.visit_date ?? "")}`,
+                html: emailDocument({ firstName: (r.client_name ?? "there").split(/\s+/)[0], heading: "How should your cleaner get in?", paragraphs: [`Your visit: ${emailDate(r.visit_date ?? "")} · ${emailArrivalWindow(r.window ?? "")}. Cleaner: ${r.cleaner_name}.`, "Please open your visit page to add entry details or tell us who will let your cleaner in. Entry details are never included in this email."], action: { url: clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" }), label: "Arrange entry" } }),
+                text: `Hi there,\n\nYour cleaning is coming up on ${emailDate(r.visit_date ?? "")}${r.window ? ` (${emailArrivalWindow(r.window)})` : ""} with ${r.cleaner_name}.\n\nPlease open your visit page to add entry details or tell us who will let your cleaner in: ${clientVisitLink(STRIPE_SECRET_KEY, { bid: r.booking_id, email: r.client_email, name: r.client_name ?? "" })}\n\nChoose one: you will be home, someone else will meet the cleaner, or you will arrange entry before the visit.\n\nIf you will be home, no codes are needed.\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
             });
@@ -1285,7 +1331,7 @@ export default async function handler(req: Req, res: Res) {
             await dbUpdate("gh_visits", `id=eq.${r.id}`, { entry_reminder_sent: false });
             continue;
           }
-          await logEvent(r.id, r.booking_id, "system", "entry_reminder_sent");
+          await logEvent(r.id, r.booking_id, "system", "entry_reminder_sent", { visit_date: r.visit_date });
           entryReminded++;
         }
       }
