@@ -17,6 +17,7 @@ import { convertToJpeg } from "@/lib/imageConvert";
 import { photoBlocked } from "@/lib/photoPolicy";
 import { cleanerJobMessage } from "@/lib/cleanerMessage";
 import ClientContact from "@/components/ClientContact";
+import { ZoomablePhoto } from "@/components/ReportContent";
 import {
   attentionItems,
   nextActionFor,
@@ -94,11 +95,14 @@ type Visit = {
   is_test: boolean;
   checklist: { rooms?: { name: string; items: { label: string; done: boolean }[]; skip_reason?: string }[]; problem_note?: string; submitted_at?: string };
   photo_count?: number;
+  // Cabinets audit (fix 2): the client's own complaint attachments,
+  // counted separately from the report photos (list endpoint).
+  issue_photo_count?: number;
 };
 
 type RosterCleaner = { id: string; name: string; phone: string | null; photo_url: string | null; active: boolean };
 
-type Photo = { id: string; room: string; kind: string; note: string | null; url: string | null };
+type Photo = { id: string; room: string; kind: string; note: string | null; url: string | null; thumb_url?: string | null };
 type GhEvent = { id: number; actor: string; event: string; detail: Record<string, unknown> | null; created_at: string };
 
 const money = (cents: number | null): string =>
@@ -371,6 +375,10 @@ const Owner = () => {
   const [tellCleaner, setTellCleaner] = useState<{ kind: "cancelled" | "date"; date: string; altDate?: string } | null>(null);
   const [returnNote, setReturnNote] = useState("");
   const [issueReason, setIssueReason] = useState("");
+  // Cabinets audit (fix 5): photo deletion lives under an explicit
+  // "Manage photos" mode — viewing a photo never sits next to a
+  // one-tap delete. Reset when another visit is opened.
+  const [managePhotos, setManagePhotos] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   // MB-27: while a search is active, older pages auto-load so the
   // search covers the whole history, not just the first page.
@@ -736,6 +744,7 @@ const Owner = () => {
       setPublishMsg("");
       setReturnNote("");
       setIssueReason("");
+      setManagePhotos(false);
       setScheduleEditing(false);
       setAltDate("");
       setAssignCleanerId("");
@@ -1386,7 +1395,7 @@ const Owner = () => {
           </Button>
         </div>
         {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
-        {loading && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
+        {loading && visits.length > 0 && <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />}
         <div className={selected ? "lg:grid lg:grid-cols-[380px_minmax(0,1fr)] lg:gap-6 lg:items-start" : ""}>
           <div className={selected ? "hidden lg:block lg:sticky lg:top-24 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1" : ""}>
           <label className="flex items-center gap-2 text-sm mb-4">
@@ -1466,6 +1475,13 @@ const Owner = () => {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     aria-label="Search visits"
                   />
+                  {/* Cabinets audit (fix 6): the filter counts read 0
+                      while the list is still loading — a temporary
+                      zero must never look like "no disputes". Hold
+                      the filters until the first page arrives. */}
+                  {loading && visits.length === 0 ? (
+                    <p className="text-sm text-muted-foreground mb-4" role="status">Loading visits…</p>
+                  ) : (
                   <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter visits">
             {FILTERS.map((f) => (
               <button
@@ -1479,6 +1495,7 @@ const Owner = () => {
               </button>
             ))}
           </div>
+                  )}
           {openIssues.length > 0 && (
             <section className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4" aria-label="Open issues">
               <h2 className="font-heading text-lg font-bold text-red-900">Open issues ({openIssues.length})</h2>
@@ -1498,7 +1515,14 @@ const Owner = () => {
                         Opened {v.issue_opened_at ? new Date(v.issue_opened_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
                         {timeAgo(v.issue_opened_at) ? ` · ${timeAgo(v.issue_opened_at)}` : ""}
                         {` · ${v.issue_decision ? (ISSUE_DECISION_LABEL[v.issue_decision.decision] ?? v.issue_decision.decision) : "Awaiting your decision"}`}
-                        {v.photo_count ? ` · ${v.photo_count} photo${v.photo_count === 1 ? "" : "s"}` : ""}
+                        {/* Cabinets audit (fix 2): the photo count is
+                            the report's, not the complaint's — label
+                            both, so "22 photos" never reads as evidence
+                            the client sent. */}
+                        {` · Cleaning report: ${v.photo_count ?? 0} photo${v.photo_count === 1 ? "" : "s"}`}
+                        {typeof v.issue_photo_count === "number" && (v.issue_photo_count === 0
+                          ? " · Issue attachments: none"
+                          : ` · Issue attachments: ${v.issue_photo_count} photo${v.issue_photo_count === 1 ? "" : "s"}`)}
                       </span>
                       {v.status === "paid" && (
                         <span className="block text-sm mt-1 font-semibold">Paid — payment is complete. Decide on a re-clean or a refund.</span>
@@ -1623,6 +1647,26 @@ const Owner = () => {
           const linkActive = Boolean(v.cleaner_link_active);
           const linkReusable = Boolean(v.cleaner_link_reusable);
           const rooms = v.checklist?.rooms ?? [];
+          // Cabinets audit (fix 2): report photos vs the client's own
+          // complaint attachments — labelled separately in the Report
+          // block so a count never reads as the other kind.
+          const reportPhotoCount = photos.filter((p) => p.kind !== "client").length;
+          const issuePhotoCount = photos.filter((p) => p.kind === "client").length;
+          // Cabinets audit (fix 5): the flat display order for the
+          // lightbox Previous / Next — built exactly like the grid
+          // below (room order, before before after), so the counter
+          // matches what the owner sees.
+          const flatOwnerPhotos = Object.entries(
+            photos.reduce<Record<string, Photo[]>>((acc, ph) => {
+              (acc[ph.room] ??= []).push(ph);
+              return acc;
+            }, {}),
+          ).flatMap(([, items]) =>
+            [...items]
+              .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
+              .filter((p) => p.url)
+              .map((p) => ({ src: p.url as string, alt: `${p.room} ${p.kind}` })),
+          );
           // C4: the 24h auto-charge deadline — computed server-side
           // (/api/owner, max of visit-date start NY and report_sent_at
           // + 24h), the same value /api/report returns to the client.
@@ -1730,12 +1774,19 @@ const Owner = () => {
                   Visit: <strong>{visitBadgeLabel(v.status, v.report_status)}</strong> · Report: <strong>{reportLabel(v.report_status)}</strong>
                   {stripeState && <> · Payment: <strong>{stripeLabel(stripeState)}</strong></>}
                   {noStripeCustomer && <> · <span className="text-destructive font-semibold">No Stripe customer</span></>}
-                  {v.issue_open && <> · <span className="text-destructive font-semibold">Issue open</span></>}
+                  {/* Cabinets audit (cosmetics): "Issue open" is not
+                      repeated here — the red issue block below is the
+                      single indicator. */}
                 </p>
                 <p className="text-sm font-medium mt-1">Next: {nextAction}</p>
                 {/* B4: an explicit readiness checklist — the card must
                     not look ready when the cleaner, the confirmation,
                     the card, the entry, or the phone is missing. */}
+                {/* Cabinets audit (fix 2): once a report is submitted
+                    or sent the visit is no longer "ready for" anything
+                    — the checklist would read as a stale pre-visit
+                    state next to an open dispute. */}
+                {v.report_status !== "submitted" && v.report_status !== "sent" && (
                 <div className="mt-3 rounded-lg border border-border p-3">
                   <p className="text-sm font-semibold mb-1">Ready for the visit</p>
                   <ul className="text-sm space-y-0.5">
@@ -1767,6 +1818,7 @@ const Owner = () => {
                     <p className="text-sm font-semibold rounded-lg bg-amber-50 border border-amber-500/60 p-3 mt-2" role="status">Action needed before dispatch: entry is not settled. Contact the client — do not send the cleaner to an unsettled entry.</p>
                   )}
                 </div>
+                )}
                 {v.issue_open && (
                   <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
                     {openIssue && (
@@ -1802,6 +1854,7 @@ const Owner = () => {
                           <Button
                             variant="hero"
                             size="sm"
+                            className="md:min-h-11"
                             disabled={acting !== ""}
                             onClick={() => {
                               void runAction("Mark resolved", { action: "resolve", booking_id: v.booking_id, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
@@ -1821,10 +1874,10 @@ const Owner = () => {
                       onChange={(e) => setDecisionResolution(e.target.value)}
                       rows={2}
                       maxLength={1000}
-                      placeholder="e.g. The original amount stays due — the kitchen was cleaned twice. / We'll come back Tuesday to re-clean the bathroom."
+                      placeholder="e.g. We'll come back Tuesday to re-clean the kitchen."
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     />
-                    <p className="text-xs text-muted-foreground mt-1">The client reads this as “Our response”. Request payment does not charge the card — the client approves the report to pay.</p>
+                    <p className="text-xs text-muted-foreground mt-1">The client reads this as “Our response”. Request payment does not charge the card — the client approves the report to pay. Waive closes the visit without payment and it can never be charged.</p>
                     <label htmlFor="issue-reclean-date" className="block text-sm font-medium mt-3 mb-1">Re-clean date (optional)</label>
                     <input
                       id="issue-reclean-date"
@@ -1838,6 +1891,7 @@ const Owner = () => {
                       <Button
                         variant="hero"
                         size="sm"
+                        className="md:min-h-11"
                         disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
                           void (async () => {
@@ -1851,9 +1905,13 @@ const Owner = () => {
                       <Button
                         variant="outline"
                         size="sm"
+                        className="md:min-h-11"
                         disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
-                          void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
+                          void (async () => {
+                            if (!(await askConfirm("Arrange re-clean", `Arrange a re-clean${recleanDate ? ` for ${fmtVisitDate(recleanDate)}` : ""}? The client will see your response${recleanDate ? " and the re-clean date" : ""}. Nothing is charged now — the client approves the new report to pay.`, "Arrange re-clean"))) return;
+                            void runAction("Arrange re-clean", { action: "issue_arrange_reclean", booking_id: v.booking_id, resolution: decisionResolution, ...(recleanDate ? { reclean_date: recleanDate } : {}) }, () => { setDecisionResolution(""); setRecleanDate(""); });
+                          })();
                         }}
                       >
                         Arrange re-clean
@@ -1861,10 +1919,11 @@ const Owner = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={acting !== ""}
+                        className="md:min-h-11"
+                        disabled={acting !== "" || !decisionResolution.trim()}
                         onClick={() => {
                           void (async () => {
-                            if (!(await askConfirm("Waive charge", "Waive the charge for this visit? The visit closes without payment and can never be charged.", "Waive charge", true))) return;
+                            if (!(await askConfirm("Waive charge", `Waive the ${money(v.amount_cents)} charge for this visit? The client pays nothing, the visit closes without payment, and it can never be charged. The client will see your response.`, "Waive charge", true))) return;
                             void runAction("Waive charge", { action: "issue_waive_charge", booking_id: v.booking_id, resolution: decisionResolution }, () => setDecisionResolution(""));
                           })();
                         }}
@@ -1875,6 +1934,7 @@ const Owner = () => {
                         <Button
                           variant="outline"
                           size="sm"
+                          className="md:min-h-11"
                           disabled={acting !== ""}
                           onClick={() => {
                             void runAction("Send reminder", { action: "issue_renotify", booking_id: v.booking_id });
@@ -2083,7 +2143,15 @@ const Owner = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="font-semibold">{v.cleaner_name}</p>
-                          {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a> · {phone}</p>}
+                          {phone && (
+                          <p className="text-sm mt-1">
+                            {/* Cabinets audit (fix 4): a real 44px call
+                                button for the cleaner, only when the
+                                number is on file. */}
+                            <a className="inline-flex min-h-[44px] items-center rounded-lg border border-border bg-background px-3 font-semibold" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a>
+                            {" · "}{phone}
+                          </p>
+                        )}
                         </div>
                       </div>
                     ) : (
@@ -2156,7 +2224,15 @@ const Owner = () => {
                       </div>
                       <div className="min-w-0">
                         <p className="font-semibold">{v.cleaner_name}</p>
-                        {phone && <p className="text-sm"><a className="underline" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a> · {phone}</p>}
+                        {phone && (
+                          <p className="text-sm mt-1">
+                            {/* Cabinets audit (fix 4): a real 44px call
+                                button for the cleaner, only when the
+                                number is on file. */}
+                            <a className="inline-flex min-h-[44px] items-center rounded-lg border border-border bg-background px-3 font-semibold" href={`tel:${digitsOnly(phone)}`}>Call cleaner {v.cleaner_name}</a>
+                            {" · "}{phone}
+                          </p>
+                        )}
                       </div>
                       <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={() => { setChangeCleanerId(v.cleaner_id ?? roster.find((r) => r.name === v.cleaner_name)?.id ?? ""); setFormError(""); setCleanerChanging(true); }}>
                         Change
@@ -2415,7 +2491,11 @@ const Owner = () => {
               {/* D. Report */}
               <section id="block-report" className="rounded-xl border border-border bg-card p-4 mb-4 scroll-mt-28">
                 <h3 className="font-semibold mb-3">Report</h3>
-                <p className="text-sm mb-2">{reportLabel(v.report_status)}</p>
+                <p className="text-sm mb-2">
+                  {reportLabel(v.report_status)}
+                  {` — Cleaning report: ${reportPhotoCount} photo${reportPhotoCount === 1 ? "" : "s"}`}
+                  {` · Issue attachments: ${issuePhotoCount === 0 ? "none" : `${issuePhotoCount} photo${issuePhotoCount === 1 ? "" : "s"}`}`}
+                </p>
                 {v.checklist?.problem_note && (
                   <div className="rounded-xl border border-amber-500/50 bg-amber-50 p-3 mb-3">
                     <p className="text-sm font-semibold">Cleaner&apos;s note</p>
@@ -2442,6 +2522,23 @@ const Owner = () => {
                   </div>
                 )}
 
+                {/* Cabinets audit (fix 5): viewing a photo is separate
+                    from deleting it — delete lives under an explicit
+                    "Manage photos" mode, and only there. */}
+                {photos.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <button
+                      type="button"
+                      className="text-sm underline text-muted-foreground min-h-[44px]"
+                      onClick={() => setManagePhotos((m) => !m)}
+                    >
+                      {managePhotos ? "Done managing photos" : "Manage photos"}
+                    </button>
+                    {managePhotos && (
+                      <span className="text-xs text-muted-foreground">Deleting a report photo is permanent — it is evidence for the report.</span>
+                    )}
+                  </div>
+                )}
                 {Object.entries(
                   photos.reduce<Record<string, Photo[]>>((acc, ph) => {
                     (acc[ph.room] ??= []).push(ph);
@@ -2453,34 +2550,58 @@ const Owner = () => {
                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                       {[...items]
                         .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
-                        .map((ph) => (
+                        .map((ph) => {
+                          const sameKind = items.filter((x) => x.kind === ph.kind);
+                          const frameNo = sameKind.indexOf(ph) + 1;
+                          const badge = ph.kind === "client" ? "From customer" : ph.kind === "before" ? "Before" : "After";
+                          const badgeLabel = sameKind.length > 1 ? `${badge} · ${frameNo} of ${sameKind.length}` : badge;
+                          const navIndex = ph.url ? flatOwnerPhotos.findIndex((f) => f.src === ph.url) : -1;
+                          const thumb = (
+                            <img
+                              src={ph.thumb_url ?? ph.url ?? ""}
+                              alt={`${ph.room} ${ph.kind}`}
+                              className="rounded-lg object-cover w-full h-24"
+                              loading="lazy"
+                              onError={(e) => { if (ph.thumb_url && ph.url && e.currentTarget.src !== ph.url) e.currentTarget.src = ph.url; }}
+                            />
+                          );
+                          return (
                           <div key={ph.id} className="relative">
                             {ph.url ? (
-                              <img src={ph.url} alt={`${ph.room} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
+                              managePhotos ? (
+                                thumb
+                              ) : (
+                                <ZoomablePhoto src={ph.url} alt={`${ph.room} ${ph.kind}`} photos={flatOwnerPhotos} index={navIndex >= 0 ? navIndex : undefined}>
+                                  {thumb}
+                                </ZoomablePhoto>
+                              )
                             ) : (
                               <div className="rounded-lg bg-muted w-full h-24" />
                             )}
                             <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
-                              {ph.kind === "client" ? "From customer" : ph.kind === "before" ? "Before" : "After"}
+                              {badgeLabel}
                             </span>
-                            <button
-                              type="button"
-                              aria-label="Delete photo"
-                              className="absolute right-1 top-1 bg-black/60 text-white rounded px-1.5 py-0.5 text-[10px]"
-                              onClick={() => {
-                                // B5: deleting a report photo is
-                                // irreversible — it is evidence for the
-                                // report — so it needs a confirm.
-                                void (async () => {
-                                  if (!(await askConfirm("Delete photo", "Delete this report photo? This cannot be undone.", "Delete photo", true))) return;
-                                  void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id });
-                                })();
-                              }}
-                            >
-                              ✕
-                            </button>
+                            {managePhotos && (
+                              <button
+                                type="button"
+                                aria-label={`Delete photo ${badgeLabel} in ${ph.room}`}
+                                className="mt-1 w-full min-h-[44px] rounded-lg border border-destructive/50 text-destructive text-sm"
+                                onClick={() => {
+                                  // B5: deleting a report photo is
+                                  // irreversible — it is evidence for the
+                                  // report — so it needs a confirm.
+                                  void (async () => {
+                                    if (!(await askConfirm("Delete photo", "Delete this report photo? This cannot be undone.", "Delete photo", true))) return;
+                                    void runAction("Delete photo", { action: "owner_photo_delete", booking_id: v.booking_id, photo_id: ph.id });
+                                  })();
+                                }}
+                              >
+                                Delete
+                              </button>
+                            )}
                           </div>
-                        ))}
+                          );
+                        })}
                     </div>
                   </div>
                 ))}
@@ -2534,10 +2655,15 @@ const Owner = () => {
 
                 {v.report_status === "sent" && (
                   <div className="mb-3">
-                    <p className="text-sm">
-                      Report sent to the client
-                      {v.report_email === "sent" ? " · Email: sent." : (v.report_email === "failed" || v.report_bounced) ? " · Email failed." : ""}
-                    </p>
+                    {/* Cabinets audit (cosmetics): "Report sent to the
+                        client" is already the Report block's heading
+                        line above — here only the email delivery
+                        status, when known. */}
+                    {(v.report_email === "sent" || v.report_email === "failed" || v.report_bounced) && (
+                      <p className="text-sm">
+                        {v.report_email === "sent" ? "Email: sent." : "Email failed."}
+                      </p>
+                    )}
                     {(v.report_email === "failed" || v.report_bounced) && (
                       <div className="flex flex-wrap gap-2 mt-2">
                         <Button

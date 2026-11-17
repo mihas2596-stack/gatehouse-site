@@ -31,6 +31,7 @@ type Photo = {
   note: string | null;
   created_at: string;
   url: string | null;
+  thumb_url?: string | null;
 };
 
 type CleanerView = {
@@ -567,6 +568,18 @@ const Cleaner = () => {
   const notReadyCount = checklist.rooms.filter((r) =>
     !roomPhotoStatus(r, photos, photoBlocked(data?.visit.no_photo_zones ?? null, r.name)).ready,
   ).length;
+  // Cabinets audit (fix 2): once the report is submitted the
+  // "arrival window to be agreed" is stale history — show the date
+  // alone instead of a window that will never be agreed.
+  const windowLabel = v.window && !(v.window === "flexible" && (data.report_status === "submitted" || data.report_status === "sent"))
+    ? ({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window
+    : null;
+  // Cabinets audit (fix 5): rooms with a published gallery (photos or
+  // a skip reason) — the room-jump nav and the galleries below use the
+  // same list, so a jump never points at nothing.
+  const publishedRooms = checklist.rooms.filter((room) =>
+    photos.some((ph) => ph.room === room.name && ph.kind !== "client") || room.skip_reason,
+  );
 
   return (
     <div className="min-h-screen bg-background page-shell">
@@ -575,7 +588,7 @@ const Cleaner = () => {
         <p className="text-base font-semibold tracking-wide text-primary mb-1">GATEHOUSE HOME CLEANING</p>
         <h1 className="font-heading text-3xl font-bold mb-1">Your cleaning job</h1>
         <p className="text-lg text-foreground">
-          {`${fmtDate(v.date)}${v.window ? ` · ${({ morning: "7–11 AM ET", midday: "11 AM–2 PM ET", afternoon: "2–5 PM ET", flexible: "Arrival window to be agreed" } as Record<string, string>)[v.window] ?? v.window}` : ""}`}
+          {`${fmtDate(v.date)}${windowLabel ? ` · ${windowLabel}` : ""}`}
         </p>
         {v.service && <p className="text-muted-foreground break-words">{`${v.service}${(v.client_name ?? v.client_first_name) ? ` · for ${v.client_name ?? v.client_first_name}` : ""}`}</p>}
         {/* B: the visit has not happened yet — the report can be sent
@@ -590,14 +603,14 @@ const Cleaner = () => {
           <p className="text-xs text-muted-foreground mt-3">
             Updated {lastUpdated} Atlanta time.
             {" "}
-            <button type="button" className="underline font-semibold" onClick={() => void load()}>
+            <button type="button" className="underline font-semibold inline-flex min-h-[44px] items-center px-1" onClick={() => void load()}>
               Refresh
             </button>
           </p>
         )}
         {!lastUpdated && (
           <p className="text-xs text-muted-foreground mt-3">
-            <button type="button" className="underline font-semibold" onClick={() => void load()}>
+            <button type="button" className="underline font-semibold inline-flex min-h-[44px] items-center px-1" onClick={() => void load()}>
               Refresh
             </button>
           </p>
@@ -721,7 +734,11 @@ const Cleaner = () => {
             visible after the report is submitted too. One support
             block: the call names the owner, and texting gets its own
             sms: link instead of sharing the tel: one. */}
-        <p className="text-base text-muted-foreground mt-4"><span className="font-semibold">Need help?</span> <a className="underline" href="tel:+17705258599">Call Gatehouse (owner Nick)</a> or <a className="underline" href="sms:+17705258599">Text Gatehouse</a> — (770) 525-8599 — for entry problems, damage you find, or anything that goes wrong mid-job.</p>
+        <p className="text-base text-muted-foreground mt-4"><span className="font-semibold">Need help?</span>{" "}
+          {/* Cabinets audit (fix 4): Call / Text as real 44px tap
+              zones, not inline text links. */}
+          <a className="underline inline-flex min-h-[44px] items-center px-1" href="tel:+17705258599">Call Gatehouse (owner Nick)</a>{" or "}
+          <a className="underline inline-flex min-h-[44px] items-center px-1" href="sms:+17705258599">Text Gatehouse</a>{" — (770) 525-8599 — for entry problems, damage you find, or anything that goes wrong mid-job."}</p>
 
         {!locked && saveState !== "idle" && (
           <p className="text-base text-muted-foreground mt-4" role="status">
@@ -810,30 +827,57 @@ const Cleaner = () => {
 
         {locked && (
           <div className="mt-4 space-y-4">
-            {checklist.rooms.map((room) => {
+            {/* Cabinets audit (fix 5): room jumps — the published
+                galleries sit far below the checklist, so each room
+                gets a jump straight to its photos. */}
+            {publishedRooms.length > 1 && (
+              <nav aria-label="Jump to a room's photos" className="flex flex-wrap gap-2">
+                {publishedRooms.map((room) => (
+                  <button
+                    key={room.name}
+                    type="button"
+                    className="min-h-[44px] rounded-full border border-border bg-card px-3 text-sm font-semibold"
+                    onClick={() => scrollToRoom(room.name)}
+                  >
+                    {room.name}
+                  </button>
+                ))}
+              </nav>
+            )}
+            {publishedRooms.map((room) => {
               // The customer's own problem-report photos (kind "client")
               // belong to the owner review, not the cleaner's summary.
               const roomPhotos = photos.filter((ph) => ph.room === room.name && ph.kind !== "client");
-              if (roomPhotos.length === 0 && !room.skip_reason) return null;
               return (
-                <div key={room.name} className="rounded-xl border border-border bg-card p-4">
+                <div key={room.name} ref={(el) => { roomRefs.current[room.name] = el; }} className="rounded-xl border border-border bg-card p-4 scroll-mt-24">
                   <h2 className="font-heading text-xl font-bold mb-2">{room.name}</h2>
                   {room.skip_reason && (
                     <p className="text-base text-muted-foreground mb-2">No photos — {room.skip_reason}</p>
                   )}
                   <div className="grid grid-cols-3 gap-2">
-                    {roomPhotos.map((ph) => (
+                    {roomPhotos.map((ph) => {
+                      const sameKind = roomPhotos.filter((x) => x.kind === ph.kind);
+                      const frameNo = sameKind.indexOf(ph) + 1;
+                      const stage = ph.kind === "before" ? "Before" : "After";
+                      return (
                       <div key={ph.id} className="relative">
                         {ph.url ? (
-                          <img src={ph.url} alt={`${room.name} ${ph.kind}`} className="rounded-lg object-cover w-full h-24" />
+                          <img
+                            src={ph.thumb_url ?? ph.url}
+                            alt={`${room.name} ${ph.kind}`}
+                            className="rounded-lg object-cover w-full h-24"
+                            loading="lazy"
+                            onError={(e) => { if (ph.thumb_url && e.currentTarget.src !== ph.url) e.currentTarget.src = ph.url; }}
+                          />
                         ) : (
                           <div className="rounded-lg bg-muted w-full h-24" />
                         )}
                         <span className="absolute left-1 top-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
-                          {ph.kind === "before" ? "Before" : "After"}
+                          {sameKind.length > 1 ? `${stage} · ${frameNo} of ${sameKind.length}` : stage}
                         </span>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -882,7 +926,13 @@ const Cleaner = () => {
             const photoThumb = (p: Photo) => (
               <div key={p.id} className="relative">
                 {p.url ? (
-                  <img src={p.url} alt={`${room.name} ${p.kind}`} className="rounded-lg object-cover w-full h-24" />
+                  <img
+                    src={p.thumb_url ?? p.url}
+                    alt={`${room.name} ${p.kind}`}
+                    className="rounded-lg object-cover w-full h-24"
+                    loading="lazy"
+                    onError={(e) => { if (p.thumb_url && e.currentTarget.src !== p.url) e.currentTarget.src = p.url; }}
+                  />
                 ) : (
                   <div className="rounded-lg bg-muted w-full h-24" />
                 )}

@@ -274,10 +274,16 @@ export async function storageSignUpload(
   return { signedUrl: `${cfg.url}/storage/v1${rel}` };
 }
 
-/** Signed read URL for one private object. */
+/** Signed read URL for one private object. `transform` requests a
+ * resized variant from Supabase Image Transformations (used for
+ * grid thumbnails — the grid then loads small files and the full
+ * size is requested only for zoom). When the project does not
+ * support transformations the sign call fails and the caller falls
+ * back to the full-size URL — never a broken image. */
 export async function storageSignDownload(
   objectPath: string,
   expiresInSeconds: number,
+  transform?: { width: number },
 ): Promise<string | null> {
   const cfg = dbConfig();
   if (!cfg) return null;
@@ -290,7 +296,7 @@ export async function storageSignDownload(
         Authorization: `Bearer ${cfg.key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ expiresIn: expiresInSeconds }),
+      body: JSON.stringify(transform ? { expiresIn: expiresInSeconds, transform } : { expiresIn: expiresInSeconds }),
       signal: AbortSignal.timeout(15000),
     });
   } catch {

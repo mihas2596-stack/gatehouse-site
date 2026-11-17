@@ -208,6 +208,12 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
   }
 
   if (host.includes("supabase")) {
+    // Storage signing (owner send_report signs the report photos
+    // into long-lived URLs; the same stub b8 uses).
+    if (u.pathname.includes("/storage/v1/object/sign/")) {
+      const tail = u.pathname.split("/object/sign/")[1] ?? "x.jpg";
+      return res(200, { signedURL: `/object/sign/${tail}?token=stub` });
+    }
     const table = u.pathname.split("/").pop() ?? "";
     if (method === "GET") {
       if (table === "gh_visits") return res(200, applyFilters(rows, u));
@@ -451,6 +457,111 @@ describe("full cabinet chain", () => {
     const paid = await RP({ action: "approve", seen_publication_id: rep.body.publication_id });
     expect(paid.code).toBe(200);
     expect(paid.body.state).toBe("paid");
+    expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
+    expect(piCalls.filter((p) => p.ok)[0].amount).toBe("20000");
+  });
+
+  // Cabinets audit B2 (decision scenarios, on test fixtures with
+  // mocked Stripe): the decision itself never charges; the client
+  // sees the owner's reply and consciously approves exactly the
+  // pinned amount.
+  it("issue -> owner request payment -> client sees the reply and approves exactly the pinned amount; the decision itself never charges", async () => {
+    sentWorld();
+
+    const issued = await RP({ action: "issue", reason: "Kitchen floor not mopped" });
+    expect(issued.code).toBe(200);
+    expect(issued.body.state).toBe("issue_open");
+    expect(piCalls).toHaveLength(0);
+
+    const decided = await BA({ action: "issue_request_payment", booking_id: BID, resolution: "The original amount stays due — the kitchen was cleaned twice." });
+    expect(decided.code).toBe(200);
+    expect(decided.body["decision"]).toBe("payment_requested");
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["issue_open"]).toBe(true);
+
+    const rep = await RPGET();
+    expect(rep.body.state).toBe("issue_open");
+    expect(rep.body["issue_decision"]).toMatchObject({
+      decision: "payment_requested",
+      resolution: "The original amount stays due — the kitchen was cleaned twice.",
+    });
+    expect(rep.body.amount_cents).toBe(20000);
+
+    const paid = await RP({ action: "approve", seen_publication_id: rep.body.publication_id });
+    expect(paid.code).toBe(200);
+    expect(paid.body.state).toBe("paid");
+    expect(rows[0]["issue_open"]).toBe(false);
+    expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
+    expect(piCalls.filter((p) => p.ok)[0].amount).toBe("20000");
+  });
+
+  // Cabinets audit B2 (decision scenarios): the re-clean is agreed
+  // (owner and client see the same date), the cleaner gets working
+  // access under the current process — the owner returns the report
+  // for changes and the same link still opens the job — and the
+  // re-clean + new report end in a client approval of exactly the
+  // pinned amount.
+  it("issue -> owner arrange re-clean -> client sees the agreed date -> owner returns the report -> cleaner resubmits -> client approves the pinned amount", async () => {
+    const ct = sentWorld();
+
+    const issued = await RP({ action: "issue", reason: "Kitchen floor not mopped" });
+    expect(issued.code).toBe(200);
+    expect(piCalls).toHaveLength(0);
+
+    const decided = await BA({ action: "issue_arrange_reclean", booking_id: BID, resolution: "We'll come back Tuesday to re-clean the kitchen.", reclean_date: nyDate(0) });
+    expect(decided.code).toBe(200);
+    expect(decided.body["decision"]).toBe("reclean");
+    expect(piCalls).toHaveLength(0);
+    expect(rows[0]["issue_open"]).toBe(true);
+
+    const rep = await RPGET();
+    expect(rep.body.state).toBe("issue_open");
+    expect(rep.body["issue_decision"]).toMatchObject({
+      decision: "reclean",
+      resolution: "We'll come back Tuesday to re-clean the kitchen.",
+    });
+    expect(rep.body["reclean_date"]).toBe(nyDate(0));
+
+    // Arranging the re-clean rotates the cleaner link when the old
+    // one would expire before the re-clean (the fixture row carries
+    // no expiry, so it rotates here): the cleaner works on the fresh
+    // link, fetched the way the owner panel does.
+    const freshLink = await BA({ action: "get_cleaner_link", booking_id: BID });
+    expect(freshLink.code).toBe(200);
+    const ct2 = String((freshLink.body as Record<string, unknown>)["url"] ?? "").split("ct=")[1] ?? "";
+    expect(ct2.length).toBeGreaterThan(10);
+    const stale = await CL({ ct, action: "submit", checklist: checklist() });
+    expect(stale.body["error"]).toBe("invalid_link");
+
+    const returned = await BA({ action: "return_report", booking_id: BID, note: "Re-clean the kitchen floor, please" });
+    expect(returned.code).toBe(200);
+    expect(rows[0]["report_status"]).toBe("returned");
+
+    const resubmitted = await CL({ ct: ct2, action: "submit", checklist: checklist() });
+    expect(resubmitted.code).toBe(200);
+    expect(resubmitted.body["published"]).toBe(false);
+    // An open issue holds the resubmitted report in the owner review
+    // queue — the cleaner never publishes to the client while a
+    // dispute is open.
+    expect(resubmitted.body["published"]).toBe(false);
+    expect(resubmitted.body["held"]).toBe(true);
+    expect(rows[0]["report_status"]).toBe("submitted");
+    expect(rows[0]["issue_open"]).toBe(true);
+
+    // The owner reviews the re-clean and publishes the new report,
+    // resolving the issue with the publish.
+    const published = await BA({ action: "send_report", booking_id: BID, resolve_issue: true });
+    expect(published.code).toBe(200);
+    expect(rows[0]["report_status"]).toBe("sent");
+    expect(rows[0]["issue_open"]).toBe(false);
+
+    const rep2 = await RPGET();
+    expect(rep2.body.state).toBe("awaiting");
+    expect(rep2.body.amount_cents).toBe(20000);
+    const paid = await RP({ action: "approve", seen_publication_id: rep2.body.publication_id });
+    expect(paid.code).toBe(200);
+    expect(paid.body.state).toBe("paid");
+    expect(rows[0]["issue_open"]).toBe(false);
     expect(piCalls.filter((p) => p.ok)).toHaveLength(1);
     expect(piCalls.filter((p) => p.ok)[0].amount).toBe("20000");
   });

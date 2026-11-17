@@ -17,6 +17,7 @@ import { createPortal } from "react-dom";
 
 export type ReportPhotoItem = {
   url: string;
+  thumb_url?: string | null;
   room?: string;
   note?: string;
   kind?: string;
@@ -31,15 +32,32 @@ export type ReportChecklistData = {
   problem_note?: string;
 };
 
-export function ZoomablePhoto({ src, alt, children }: { src: string; alt: string; children: ReactNode }) {
+export function ZoomablePhoto({ src, alt, children, photos, index }: {
+  src: string;
+  alt: string;
+  children: ReactNode;
+  // Cabinets audit (fix 5): when the full photo list is passed, the
+  // dialog gains Previous / Next and a counter (room + Before/After
+  // travel in the alt text). Without it, the dialog stays single-frame.
+  photos?: Array<{ src: string; alt: string }>;
+  index?: number;
+}) {
   const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState(0);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+
+  const hasNav = Boolean(photos && photos.length > 1 && typeof index === "number");
+  const currentPhoto = hasNav && photos ? photos[current] ?? { src, alt } : { src, alt };
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
+      if (hasNav && photos) {
+        if (e.key === "ArrowRight") setCurrent((c) => Math.min(c + 1, photos.length - 1));
+        if (e.key === "ArrowLeft") setCurrent((c) => Math.max(c - 1, 0));
+      }
     };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -50,7 +68,7 @@ export function ZoomablePhoto({ src, alt, children }: { src: string; alt: string
       document.body.style.overflow = prevOverflow;
       triggerRef.current?.focus();
     };
-  }, [open ]);
+  }, [open, hasNav, photos]);
 
   return (
     <>
@@ -58,25 +76,52 @@ export function ZoomablePhoto({ src, alt, children }: { src: string; alt: string
         ref={triggerRef}
         type="button"
         className="block w-full text-left"
-        onClick={() => setOpen(true)}
+        onClick={() => { setCurrent(index ?? 0); setOpen(true); }}
         aria-label={`Enlarge photo: ${alt}`}
       >
         {children}
       </button>
       {open && createPortal(
         <div
-          className="fixed inset-0 z-[110] bg-black/90 flex items-center justify-center p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="fixed inset-0 z-[110] bg-black/90 flex flex-col items-center justify-center p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           role="dialog"
           aria-modal="true"
-          aria-label={`Enlarged photo: ${alt}`}
+          aria-label={`Enlarged photo: ${currentPhoto.alt}`}
           onClick={() => setOpen(false)}
         >
           <img
-            src={src}
-            alt={alt}
-            className="max-w-full max-h-[85vh] object-contain rounded-lg"
+            src={currentPhoto.src}
+            alt={currentPhoto.alt}
+            className="max-w-full max-h-[75vh] object-contain rounded-lg"
             onClick={(e) => e.stopPropagation()}
           />
+          {hasNav && photos && (
+            <p className="text-white text-sm mt-3 text-center">
+              Photo {current + 1} of {photos.length} — {currentPhoto.alt}
+            </p>
+          )}
+          {hasNav && photos && (
+            <div className="flex items-center gap-3 mt-3" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                aria-label="Previous photo"
+                disabled={current === 0}
+                className="min-h-[44px] min-w-[44px] px-4 rounded-lg bg-white text-black text-sm font-semibold disabled:opacity-40"
+                onClick={() => setCurrent((c) => Math.max(c - 1, 0))}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                aria-label="Next photo"
+                disabled={current === photos.length - 1}
+                className="min-h-[44px] min-w-[44px] px-4 rounded-lg bg-white text-black text-sm font-semibold disabled:opacity-40"
+                onClick={() => setCurrent((c) => Math.min(c + 1, photos.length - 1))}
+              >
+                Next
+              </button>
+            </div>
+          )}
           <button
             ref={closeRef}
             type="button"
@@ -128,6 +173,18 @@ export function ReportChecklistView({ checklist }: { checklist: ReportChecklistD
   );
 }
 
+export type ReportPhotoNavContext = {
+  // Position of this photo in the whole report, in display order.
+  index: number;
+  total: number;
+  // Full-size list for the lightbox Previous / Next (alt carries room
+  // + Before/After). Photos without a URL are left out.
+  photos: Array<{ src: string; alt: string }>;
+  // Caption for the grid tile: "Before" / "After", plus a frame
+  // number when several photos in the room share the same stage.
+  frameLabel: string;
+};
+
 export function ReportContent({
   photoItems,
   checklist,
@@ -137,7 +194,7 @@ export function ReportContent({
   photoItems: ReportPhotoItem[];
   checklist?: ReportChecklistData | null;
   excludedRooms?: string[];
-  renderPhoto: (p: ReportPhotoItem, i: number) => ReactNode;
+  renderPhoto: (p: ReportPhotoItem, i: number, ctx: ReportPhotoNavContext) => ReactNode;
 }) {
   const grouped = (photoItems ?? []).reduce<Record<string, ReportPhotoItem[]>>((acc, p) => {
     const key = p.room || "Your home";
@@ -149,6 +206,21 @@ export function ReportContent({
   const excluded = (excludedRooms ?? [])
     .map((r) => r.trim())
     .filter((r) => r && !shown.has(r.toLowerCase()));
+  // Flat display order (room order, before before after) — the
+  // lightbox navigates this list, and the counter reads from it.
+  const sortedRooms = rooms.map(([room, items]) => ({
+    room,
+    items: [...items].sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1)),
+  }));
+  const flat: Array<{ p: ReportPhotoItem; room: string; alt: string }> = [];
+  for (const { room, items } of sortedRooms) {
+    for (const p of items) {
+      if (!p.url) continue;
+      flat.push({ p, room, alt: `${room} — ${p.kind === "before" ? "before" : "after"} cleaning` });
+    }
+  }
+  const flatIndex = new Map<ReportPhotoItem, number>();
+  flat.forEach((f, i) => flatIndex.set(f.p, i));
   return (
     <>
       {rooms.length === 0 && (
@@ -162,15 +234,25 @@ export function ReportContent({
           </p>
         </div>
       )}
-      {rooms.map(([room, items]) => (
+      {sortedRooms.map(({ room, items }) => (
         <div key={room} className="mb-4">
           <h3 className="font-semibold mb-2">{room}</h3>
           <div className="grid grid-cols-2 gap-2">
-            {[...items]
-              .sort((a, b) => (a.kind === "before" ? 0 : 1) - (b.kind === "before" ? 0 : 1))
-              .map((p, i) => (
-                <div key={i}>{renderPhoto(p, i)}</div>
-              ))}
+            {items.map((p, i) => {
+              const sameStage = items.filter((x) => x.kind === p.kind);
+              const n = sameStage.indexOf(p) + 1;
+              const stage = p.kind === "before" ? "Before" : "After";
+              const frameLabel = sameStage.length > 1 ? `${stage} · ${n} of ${sameStage.length}` : stage;
+              const ctx: ReportPhotoNavContext = {
+                index: flatIndex.get(p) ?? 0,
+                total: flat.length,
+                photos: flat.map((f) => ({ src: f.p.url as string, alt: f.alt })),
+                frameLabel,
+              };
+              return (
+                <div key={i}>{renderPhoto(p, i, ctx)}</div>
+              );
+            })}
           </div>
         </div>
       ))}

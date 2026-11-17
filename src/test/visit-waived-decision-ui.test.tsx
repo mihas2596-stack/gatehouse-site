@@ -116,11 +116,16 @@ describe("owner's issue decision on /visit (idea 2)", () => {
     expect(screen.getByRole("button", { name: "Resolve issue & pay $1.50" })).toBeInTheDocument();
   });
 
-  it("no decision yet: the plain 'Issue reported' banner, no decision copy", async () => {
+  it("no decision yet: the paused-payment block, no decision copy", async () => {
     visitState = "issue_open";
     reportState = "issue_open";
     open();
-    expect(await screen.findByText(/Issue reported — automatic payment is blocked for this visit\./)).toBeInTheDocument();
+    // Cabinets audit (fix 1): the status block comes first ("Issue
+    // received. Automatic payment is paused…") and the amber line
+    // below the card details points at it instead of repeating the
+    // client's words.
+    expect(await screen.findByText("Issue received. Automatic payment is paused for this visit.")).toBeInTheDocument();
+    expect(screen.getByText(/Automatic payment is paused for this visit — the details of your issue are shown above\./)).toBeInTheDocument();
     expect(screen.queryByText(/We've reviewed your concern/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Approve & Pay/ })).not.toBeInTheDocument();
   });
