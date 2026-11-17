@@ -62,6 +62,11 @@ type BookingPayload = {
   recurring?: string;
   service?: string;
   date?: string;
+  // P0-4: a preview token (minted by preview_link only). The client
+  // routes refuse every visit change for preview tokens server-side,
+  // so an owner preview can never approve, dispute, cancel or save a
+  // card by accident. Live tokens never carry this flag.
+  preview?: boolean;
 };
 
 const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
@@ -4497,11 +4502,14 @@ export default async function handler(req: Req, res: Res) {
     if (action === "preview_link") {
       // Fresh personal links so the owner can preview exactly what the
       // customer sees (report + visit pages) before publishing.
+      // P0-4: these tokens carry preview: true — /visit, /report,
+      // /api/card-status and /api/create-checkout-session refuse every
+      // visit change for them, so the preview is read-only server-side.
       const email = row?.client_email || (typeof customer.email === "string" ? customer.email : "");
       const name = typeof customer.name === "string" ? customer.name : "";
       if (!email) return json(400, { ok: false, error: "no_client_email" });
       const token = encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
-        bid: bookingId, email, name, ts: Math.floor(Date.now() / 1000),
+        bid: bookingId, email, name, ts: Math.floor(Date.now() / 1000), preview: true,
       });
       return json(200, {
         ok: true,

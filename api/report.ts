@@ -294,6 +294,9 @@ type BookingPayload = {
   recurring?: string;
   service?: string;
   date?: string;
+  // P0-4: preview tokens (minted by preview_link only) are read-only:
+  // every POST refuses with preview_read_only.
+  preview?: boolean;
 };
 
 const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
@@ -650,6 +653,13 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const payload = verified.payload;
+    // P0-4: a preview token is read-only — Approve and Report an issue
+    // are refused here, before any write. GET stays open: the preview
+    // page reads this same payload.
+    if (req.method === "POST" && payload.preview === true) {
+      res.status(403).json({ requestId, ok: false, error: "preview_read_only" });
+      return;
+    }
     const boundCustomer = await findCustomerByBooking(STRIPE_SECRET_KEY, payload.bid);
     const rowRes = await latestBookingRowStrict(payload.bid);
     // H7: a DB read error is a 502 on GET too, never a wrong empty
@@ -869,6 +879,8 @@ export default async function handler(req: Req, res: Res) {
       return {
         requestId,
         ok: true,
+        // P0-4: the client page renders read-only when this is true.
+        preview: payload.preview === true,
         // TASK 1 (fix6): a waived visit shows its own state — the
         // derived "awaiting" would wrongly offer an Approve button
         // for a visit the owner closed without payment. Ever-waived

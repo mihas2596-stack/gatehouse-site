@@ -41,6 +41,12 @@ const Index = () => {
     setSampleOpen(false);
     sampleToggleRef.current?.focus();
   };
+  // One click from the hero opens the sample directly (audit 17.11):
+  // the anchor still scrolls to #sample-report, and the showcase now
+  // renders below it instead of waiting for a second click.
+  const openSample = () => {
+    setSampleOpen(true);
+  };
   return (
   <div className="bg-background">
     <SEO
@@ -81,7 +87,7 @@ const Index = () => {
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
             <p className="mt-3 text-base text-muted-foreground">No email or card needed to see your price.</p>
-            <a href="#sample-report" className="mt-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">See a sample photo report</a>
+            <a href="#sample-report" onClick={openSample} className="mt-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">See a sample photo report</a>
           </div>
           <figure>
             <img

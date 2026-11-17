@@ -93,6 +93,17 @@ describe("quote: test-price cap notice (ChatGPT #1)", () => {
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByText("Test price cap applied. Selected extras are included in the total shown.")).toBeInTheDocument();
   });
+
+  it("shows no cap notice on step 1 before a ZIP is entered or for an out-of-area ZIP (audit 17.11)", () => {
+    openQuote();
+    // Defaults are 3br/2ba recurring: the cap WOULD lower the total —
+    // but no price is shown yet, so the notice must not appear either.
+    expect(screen.getByText("Enter your ZIP code to see your price.")).toBeInTheDocument();
+    expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "99999" } });
+    expect(screen.getAllByText(/We don't serve this ZIP yet/)).toHaveLength(2);
+    expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
+  });
 });
 
 describe("quote: cap notice stays off on ordinary prices", () => {

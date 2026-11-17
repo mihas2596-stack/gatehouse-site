@@ -50,7 +50,7 @@ export default function SaveCard() {
       if (response.ok === false || data.ok === false || (bt && !data.booking)) throw new Error("unknown");
       setBooking(data.booking ?? null);
       if (returning) {
-        if (data.verified && data.status === "saved") { setStatus("saved"); setEntry(false); trackFunnel("gh_card_saved", { form_type: "quote" }); }
+        if (data.verified && data.status === "saved") { setStatus("saved"); setEntry(false); trackFunnel("gh_card_saved", { form_type: "quote" }, bt || sessionId); }
         else setStatus(data.status === "pending" ? "pending" : data.status === "failed" ? "failed" : "unknown");
       } else setStatus("ready");
     } catch { setStatus("unknown"); }
@@ -75,7 +75,7 @@ export default function SaveCard() {
         throw new Error("not saved");
       }
       setBooking((b) => ({ ...b, card_confirmed: "1", ...(data.card_brand ? { card_brand: data.card_brand } : {}), ...(data.card_last4 ? { card_last4: data.card_last4 } : {}) }));
-      setStatus("saved"); trackFunnel("gh_card_saved", { form_type: "quote" });
+      setStatus("saved"); trackFunnel("gh_card_saved", { form_type: "quote" }, bt);
     } catch { setError("We couldn't confirm your choice. Your request is saved. Please try again."); }
     finally { setBusy(false); }
   };

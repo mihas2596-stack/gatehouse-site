@@ -433,7 +433,11 @@ type Res = {
 };
 
 const ContactSchema = z.object({
-  request_id: z.string().uuid().optional(),
+  // Zod 4: z.guid() keeps the v3 request_id contract — a UUID string
+  // (crypto.randomUUID() on the client). z.string().uuid() in v4
+  // rejects non-canonical forms the old contract accepted, which
+  // broke idempotency for retried submissions (P1-3).
+  request_id: z.guid().optional(),
   website: z.string().max(300).optional(),
   name: z.string().trim().min(1).max(255),
   phone: z.string().max(50).optional().or(z.literal("")),
@@ -853,9 +857,17 @@ export default async function handler(req: Req, res: Res) {
           // and the post-insert race re-check below — same bid, a
           // fresh link token, the same server-verified totals. No new
           // row, no new journal events, no emails: the original
-          // submission already sent the confirmation (so
-          // customerEmailSent is true: the client has it).
-          const duplicateBody = (duplicateRow: VisitDedupRow) => {
+          // submission already owns the booking.
+          // P1-4: the answer must NOT claim the confirmation email was
+          // delivered — the first attempt may have failed to send it.
+          // Return the SAVED delivery outcome from the
+          // customer_confirmation journal event (written by the
+          // autoresponse step below). When no outcome was recorded
+          // (legacy row, or the first send never ran), the field is
+          // omitted: the client treats an absent value as unknown —
+          // neither a promise nor a failure — while the booking id and
+          // fresh link below still give the working path to the record.
+          const duplicateBody = async (duplicateRow: VisitDedupRow) => {
             const dupSigned = signBooking(bookingLinkSecret(signingSecret), {
               email: (duplicateRow.client_email ?? "").trim(),
               name: (duplicateRow.client_name ?? "").trim(),
@@ -867,11 +879,23 @@ export default async function handler(req: Req, res: Res) {
               date: (duplicateRow.visit_date ?? "").trim() || undefined,
               bid: duplicateRow.booking_id,
             });
+            let savedEmailSent: boolean | undefined;
+            try {
+              const prior = await dbSelect<{ detail?: unknown }>(
+                "gh_events",
+                `visit_id=eq.${encodeURIComponent(duplicateRow.id)}&event=eq.customer_confirmation&order=created_at.desc&limit=1`,
+              );
+              const detail = prior[0]?.detail as { sent?: unknown } | null | undefined;
+              if (typeof detail?.sent === "boolean") savedEmailSent = detail.sent;
+            } catch {
+              // A failed read must not fail the duplicate answer — the
+              // booking itself is the answer; the email flag stays unknown.
+            }
             log("booking_duplicate", { bid: duplicateRow.booking_id });
             return {
               ok: true,
               success: true,
-              customerEmailSent: true,
+              ...(savedEmailSent !== undefined ? { customerEmailSent: savedEmailSent } : {}),
               duplicate: true,
               ...(serverFirst ? { server_first: serverFirst } : {}),
               ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
@@ -933,7 +957,7 @@ export default async function handler(req: Req, res: Res) {
               }
               const duplicateRow = dupCheck.rows.find((row) => isNaturalDuplicate(naturalKey, row));
               if (duplicateRow && duplicateRow.booking_id) {
-                return json(200, duplicateBody(duplicateRow));
+                return json(200, await duplicateBody(duplicateRow));
               }
             }
             const inserted = await dbInsert<{ id: string }>("gh_visits", {
@@ -994,7 +1018,7 @@ export default async function handler(req: Req, res: Res) {
                 if (earlier && earlier.booking_id) {
                   await dbDelete("gh_visits", `id=eq.${visitRow.id}`);
                   log("booking_duplicate_race", { kept: earlier.booking_id, dropped: bookingId ?? "" });
-                  return json(200, duplicateBody(earlier));
+                  return json(200, await duplicateBody(earlier));
                 }
               }
             }
@@ -1304,6 +1328,14 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
           log("customer_confirmation", "sent");
         } else {
           logErr("customer_confirmation", `provider ${auto.status}: ${auto.data.name ?? ""} ${auto.data.message ?? ""}`);
+        }
+        // P1-4: journal the delivery outcome so a later natural-key
+        // duplicate returns the SAVED result instead of assuming the
+        // first send succeeded. Best-effort — a journal failure must
+        // never fail the submission (the response already carries the
+        // outcome of this attempt).
+        if (visitRowId) {
+          await logEvent(visitRowId, bookingId, "system", "customer_confirmation", { sent: auto.ok });
         }
       } catch (err) {
         logErr("customer_confirmation", err);

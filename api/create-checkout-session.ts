@@ -12,6 +12,9 @@ type BookingPayload = {
   recurring?: string;
   service?: string;
   date?: string;
+  // P0-4: preview tokens (minted by preview_link only) must never
+  // start a Stripe Checkout session.
+  preview?: boolean;
 };
 
 const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
@@ -184,7 +187,10 @@ type Res = {
 };
 
 const SessionRequestSchema = z.object({
-  request_id: z.string().uuid().optional(),
+  // Zod 4: z.guid() keeps the v3 request_id contract — a UUID string
+  // (crypto.randomUUID() on the client). z.string().uuid() in v4
+  // rejects non-canonical forms the old contract accepted (P1-3).
+  request_id: z.guid().optional(),
   website: z.string().max(300).optional(),
   // Either a signed booking token (preferred — from the booking flow) ...
   bt: z.string().max(2000).optional(),
@@ -350,6 +356,10 @@ export default async function handler(req: Req, res: Res) {
         return json(400, { ok: false, error: "invalid_booking" });
       }
       const p = verified.payload;
+      // P0-4: a preview token must never start a Stripe Checkout session.
+      if (p.preview === true) {
+        return json(403, { ok: false, error: "preview_read_only" });
+      }
       bookingId = p.bid;
       email = p.email;
       name = p.name;

@@ -61,6 +61,9 @@ type BookingPayload = {
   recurring?: string;
   service?: string;
   date?: string;
+  // P0-4: preview tokens (minted by preview_link only) are read-only:
+  // every POST refuses with preview_read_only.
+  preview?: boolean;
 };
 
 const TOKEN_TTL_SECONDS = 60 * 24 * 3600;
@@ -605,6 +608,11 @@ export default async function handler(req: Req, res: Res) {
     const verified = verifyBookingLink(STRIPE_SECRET_KEY, btPost);
     if (verified.ok === false || !verified.payload) {
       res.status(403).json({ ok: false, error: "invalid_token" });
+      return;
+    }
+    // P0-4: a preview token must never confirm a card for the booking.
+    if (verified.payload.preview === true) {
+      res.status(403).json({ ok: false, error: "preview_read_only" });
       return;
     }
     const bid = verified.payload.bid;

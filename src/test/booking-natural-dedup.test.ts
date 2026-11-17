@@ -16,6 +16,10 @@ type Evt = Record<string, unknown>;
 let rows: Row[];
 let evts: Evt[];
 let resendCalls: { key: string | null }[];
+// P1-4: fail the next customer confirmation send (owner notice still
+// succeeds) so the duplicate answer can be checked against a FAILED
+// first attempt.
+let resendFailCustomer = false;
 
 function res(code: number, body: unknown) {
   return {
@@ -53,7 +57,11 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
 
   if (host === "api.resend.com") {
     const headers = (init?.headers ?? {}) as Record<string, string>;
-    resendCalls.push({ key: headers["Idempotency-Key"] ?? null });
+    const key = headers["Idempotency-Key"] ?? null;
+    resendCalls.push({ key });
+    if (resendFailCustomer && key?.startsWith("customer/")) {
+      return res(500, { name: "provider_error", message: "mailbox unavailable" });
+    }
     return res(200, { id: "email_1" });
   }
 
@@ -142,6 +150,7 @@ beforeEach(() => {
   rows = [];
   evts = [];
   resendCalls = [];
+  resendFailCustomer = false;
   vi.stubGlobal("fetch", vi.fn(fetchMock));
 });
 
@@ -260,5 +269,60 @@ describe("booking submit natural-key dedup", () => {
     const second = await submit({ ...body, request_id: "11111111-2222-4333-8444-555555555555" });
     expect(second.code).toBe(200);
     expect(evts.filter((e) => e["event"] === "scope_review")).toHaveLength(1);
+  });
+});
+
+describe("duplicate answer reports the saved email outcome (P1-4)", () => {
+  it("duplicate after a delivered first email reports customerEmailSent true", async () => {
+    const first = await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
+    expect(first.code).toBe(200);
+    expect(first.body.customerEmailSent).toBe(true);
+    expect(evts.filter((e) => e["event"] === "customer_confirmation")).toHaveLength(1);
+    expect((evts.find((e) => e["event"] === "customer_confirmation")?.["detail"] as { sent?: unknown })?.sent).toBe(true);
+
+    const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
+    expect(second.code).toBe(200);
+    expect(second.body.duplicate).toBe(true);
+    expect(second.body.booking_id).toBe(first.body.booking_id);
+    expect(second.body.customerEmailSent).toBe(true);
+    expect(second.body.bt).toBeTruthy();
+    expect(rows).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2); // no second email
+  });
+
+  it("duplicate after a failed first send reports false, creates no second booking, keeps the path to the record", async () => {
+    resendFailCustomer = true;
+    const first = await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
+    expect(first.code).toBe(200);
+    expect(first.body.customerEmailSent).toBe(false);
+    expect((evts.find((e) => e["event"] === "customer_confirmation")?.["detail"] as { sent?: unknown })?.sent).toBe(false);
+    resendFailCustomer = false;
+
+    const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
+    expect(second.code).toBe(200);
+    expect(second.body.duplicate).toBe(true);
+    expect(second.body.booking_id).toBe(first.body.booking_id);
+    // Must NOT promise a delivered email for the failed first attempt.
+    expect(second.body.customerEmailSent).toBe(false);
+    expect(second.body.bt).toBeTruthy();
+    expect(rows).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2); // owner notice + failed customer attempt only
+  });
+
+  it("duplicate with no recorded outcome omits the flag (neutral, not a promise)", async () => {
+    // Legacy row: created before customer_confirmation journaling.
+    rows.push({
+      id: "row-legacy", booking_id: "bid-legacy", client_name: "Dedup Test",
+      client_email: "client@example.com", visit_date: "2099-12-01", service: "Standard",
+      address: "1 Example Street", window: null, amount_cents: 150,
+      status: "requested", created_at: new Date().toISOString(), visit_no: 1,
+    });
+    const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
+    expect(second.code).toBe(200);
+    expect(second.body.duplicate).toBe(true);
+    expect(second.body.booking_id).toBe("bid-legacy");
+    expect(second.body.customerEmailSent).toBeUndefined();
+    expect(second.body.bt).toBeTruthy();
+    expect(rows).toHaveLength(1);
   });
 });

@@ -261,7 +261,7 @@ const Quote = () => {
     website: "",
     termsConsent: false,
     photoConsent: false,
-    city: draft.contact?.city ?? params.get("city")?.replace(/[^A-Za-z \-]/g, "").slice(0, 60) ?? "",
+    city: draft.contact?.city ?? params.get("city")?.replace(/[^A-Za-z -]/g, "").slice(0, 60) ?? "",
     state: normalizeStateInput(draft.contact?.state ?? "GA"),
     apt: draft.contact?.apt ?? "",
   });
@@ -1028,7 +1028,11 @@ const Quote = () => {
                   ) : null}
                 </>
               )}
-              {capNote}
+              {/* The cap notice belongs next to a shown capped price
+                  only (audit 17.11): before a ZIP is entered — or for
+                  an out-of-area ZIP — no price is shown, so the notice
+                  must not appear either. */}
+              {showPrice && capNote}
 
               {showPrice && <p className="mt-4 border-t border-border pt-3 text-[1.125rem] font-bold text-sage-foreground sm:text-[1.25rem]">Due today: $0</p>}
               {showPrice && (

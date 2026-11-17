@@ -44,7 +44,7 @@ export function reportEmail(options: {
   const amount = options.amount || "the visit amount shown on your report";
   const paragraphs = [
     "Your cleaning is finished. Open your photos and checklist below.",
-    `If everything looks good, choose \"Approve & pay\" on your report. This charges your card ${amount} immediately.`,
+    `If everything looks good, choose "Approve & pay" on your report. This charges your card ${amount} immediately.`,
     options.autoChargeBlocked
       ? "Automatic charging is blocked for this visit because an issue was reported. Closing the issue does not restart it. You choose when to approve the report and pay."
       : `If you do not approve or report an issue, your card is charged automatically 24 hours after we send the report. Review by ${options.deadline} (Atlanta time).`,

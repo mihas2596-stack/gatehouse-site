@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
 import { resolveLinkToken } from "@/lib/tokenStrip";
+import { trackFunnel } from "@/lib/measurement";
 
 type Plan = {
   service?: string;
@@ -165,6 +166,10 @@ const ThankYou = () => {
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (res.ok && data.ok) {
         setCard((c) => (c.kind === "choice" ? { kind: "saved", booking: c.booking } : c));
+        // P1-1: the same gh_card_saved event SaveCard fires on an
+        // explicit confirm — once per booking (the bt token is hashed
+        // inside trackFunnel, never stored or sent).
+        trackFunnel("gh_card_saved", { form_type: "quote" }, bt);
       } else if (data.error === "card_unavailable") {
         // The chosen card disappeared between the list and the
         // confirm: re-read the list and say so.
