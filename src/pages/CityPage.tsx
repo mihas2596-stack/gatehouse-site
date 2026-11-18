@@ -60,7 +60,7 @@ const CityPage = () => {
               <li><strong>What&apos;s covered:</strong> the published room-by-room checklist — <Link to="/whats-included" className="text-primary underline">see what&apos;s included</Link>.</li>
               <li><strong>Price:</strong> from {fmtPrice(disp(PRICES.recurring.S))} per visit for a small home — <Link to="/quote" className="text-primary underline">see your price</Link>.</li>
               <li><strong>First visit:</strong> choose Standard for regular upkeep or Deep for a more detailed clean.</li>
-              <li><strong>Payment:</strong> nothing at booking; charged when you approve the photo report, or automatically 24 hours after we send it if you haven&apos;t reported an issue.</li>
+              <li><strong>Payment:</strong> nothing at booking; charged when you approve the photo report, or at the next scheduled billing time after your 24-hour review window if you haven&apos;t reported an issue.</li>
               <li><strong>Schedule:</strong> each visit is arranged and confirmed with you; cancel free up to 48 hours before a visit; rescheduling is always free.</li>
             </ul>
           </div>

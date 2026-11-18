@@ -20,7 +20,7 @@ export function emailArrivalWindow(value: string): string {
 
 export function paymentEmailCopy(amount: string): string {
   const charge = amount && amount !== "—" ? amount : "the agreed visit amount";
-  return `Due today: $0.\n\nReview & pay: approving your photo report charges your card ${charge} immediately.\n\nAutomatic payment: your card is charged automatically 24 hours after we send the report unless you approve or report an issue first.\n\nNeed help? Choose "Report an issue" on your visit page within 24 hours. This blocks automatic charging for this visit; closing the issue does not restart it.`;
+  return `Due today: $0.\n\nReview & pay: approving your photo report charges your card ${charge} immediately.\n\nAutomatic payment: if you don't approve or report an issue within 24 hours, we'll charge your card at the next scheduled billing time after that window.\n\nNeed help? Choose "Report an issue" on your visit page within 24 hours. This blocks automatic charging for this visit; closing the issue does not restart it.`;
 }
 
 export function emailDocument(options: {
@@ -47,7 +47,7 @@ export function reportEmail(options: {
     `If everything looks good, choose "Approve & pay" on your report. This charges your card ${amount} immediately.`,
     options.autoChargeBlocked
       ? "Automatic charging is blocked for this visit because an issue was reported. Closing the issue does not restart it. You choose when to approve the report and pay."
-      : `If you do not approve or report an issue, your card is charged automatically 24 hours after we send the report. Review by ${options.deadline} (Atlanta time).`,
+      : `You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window. Review by ${options.deadline} (Atlanta time).`,
     "Something missed? Choose \"Report an issue\" on your visit page. This blocks automatic charging for this visit; it does not resume on its own.",
   ];
   return {

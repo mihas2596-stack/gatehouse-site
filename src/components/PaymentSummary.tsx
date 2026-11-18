@@ -15,7 +15,7 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
             <dt className="font-bold">After cleaning</dt>
             <dd className="mt-1">
               We’ll send you a photo report after cleaning. Select <strong>Approve &amp; pay</strong> to pay.
-              If you don’t approve or report an issue, we’ll charge your card automatically <strong>24 hours after we send the report</strong>.
+              If you don’t approve or report an issue, we’ll charge your card at the <strong>next scheduled billing time</strong> after your 24-hour review window.
             </dd>
           </div>
           <div className="pt-4">
@@ -35,7 +35,7 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
     <dl className="mt-5 space-y-5 text-lg leading-relaxed">
       {showCard && <div><dt className="font-semibold">Today: $0</dt><dd className="mt-1 text-base">Save a card for this visit through Stripe, so you won’t need to enter it after cleaning. Gatehouse never sees or stores your full card number.</dd></div>}
       <div><dt className="font-semibold">Review, then pay</dt><dd className="mt-1 text-base">After cleaning, we send your photo report. Choose “Approve &amp; pay” to charge your card.</dd></div>
-      <div><dt className="font-semibold">24 hours to review</dt><dd className="mt-1 text-base">Your card is charged automatically 24 hours after we send the report if you haven’t approved it or reported an issue.</dd></div>
+      <div><dt className="font-semibold">24 hours to review</dt><dd className="mt-1 text-base">You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window.</dd></div>
       <div><dt className="font-semibold">Something missed?</dt><dd className="mt-1 text-base">Use “Report an issue” on your visit page within those 24 hours. Automatic charging stays off for this visit, including after the fix. You approve again to pay.</dd></div>
     </dl>
   </section>;

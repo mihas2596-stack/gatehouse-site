@@ -114,7 +114,7 @@ describe("send-contact rooms and entry", () => {
     expect(email.text).toContain("11 AM–2 PM ET");
     expect(email.text).toContain("Frequency: Every other week");
     expect(email.html).toContain("<br>Arrival preference:");
-    expect(email.html).toContain("24 hours after we send the report");
+    expect(email.html).toContain("next scheduled billing time");
     expect(email.html).toContain("closing the issue does not restart it");
     expect(email.html).toContain("Save my card — $0 today");
     expect(String(email.html).match(/<table /g)).toHaveLength(1);

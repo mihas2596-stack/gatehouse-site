@@ -552,7 +552,7 @@ const Report = () => {
       <SEO
         url="https://www.gatehousehomecleaning.com/report"
         title="Your Cleaning Report | Gatehouse Home Cleaning"
-        description="See the photo report of your cleaning. Your card is charged when you approve the report, or automatically 24 hours after the report is sent if you haven't reported an issue."
+        description="See the photo report of your cleaning. Your card is charged when you approve the report, or at the next scheduled billing time after your 24-hour review window if you haven't reported an issue."
         noindex
       />
       <div className="container max-w-2xl py-12 pb-24 md:pb-12">

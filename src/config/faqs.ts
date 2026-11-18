@@ -12,7 +12,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "How do I pay?",
     group: "Payment",
-    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report. Your card is charged when you approve the report, or automatically 24 hours after we send it if you haven't reported an issue. If you report an issue, the automatic charge is blocked for that visit and never resumes on its own — you approve the report again to pay. If we learn the report email could not be delivered, the automatic charge does not run until the report reaches you another way.",
+    a: "Booking is free — nothing is charged when you send your request. After the clean you get a room-by-room photo report. Your card is charged when you approve the report, or at the next scheduled billing time after your 24-hour review window if you haven't reported an issue. If you report an issue, the automatic charge is blocked for that visit and never resumes on its own — you approve the report again to pay. If we learn the report email could not be delivered, the automatic charge does not run until the report reaches you another way.",
   },
   {
     q: "Is my card safe with you?",

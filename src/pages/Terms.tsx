@@ -120,7 +120,7 @@ const Terms = () => {
           <strong>5.1 Price.</strong> The price shown at booking is based on the details you provide.
         </p>
         <p className="mb-4">
-          <strong>5.2 Payment.</strong> You save a payment card when booking. Nothing is charged at booking. After each cleaning, we send you a photo report. Your saved card is charged when you approve the report, or automatically 24 hours after we send it if you have not reported an issue.
+          <strong>5.2 Payment.</strong> You save a payment card when booking. Nothing is charged at booking. After each cleaning, we send you a photo report. Your saved card is charged when you approve the report, or at the next scheduled billing time after the 24-hour review window if you have not reported an issue.
         </p>
         <p className="mb-4">
           If you report an issue within that 24-hour period, automatic payment is disabled for that visit. We will review your concern and aim to provide a decision within 72 hours.

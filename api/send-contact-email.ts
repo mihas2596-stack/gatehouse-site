@@ -1297,7 +1297,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
         const nextStep = cardOnFile
           ? "Choose a card for this visit. $0 is charged today."
           : "Save a card securely through Stripe to complete your request. $0 is charged today.";
-        const payment = "After cleaning, approve your photo report to pay. Your card is charged automatically 24 hours after we send the report unless you approve or report an issue. Reporting an issue stops automatic payment, and closing the issue does not restart it.";
+        const payment = "After cleaning, approve your photo report to pay. If you don't approve or report an issue within 24 hours, we'll charge your card at the next scheduled billing time after that window. Reporting an issue stops automatic payment, and closing the issue does not restart it.";
         const paragraphs = [
           nextStep,
           requestLines,

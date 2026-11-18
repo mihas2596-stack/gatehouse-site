@@ -129,7 +129,7 @@ const Index = () => {
             <p className="mt-3 max-w-[60ch] text-[1.125rem] leading-relaxed text-foreground sm:text-[1.1875rem] lg:text-[1.25rem]">
               See your photo report before payment. Approve to pay, or report an issue.{" "}
               <br />
-              If no issue is reported, your card is charged automatically 24 hours after the report is sent.
+              You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window.
             </p>
           </section>
           {/* Sample report — one entry point, after When you pay. */}

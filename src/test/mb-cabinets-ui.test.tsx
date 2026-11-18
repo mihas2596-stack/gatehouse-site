@@ -544,7 +544,7 @@ describe("MB-15/B8/LB-32: city pages — unique copy, From price, no dead sectio
     render(<HelmetProvider><MemoryRouter><Index /></MemoryRouter></HelmetProvider>);
     // 16.11 item 2 (owner decision): step 3 no longer carries the
     // auto-charge clause; the rule stays visible in "When you pay".
-    expect(screen.getByText(/your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    expect(screen.getByText(/next scheduled billing time after that window/)).toBeInTheDocument();
     expect(screen.queryByText(/Approve to pay — or your card is charged automatically/)).not.toBeInTheDocument();
   });
 });
