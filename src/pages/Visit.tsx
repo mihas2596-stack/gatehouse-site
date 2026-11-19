@@ -36,6 +36,9 @@ type VisitData = {
   notification_email_sent?: boolean;
   ok: boolean;
   state: VisitStateName;
+  // P0-4: a preview token (minted by the owner's preview link) is
+  // read-only — the page shows a banner and hides every action button.
+  preview?: boolean;
   booking?: {
     service?: string;
     first_service?: string;
@@ -105,6 +108,9 @@ type ReportChecklist = { rooms: Array<{ name: string; items: Array<{ label: stri
 type ReportData = {
   ok: boolean;
   state: string;
+  // P0-4: a preview token (minted by the owner's preview link) is
+  // read-only — the page shows a banner and hides every action button.
+  preview?: boolean;
   photo_items?: ReportPhoto[];
   checklist?: ReportChecklist | null;
   amount?: string | null;
@@ -407,7 +413,10 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   }
   // H1: an unknown charge outcome is actionable — the client must be
   // able to retry (the retry re-checks the payment status first).
-  const canAct = rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown";
+  // P0-4: preview mode is read-only — the server refuses every action
+  // for preview tokens; the buttons hide here too.
+  const isPreview = rep?.preview === true;
+  const canAct = !isPreview && (rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown");
   // B (payment-date gate): the visit has not happened yet — a report
   // that exists for a future date cannot be approved or paid. "Today"
   // is the Atlanta calendar date (America/New_York), compared as
@@ -419,7 +428,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     return d > today;
   })();
-  const cardActionable = visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown";
+  const cardActionable = !isPreview && (visitState === "report_sent" || visitState === "issue_open" || visitState === "payment_issue" || visitState === "payment_unknown");
   // A waived visit is closed without a charge: no card line, no
   // "Change card", no Approve — the banner below says so plainly.
   const isWaived = rep.state === "waived";
@@ -433,6 +442,12 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   return (
     <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
       <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
+      {isPreview && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4" role="status">
+          <p className="font-semibold">Preview — actions are disabled</p>
+          <p className="text-sm text-muted-foreground">This is how the client page looks. Nothing you do here changes the visit: Approve, Report an issue and card actions are turned off in preview.</p>
+        </div>
+      )}
       {/* Cabinets audit (fix 1): the dispute status comes FIRST, above
           the card details — the client must see at a glance that the
           payment is paused, what they reported, and when we reply,
@@ -874,13 +889,16 @@ const Visit = () => {
 
   const b = data?.booking ?? {};
   const fee = data?.cancel_fee_cents ?? 0;
+  // P0-4: preview mode is read-only — the server refuses every action
+  // for preview tokens; the action sections hide here too.
+  const isPreview = data?.preview === true;
   const manageable =
-    data && ["awaiting_confirmation", "confirmed", "date_declined"].includes(data.state);
+    !isPreview && data && ["awaiting_confirmation", "confirmed", "date_declined"].includes(data.state);
   // B6: a passed date is reschedulable/cancellable like a pending one —
   // but entry and no-photo zones only apply to a live visit.
   const canReschedule =
-    data && ["awaiting_confirmation", "confirmed", "date_declined", "date_passed"].includes(data.state);
-  const cardChoiceNeeded = Boolean(data?.has_card && !data.card_confirmed
+    !isPreview && data && ["awaiting_confirmation", "confirmed", "date_declined", "date_passed"].includes(data.state);
+  const cardChoiceNeeded = !isPreview && Boolean(data?.has_card && !data.card_confirmed
     && (data.state === "awaiting_confirmation" || data.state === "confirmed"));
   // H15: step 2 ("Cleaning") is the visit day itself — a confirmed
   // visit whose date is today (Atlanta time) is being cleaned today.
@@ -943,6 +961,12 @@ const Visit = () => {
             <Button variant="outline" size="sm" onClick={() => void load()}>
               <RefreshCw className="w-4 h-4 mr-1" /> Refresh
             </Button>
+          </div>
+        )}
+        {!loading && data?.preview === true && (
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-left" role="status">
+            <p className="font-semibold">Preview — actions are disabled</p>
+            <p className="text-sm text-muted-foreground">This is how the client page looks. Nothing you do here changes the visit: date changes, entry details, cancel and card actions are turned off in preview.</p>
           </div>
         )}
         {loading && (
@@ -1175,7 +1199,7 @@ const Visit = () => {
               </div>
             )}
 
-            {data.state === "confirmed" && data.entry_available && (
+            {!isPreview && data.state === "confirmed" && data.entry_available && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">
                   How would you like to arrange entry?
@@ -1321,7 +1345,7 @@ const Visit = () => {
               </div>
             )}
 
-                        {data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
+                        {!isPreview && data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-3">Dates that work for us</h2>
                 <div className="flex flex-wrap gap-2">

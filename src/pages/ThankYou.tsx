@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
 import { resolveLinkToken } from "@/lib/tokenStrip";
+import { trackFunnel } from "@/lib/measurement";
 
 type Plan = {
   service?: string;
@@ -165,6 +166,10 @@ const ThankYou = () => {
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (res.ok && data.ok) {
         setCard((c) => (c.kind === "choice" ? { kind: "saved", booking: c.booking } : c));
+        // P1-1: the same gh_card_saved event SaveCard fires on an
+        // explicit confirm — once per booking (the bt token is hashed
+        // inside trackFunnel, never stored or sent).
+        trackFunnel("gh_card_saved", { form_type: "quote" }, bt);
       } else if (data.error === "card_unavailable") {
         // The chosen card disappeared between the list and the
         // confirm: re-read the list and say so.
@@ -389,7 +394,7 @@ const ThankYou = () => {
           <h2 className="font-heading text-xl font-bold">What happens next</h2>
           <p className="mt-2 text-lg">{card.kind === "confirmed" ? "Your cleaner arrives during the confirmed window. After cleaning, we email your photo report." : "We check availability and email your confirmation. You can follow the status on your visit page."}</p>
         </div>
-        <p className="mb-6 text-base leading-relaxed">Nothing is charged today. After the clean, approve your photo report to pay — if you haven&rsquo;t approved or reported an issue, we&rsquo;ll charge your card automatically 24 hours after we send the report.</p>
+        <p className="mb-6 text-base leading-relaxed">Nothing is charged today. After the clean, approve your photo report to pay — if you haven&rsquo;t approved or reported an issue, we&rsquo;ll charge your card at the next scheduled billing time after your 24-hour review window.</p>
       </>,
     );
   }
@@ -504,7 +509,7 @@ const ThankYou = () => {
         <p className="mb-8 text-base leading-relaxed">
           Saving your card costs $0 today and doesn&apos;t book anything by itself. We confirm your
           date by email within one business day after you add it. For cleaning, payment is taken
-          when you approve the photo report, or 24 hours after we send it if you
+          when you approve the photo report, or at the next scheduled billing time after your 24-hour review window if you
           haven&apos;t reported an issue.
         </p>
       )}

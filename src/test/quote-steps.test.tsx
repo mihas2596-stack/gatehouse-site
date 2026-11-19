@@ -51,7 +51,7 @@ describe("quote steps", () => {
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByText("Due today")).toBeInTheDocument();
     expect(screen.getByText("$0")).toBeInTheDocument();
-    expect(screen.getByText("24 hours after we send the report").parentElement).toHaveTextContent(/if you don’t approve or report an issue.*automatically 24 hours after we send the report/i);
+    expect(screen.getByText("next scheduled billing time").parentElement).toHaveTextContent(/if you don’t approve or report an issue.*next scheduled billing time/i);
     // The resend/version/cleaner clause was removed from the client view.
     expect(screen.queryByText(/does not change if we resend a message, publish a new report version, or change the date or cleaner/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Entry instructions/)).not.toBeInTheDocument();
@@ -287,7 +287,7 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "When you pay" })).toBeInTheDocument();
-    expect(screen.getByText("24 hours after we send the report")).toBeInTheDocument();
+    expect(screen.getByText("next scheduled billing time")).toBeInTheDocument();
     expect(screen.queryByText("$0 charged today.")).not.toBeInTheDocument();
     expect(screen.queryByText(/We.ll send a private photo report after your cleaning\. You can approve it to pay\. If you haven.t approved or reported an issue, we.ll charge your card automatically 24 hours after we send the report\./)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();

@@ -109,7 +109,7 @@ describe("entry instructions separation", () => {
     const customer = emails.find((e) => String(e.subject).includes("Request received"));
     expect(customer).toBeTruthy();
     expect(String(customer?.html)).toContain("Save my card — $0 today");
-    expect(String(customer?.text)).toContain("charged automatically 24 hours after we send the report");
+    expect(String(customer?.text)).toContain("next scheduled billing time");
     expect(String(customer?.text)).not.toContain("once you've seen the photo report");
     expect(String(customer?.text)).toContain("at 6:00 PM ET");
   });

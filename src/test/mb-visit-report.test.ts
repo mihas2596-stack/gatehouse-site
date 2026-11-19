@@ -123,7 +123,7 @@ beforeEach(() => {
         if (table === "gh_photos" && failPhotosRead) {
           return { ok: false, status: 500, json: async () => ({ message: "db down" }), text: async () => "{}" };
         }
-        let list: Row[] = table === "gh_visits" ? [row] : table === "gh_events" ? events : table === "gh_photos" ? photos : accessRows;
+        const list: Row[] = table === "gh_visits" ? [row] : table === "gh_events" ? events : table === "gh_photos" ? photos : accessRows;
         let out = applyDbFilters(list, u);
         if (table === "gh_events" && u.searchParams.get("order")?.includes("created_at.desc")) {
           out = [...out].sort((a, b) => String(b["created_at"] ?? "").localeCompare(String(a["created_at"] ?? "")));

@@ -13,7 +13,7 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/measurement", () => ({ campaignAttribution: () => ({}), trackFunnel: () => true }));
 
 const CANONICAL =
-  "See your photo report before payment. Approve to pay, or report an issue. If no issue is reported, your card is charged automatically 24 hours after the report is sent.";
+  "See your photo report before payment. Approve to pay, or report an issue. You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window.";
 
 describe("fix10 — ChatGPT spec, item 1: canonical payment sentence", () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });

@@ -27,6 +27,9 @@ type PhotoItem = { url: string | null; thumb_url?: string | null; room?: string;
 type ReportData = {
   ok: boolean;
   state: ReportStateName;
+  // P0-4: a preview token (minted by the owner's preview link) is
+  // read-only — the page shows a banner and hides every action button.
+  preview?: boolean;
   booking?: { first?: string; service?: string; date?: string };
   cleaner_name?: string | null;
   // A5: the cleaner's roster photo ("" when the roster has none —
@@ -401,6 +404,12 @@ const Report = () => {
     return d > today;
   })();
 
+  // P0-4: preview mode (owner's preview link) — read-only. The server
+  // refuses every action for preview tokens; the page hides the buttons
+  // too, and says so, so the owner is never misled into thinking a
+  // click here would change the visit.
+  const isPreview = data?.preview === true;
+
   const summary = summaryRows.length > 0 && (
     <div className="rounded-xl border border-border bg-card p-4 text-left mb-6">
       <dl className="space-y-1.5">
@@ -543,7 +552,7 @@ const Report = () => {
       <SEO
         url="https://www.gatehousehomecleaning.com/report"
         title="Your Cleaning Report | Gatehouse Home Cleaning"
-        description="See the photo report of your cleaning. Your card is charged when you approve the report, or automatically 24 hours after the report is sent if you haven't reported an issue."
+        description="See the photo report of your cleaning. Your card is charged when you approve the report, or at the next scheduled billing time after your 24-hour review window if you haven't reported an issue."
         noindex
       />
       <div className="container max-w-2xl py-12 pb-24 md:pb-12">
@@ -561,6 +570,13 @@ const Report = () => {
           <div className="text-center">
             <Loader2 className="w-16 h-16 text-sage-foreground mx-auto mb-6 animate-spin" aria-hidden="true" />
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Loading your report…</h1>
+          </div>
+        )}
+
+        {!loading && isPreview && (
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-left" role="status">
+            <p className="font-semibold">Preview — actions are disabled</p>
+            <p className="text-sm text-muted-foreground">This is how the client page looks. Nothing you do here changes the visit: Approve, Report an issue and card actions are turned off in preview.</p>
           </div>
         )}
 
@@ -626,7 +642,7 @@ const Report = () => {
             {actionError && (
               <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
             )}
-            {needsCardChoice && (
+            {!isPreview && needsCardChoice && (
               <p className="text-sm mb-4 text-center">
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
               </p>
@@ -642,16 +658,18 @@ const Report = () => {
                 </p>
               )}
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                {!isFutureVisit && (
+                {!isPreview && !isFutureVisit && (
                 <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                   {busy ? "Processing payment…" : data.amount ? `Approve & pay ${data.amount}` : "Approve report"}
                 </Button>
                 )}
+                {!isPreview && (
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setIssueOpen(true)}>
                   Report an issue
                 </Button>
+                )}
               </div>
-              {!isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
+              {!isPreview && !isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
               </>
             ) : (
               <IssueForm
@@ -760,7 +778,7 @@ const Report = () => {
               {actionError && (
                 <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
               )}
-              {needsCardChoice && (
+              {!isPreview && needsCardChoice && (
                 <p className="text-sm mb-4 text-center">
                   <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
                 </p>
@@ -770,19 +788,25 @@ const Report = () => {
                   ? "Nothing will be charged until you approve — the automatic charge stays paused for this visit."
                   : "Nothing will be charged while your issue is open — the automatic charge is paused for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
               </p>
+              {!isPreview && (
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
               </Button>
-              <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>
+              )}
+              {!isPreview && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>}
             </div>
             <div className="mt-8 text-center">
               {followupMsg && (
                 <p className="text-sm text-foreground mb-4" role="status">{followupMsg}</p>
               )}
               {!followupOpen ? (
+                <>
+                {!isPreview && (
                 <Button variant="outline" size="lg" disabled={busy} onClick={() => setFollowupOpen(true)}>
                   {data.issue_decision?.decision === "payment_requested" ? "My issue isn't resolved" : "Add more details"}
                 </Button>
+                )}
+                </>
               ) : (
                 <IssueForm
                   rooms={reportRooms}
@@ -843,6 +867,7 @@ const Report = () => {
             {actionError && (
               <p className="text-sm text-destructive mb-4 text-center" role="alert">{actionError}</p>
             )}
+            {!isPreview && (
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Processing payment…" : data.amount ? `Try charging ${data.amount} again` : "Try the charge again"}
@@ -851,7 +876,8 @@ const Report = () => {
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Update or confirm your card</Link>
               </Button>
             </div>
-            <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>
+            )}
+            {!isPreview && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
           </div>
         )}
 
@@ -867,20 +893,24 @@ const Report = () => {
             {actionError && (
               <p className="text-sm text-destructive mb-4" role="alert">{actionError}</p>
             )}
-            {needsCardChoice && (
+            {!isPreview && needsCardChoice && (
               <p className="text-sm mb-4 text-center">
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
               </p>
             )}
+            {!isPreview && (
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Checking payment…" : data.amount ? `Try charging ${data.amount} again` : "Try again"}
               </Button>
             </div>
+            )}
+            {!isPreview && (
             <p className="mt-3 text-sm text-muted-foreground text-center">
               Trying again first checks the payment status — you won&apos;t be charged twice. If this keeps
               happening, email hello@gatehousehomecleaning.com.
             </p>
+            )}
           </div>
         )}
 
@@ -947,6 +977,7 @@ const Report = () => {
                     report an issue (the dispute flow), but it must not
                     sit as a prominent action. The explanation lives
                     inside the opened form, not under the link. */}
+                {!isPreview && (
                 <button
                   type="button"
                   className="text-xs underline text-muted-foreground/70"
@@ -954,6 +985,7 @@ const Report = () => {
                 >
                   Something wasn&apos;t right? Report an issue with this visit
                 </button>
+                )}
               </>
             ) : (
               <div className="text-left max-w-md mx-auto">

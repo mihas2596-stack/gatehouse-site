@@ -1113,8 +1113,11 @@ const Owner = () => {
   };
 
   const previewClientView = async () => {
-    // Opens the live client page for viewing only: no client action is
-    // taken from a preview (no approve, issue, cancel, or reschedule).
+    // Opens the client page in preview mode (preview_link mints a token
+    // with preview: true): /visit and /report refuse every change for
+    // it server-side (403 preview_read_only), and the pages hide the
+    // action buttons. No approve, issue, cancel, reschedule or card
+    // action can be taken from a preview.
     if (!selected) return;
     const visitId = selected.id;
     const epoch = visitEpochRef.current;

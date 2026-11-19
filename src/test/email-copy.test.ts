@@ -26,7 +26,7 @@ describe("customer email clarity", () => {
     const text = paymentEmailCopy("$189");
     expect(text).toContain("Due today: $0");
     expect(text).toContain("charges your card $189 immediately");
-    expect(text).toContain("24 hours after we send the report");
+    expect(text).toContain("next scheduled billing time");
     expect(text).toContain("closing the issue does not restart it");
     expect(paymentEmailCopy("—")).toContain("the agreed visit amount");
     expect(paymentEmailCopy("—")).not.toContain("—");
@@ -40,7 +40,7 @@ describe("customer email clarity", () => {
     expect(blocked.text).not.toContain("Review by");
     expect(blocked.text).not.toContain("charged automatically 24 hours");
     const normal = reportEmail({ ...common, autoChargeBlocked: false });
-    expect(normal.text).toContain("24 hours after we send the report");
+    expect(normal.text).toContain("next scheduled billing time");
     expect(normal.text).toContain("Review by Friday, 3 PM (Atlanta time)");
   });
 

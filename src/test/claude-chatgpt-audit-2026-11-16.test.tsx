@@ -93,6 +93,17 @@ describe("quote: test-price cap notice (ChatGPT #1)", () => {
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     expect(screen.getByText("Test price cap applied. Selected extras are included in the total shown.")).toBeInTheDocument();
   });
+
+  it("shows no cap notice on step 1 before a ZIP is entered or for an out-of-area ZIP (audit 17.11)", () => {
+    openQuote();
+    // Defaults are 3br/2ba recurring: the cap WOULD lower the total —
+    // but no price is shown yet, so the notice must not appear either.
+    expect(screen.getByText("Enter your ZIP code to see your price.")).toBeInTheDocument();
+    expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "99999" } });
+    expect(screen.getAllByText(/We don't serve this ZIP yet/)).toHaveLength(2);
+    expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
+  });
 });
 
 describe("quote: cap notice stays off on ordinary prices", () => {
@@ -151,7 +162,7 @@ describe("quote step 3: repeated $0 paragraph removed (ChatGPT #5)", () => {
     fillStep2();
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText(/When you pay/i)).toBeInTheDocument();
-    expect(screen.getByText("24 hours after we send the report")).toBeInTheDocument();
+    expect(screen.getByText("next scheduled billing time")).toBeInTheDocument();
     expect(screen.getByText("Cancel free at least 48 hours before your visit. Later cancellations cost $25.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
     expect(screen.queryByText("We’ll send a private photo report after your cleaning. You can approve it to pay. If you haven’t approved or reported an issue, we’ll charge your card automatically 24 hours after we send the report.")).not.toBeInTheDocument();
@@ -267,7 +278,7 @@ describe("V1: When you pay has three labelled lines (visual report)", () => {
     expect(screen.getByText("At booking")).toBeInTheDocument();
     expect(screen.getByText("After cleaning")).toBeInTheDocument();
     expect(screen.getByText("If something was missed")).toBeInTheDocument();
-    expect(screen.getByText("24 hours after we send the report")).toBeInTheDocument();
+    expect(screen.getByText("next scheduled billing time")).toBeInTheDocument();
     expect(screen.getByText(/within those 24 hours to stop automatic payment/)).toBeInTheDocument();
   });
 });

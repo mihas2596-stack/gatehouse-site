@@ -67,18 +67,17 @@ describe("fix8 — clarity: tier wording", () => {
     expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
-  it("hero links to the sample report; the sample itself opens from its toggle after When you pay", () => {
+  it("hero link opens the sample report in one click (audit 17.11)", () => {
     renderPage(<Index />);
-    // V3 (16.11 visual audit, supersedes 16.11 item 1): a secondary text
-    // link in the hero leads to the sample section — it scrolls there,
-    // it does not open the sample. The sample still starts closed and
-    // opens from its toggle after "When you pay".
+    // 17.11 prelaunch audit supersedes the 16.11 two-click behaviour:
+    // the hero link still points at #sample-report, but clicking it
+    // opens the sample directly instead of only scrolling to the toggle.
     const heroLink = screen.getByRole("link", { name: "See a sample photo report" });
     expect(heroLink).toHaveAttribute("href", "#sample-report");
     expect(screen.queryByRole("button", { name: "See a sample photo report" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Hide sample report" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View sample report" }));
+    fireEvent.click(heroLink);
     expect(screen.getByRole("button", { name: "Hide sample report" })).toBeInTheDocument();
   });
 

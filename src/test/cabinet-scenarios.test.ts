@@ -4,6 +4,8 @@ import bookingAction from "../../api/booking-action";
 import cleanerHandler from "../../api/cleaner";
 import reportHandler from "../../api/report";
 import visitHandler from "../../api/visit";
+import cardStatusHandler from "../../api/card-status";
+import checkoutHandler from "../../api/create-checkout-session";
 import { signBooking } from "../../api/create-checkout-session";
 import { mintCleanerLinkV2 } from "../../api/_cleaner_link";
 import { hashToken } from "../../api/_db";
@@ -631,5 +633,92 @@ describe("full cabinet chain", () => {
     await cleanerHandler({ method: "GET", headers: {}, query: { ct } }, r as never);
     expect(r.body.cancelled).toBe(true);
     expect(r.body.editable).toBe(false);
+  });
+});
+
+// P0-4 (audit 17.11): the owner's "Preview client view" mints a token
+// with preview: true. The client routes serve the live view for it but
+// refuse every visit change server-side (403 preview_read_only), and the
+// pages hide the action buttons. A live token is unaffected.
+describe("preview mode (P0-4)", () => {
+  function previewBt() {
+    return signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client", preview: true }).token;
+  }
+  const RPP = (body: Record<string, unknown>) =>
+    call(reportHandler, { method: "POST", headers: {}, body: { bt: previewBt(), ...body } });
+  const VSP = (body: Record<string, unknown>) =>
+    call(visitHandler, { method: "POST", headers: {}, body: { bt: previewBt(), ...body } });
+  const RPGETP = () => call(reportHandler, { method: "GET", headers: {}, query: { bt: previewBt() } });
+  const VSGETP = () => call(visitHandler, { method: "GET", headers: {}, query: { bt: previewBt() } });
+
+  it("preview GET on /visit and /report returns the live view with preview:true", async () => {
+    sentWorld();
+    const v = await VSGETP();
+    expect(v.code).toBe(200);
+    expect(v.body.ok).toBe(true);
+    expect(v.body.preview).toBe(true);
+    expect(v.body.state).toBe("report_sent");
+    const r = await RPGETP();
+    expect(r.code).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.preview).toBe(true);
+    expect(r.body.state).toBe("awaiting");
+  });
+
+  it("preview POST approve on /report is refused and charges nothing", async () => {
+    sentWorld();
+    const evtsBefore = evts.length;
+    const r = await RPP({ action: "approve" });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("preview_read_only");
+    expect(rows[0]["status"]).toBe("report_sent");
+    expect(evts).toHaveLength(evtsBefore);
+    expect(piCalls).toHaveLength(0);
+  });
+
+  it("preview POST issue on /report is refused and opens nothing", async () => {
+    sentWorld();
+    const r = await RPP({ action: "issue", reason: "The kitchen was missed", room: "Kitchen" });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("preview_read_only");
+    expect(rows[0]["issue_open"]).toBe(false);
+    expect(rows[0]["issue_ever"]).toBe(false);
+  });
+
+  it("preview POST cancel and propose_date on /visit are refused and change nothing", async () => {
+    confirmedWorld();
+    const c = await VSP({ action: "cancel", scope: "once" });
+    expect(c.code).toBe(403);
+    expect(c.body.error).toBe("preview_read_only");
+    expect(rows[0]["status"]).toBe("confirmed");
+    const p = await VSP({ action: "propose_date", date: nyDate(3) });
+    expect(p.code).toBe(403);
+    expect(p.body.error).toBe("preview_read_only");
+    expect(rows[0]["status"]).toBe("confirmed");
+  });
+
+  it("preview POST confirm_card is refused", async () => {
+    confirmedWorld();
+    const r = await call(cardStatusHandler, { method: "POST", headers: {}, body: { bt: previewBt(), action: "confirm_card" } });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("preview_read_only");
+  });
+
+  it("preview POST create-checkout-session is refused", async () => {
+    confirmedWorld();
+    const r = await call(checkoutHandler, { method: "POST", headers: {}, body: { bt: previewBt() } });
+    expect(r.code).toBe(403);
+    expect(r.body.error).toBe("preview_read_only");
+  });
+
+  it("a live token still approves after the preview refusal (no state leak)", async () => {
+    sentWorld();
+    const refused = await RPP({ action: "approve" });
+    expect(refused.code).toBe(403);
+    const rep = await RPGET();
+    const live = await RP({ action: "approve", seen_publication_id: rep.body.publication_id });
+    expect(live.code).toBe(200);
+    expect(live.body.ok).toBe(true);
+    expect(piCalls).toHaveLength(1);
   });
 });

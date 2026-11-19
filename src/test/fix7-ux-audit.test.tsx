@@ -109,7 +109,7 @@ describe("fix7 — UX audit fixes", () => {
     // 16.11 item 2 (owner decision): step 3 no longer carries the
     // auto-charge clause — it lives in "When you pay" below, and step 3
     // only says the report can be approved to pay.
-    expect(screen.getByText(/your card is charged automatically 24 hours after the report is sent/)).toBeInTheDocument();
+    expect(screen.getByText(/next scheduled billing time after that window/)).toBeInTheDocument();
     expect(screen.queryByText(/Approve to pay — or your card is charged automatically/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Check our service area" })).toBeInTheDocument();
     expect(document.getElementById("when-you-pay")).not.toBeNull();
