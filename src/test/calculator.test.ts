@@ -113,14 +113,14 @@ describe("fmtPrice never scales; scaling is explicit", () => {
   });
 });
 
-describe("global test-price window (owner order 2026-10-24, 48h, extended 2026-10-26 by 24h, then by 48h, then 2026-10-28 by 72h, then 2026-10-31 by 48h, then 2026-11-03 by 72h, then 2026-11-15 to Friday 2026-11-20)", () => {
+describe("global test-price window (owner order 2026-10-24, 48h, extended 2026-10-26 by 24h, then by 48h, then 2026-10-28 by 72h, then 2026-10-31 by 48h, then 2026-11-03 by 72h, then 2026-11-15 to Friday 2026-11-20, then 2026-11-20 by 5 days to Wednesday 2026-11-25)", () => {
   it("is active before the cutoff and inactive at and after it", () => {
-    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-11-20T20:59:59Z"));
+    expect(GLOBAL_TEST_CUT_UNTIL_MS).toBe(Date.parse("2026-11-25T20:59:59Z"));
     expect(globalTestCutActive(Date.parse("2026-10-24T13:33:00Z"))).toBe(true);
     expect(globalTestCutActive(Date.parse("2026-11-06T10:32:59Z"))).toBe(true);
     expect(globalTestCutActive(Date.parse("2026-11-18T20:59:59Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-11-20T20:59:58Z"))).toBe(true);
-    expect(globalTestCutActive(Date.parse("2026-11-20T20:59:59Z"))).toBe(false);
-    expect(globalTestCutActive(Date.parse("2026-11-21T00:00:00Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-11-25T20:59:58Z"))).toBe(true);
+    expect(globalTestCutActive(Date.parse("2026-11-25T20:59:59Z"))).toBe(false);
+    expect(globalTestCutActive(Date.parse("2026-11-26T00:00:00Z"))).toBe(false);
   });
 });

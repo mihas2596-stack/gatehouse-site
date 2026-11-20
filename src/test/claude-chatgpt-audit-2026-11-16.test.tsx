@@ -107,7 +107,7 @@ describe("quote: test-price cap notice (ChatGPT #1)", () => {
 });
 
 describe("quote: cap notice stays off on ordinary prices", () => {
-  beforeEach(() => setNow("2026-11-21T00:00:00Z"));
+  beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
   it("adds the add-on at its real price and shows no cap notice", () => {
     openQuote();
@@ -153,7 +153,7 @@ describe("quote: price summary under the ZIP (ChatGPT #3)", () => {
 });
 
 describe("quote step 3: repeated $0 paragraph removed (ChatGPT #5)", () => {
-  beforeEach(() => setNow("2026-11-21T00:00:00Z"));
+  beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
   it("keeps When you pay, the consent and the submit button, but not the repeated $0 box", () => {
     openQuote();
@@ -267,7 +267,7 @@ describe("Footer: one component everywhere (Claude M4)", () => {
 });
 
 describe("V1: When you pay has three labelled lines (visual report)", () => {
-  beforeEach(() => setNow("2026-11-21T00:00:00Z"));
+  beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
   it("labels At booking / After cleaning / If something was missed, with the verified 24-hour wording", () => {
     openQuote();
@@ -284,7 +284,7 @@ describe("V1: When you pay has three labelled lines (visual report)", () => {
 });
 
 describe("V2: rooms to skip, entry codes, date is a request (visual report)", () => {
-  beforeEach(() => setNow("2026-11-21T00:00:00Z"));
+  beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
   it("shows the skip-rooms line above the photo checkbox, the no-codes line, and the date-request line by the price", () => {
     openQuote();
@@ -331,7 +331,7 @@ describe("V4: test prices are badged on Services while test mode is active (visu
   });
 
   it("shows no badge on ordinary prices", () => {
-    setNow("2026-11-21T00:00:00Z");
+    setNow("2026-11-26T00:00:00Z");
     render(<MemoryRouter><Services /></MemoryRouter>);
     expect(screen.queryByText("Test price")).not.toBeInTheDocument();
     expect(screen.getByText(/From \$129 per visit/)).toBeInTheDocument();
@@ -339,7 +339,7 @@ describe("V4: test prices are badged on Services while test mode is active (visu
 });
 
 describe("V5: frequency is explicit and Services preselection flows into the total (visual report)", () => {
-  beforeEach(() => setNow("2026-11-21T00:00:00Z"));
+  beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
   it("marks the selected frequency with a check and explains recurring confirmation", () => {
     openQuote();

@@ -118,7 +118,8 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
  });
  it("a cancelled visit with an earlier confirmation does not return active booking confirmation",async()=>{row.status="cancelled";events=[{booking_id:BID,event:"visit_confirmed",detail:{date:"2026-11-23",window:"morning"},created_at:new Date().toISOString()}];const r=response();await cardHandler({method:"GET",headers:{},query:{bt:token()}},r as never);expect((r.body.booking as Record<string,string>)?.booking_confirmed).not.toBe("1");});
  it("a paid oven extra appears in the cleaner's persistent work checklist",async()=>{
-  const r=response();await quoteHandler({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"e9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-25",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",addons:{insideOven:true}}},r as never);
+  vi.setSystemTime(new Date("2026-11-26T12:00:00Z")); // past the extended test window (ends 2026-11-25T20:59:59Z)
+  const r=response();await quoteHandler({method:"POST",headers:{origin:"https://www.gatehousehomecleaning.com"},body:{request_id:"e9526ec4-dd4f-46b4-a5e9-a7effc02c5ff",name:"Audit QA",email:"audit@example.com",phone:"7705550100",source:"quote",service:"Standard",service_key:"standard",frequency:"onetime",bedrooms:"1",bathrooms:"1",full_baths:"1",half_baths:"0",zip:"30024",date:"2026-11-30",time:"morning",address:"100 Test Street, Suwanee, GA 30024",terms_consent:true,photo_consent:true,cleaned_recently:true,entry_method:"home",addons:{insideOven:true}}},r as never);
   expect(r.code).toBe(200);expect(inserts[0]?.amount_cents).toBe(18400);expect(JSON.stringify(inserts[0]?.checklist)).toMatch(/oven/i);
  });
  it("retention reaches visit 21 after the first 20 old visits have no photos",async()=>{
@@ -129,17 +130,18 @@ describe("additional audit acceptance criteria — intended behavior",()=>{
  it("a cancellation does not claim success when both its visit and journal writes failed",async()=>{failVisitUpdates=true;failEventWrites=true;const r=response();await visitHandler({method:"POST",headers:{},body:{action:"cancel",scope:"once",bt:token()}},r as never);expect(r.body.ok).toBe(false);});
  it("a failed booking insert sends no success emails",async()=>{failVisitInsert=true;const r=response();await quoteHandler(quoteRequest(),r as never);expect(r.body.ok).toBe(false);expect(emails).toHaveLength(0);});
  it("asks the client to review the regular price when the test window expires", async () => {
+  vi.setSystemTime(new Date("2026-11-26T12:00:00Z")); // past the extended test window (ends 2026-11-25T20:59:59Z)
   const home = { bedrooms: "3", bathrooms: "2", full_baths: "2" };
   for (const mode of [true, undefined]) {
    const result = response();
-   await quoteHandler(quoteRequest({ ...home, price: "1.50", test_price_window: mode }), result as never);
+   await quoteHandler(quoteRequest({ ...home, date: "2026-11-30", price: "1.50", test_price_window: mode }), result as never);
    expect(result.code).toBe(409);
    expect(result.body.errors).toMatchObject({ price: expect.stringMatching(/review the updated total/i) });
   }
   expect(inserts).toHaveLength(0);
   expect(emails).toHaveLength(0);
   const confirmed = response();
-  await quoteHandler(quoteRequest({ ...home, price: "219", test_price_window: false }), confirmed as never);
+  await quoteHandler(quoteRequest({ ...home, date: "2026-11-30", price: "219", test_price_window: false }), confirmed as never);
   expect(confirmed.code).toBe(200);
   expect(inserts[0]?.amount_cents).toBe(21900);
   expect(emails).toHaveLength(2); // owner notice + customer confirmation

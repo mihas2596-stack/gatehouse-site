@@ -95,8 +95,10 @@ export const TEST_PRICE_SCALE = 0.01;
 // order 2026-11-12 by 5 days: ends 2026-11-18T20:59:59Z (23:59 Minsk).
 // Extended again by owner order 2026-11-15 to Friday: ends
 // 2026-11-20T20:59:59Z (23:59 Minsk).
+// Extended again by owner order 2026-11-20 by 5 days: ends
+// 2026-11-25T20:59:59Z (23:59 Minsk).
 // Existing quotes stay pinned.
-const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-20T20:59:59Z");
+const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-25T20:59:59Z");
 const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 const moneyRound = (n: number): number => Math.round(n * 100) / 100;

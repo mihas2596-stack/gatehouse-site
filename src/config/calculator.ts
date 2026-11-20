@@ -170,9 +170,10 @@ export const testCapApplied = (rawTotal: number): boolean =>
  * for another week: ends 2026-11-13T20:59:59Z (23:59 Minsk).
  * Extended again by owner order 2026-11-12 by 5 days: ends 2026-11-18T20:59:59Z (23:59 Minsk).
  * Extended again by owner order 2026-11-15 to Friday: ends 2026-11-20T20:59:59Z (23:59 Minsk).
+ * Extended again by owner order 2026-11-20 by 5 days: ends 2026-11-25T20:59:59Z (23:59 Minsk).
  * Values and existing pinned booking amounts are unchanged.
  */
-export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-20T20:59:59Z");
+export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-25T20:59:59Z");
 export const globalTestCutActive = (nowMs: number = Date.now()): boolean =>
   nowMs < GLOBAL_TEST_CUT_UNTIL_MS;
 

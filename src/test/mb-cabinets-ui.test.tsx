@@ -523,7 +523,7 @@ describe("MB-15/B8/LB-32: city pages — unique copy, From price, no dead sectio
   });
 
   it("Sugar Hill shows 'From $129' once the test window is over", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-21T00:00:00Z"));
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-26T00:00:00Z"));
     render(
       <MemoryRouter initialEntries={["/areas/sugar-hill"]}>
         <HelmetProvider>
