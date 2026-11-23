@@ -99,10 +99,10 @@ export async function searchIntents(
     if (typeof j.next_page === "string" && j.next_page) {
       page = j.next_page;
     } else {
-      break;
+      return { status: "ok", intents: out };
     }
   }
-  return { status: "ok", intents: out };
+  return { status: "error", error: "search_incomplete" };
 }
 
 // Direct retrieval of a KNOWN intent id (RA03): when our row or journal
@@ -163,6 +163,7 @@ const LIVE_STATUSES = [
   "requires_action",
   "requires_confirmation",
   "processing",
+  "requires_capture",
 ];
 
 export type ReconciledIntent =

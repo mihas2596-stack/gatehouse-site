@@ -15,7 +15,7 @@ type Plan = {
 
 type SubmissionState = {
   submitted?: boolean;
-  kind?: "booking" | "contact";
+  kind?: "booking" | "contact" | "duplicate" | "custom";
   customerEmailSent?: boolean;
   bt?: string;
   recap?: { price?: string; email?: string; date?: string; window?: string; entry?: string; status?: string; response?: string };
@@ -75,6 +75,7 @@ const ThankYou = () => {
   // URL is stripped from the address bar so it never reaches analytics
   // (see tokenStrip.ts).
   const [bt] = useState<string>(() => {
+    if (submission.kind && submission.kind !== "booking") return "";
     if (submission.bt) return submission.bt;
     return resolveLinkToken("bt", "gh_last_bt", searchParams.toString());
   });
@@ -209,6 +210,25 @@ const ThankYou = () => {
     }
   };
 
+  if (submission.kind === "duplicate" || submission.kind === "custom") {
+    const duplicate = submission.kind === "duplicate";
+    return (
+      <div className="page-shell readable-flow min-h-[80vh] bg-background">
+        <SEO url="https://www.gatehousehomecleaning.com/thank-you" title="Request Status | Gatehouse Home Cleaning" description="Next steps for your cleaning request." noindex />
+        <div className="container max-w-xl py-12 text-center">
+          <h1 className="mb-4 font-heading text-3xl font-bold">{duplicate ? "We already have your request" : "Custom quote requested"}</h1>
+          <p className="mb-4 text-lg">{duplicate
+            ? "We haven’t booked a second visit."
+            : "We’ll email you your price before you choose a card or confirm a visit. Nothing is charged today."}</p>
+          {duplicate && submission.customerEmailSent !== false && <p className="mb-4">If you received a confirmation email, open its private link for your next step.</p>}
+          <p>{submission.customerEmailSent === false ? "Your request was saved, but the confirmation email could not be sent. For help with your request, " : "Need help finding your request? "}
+            <a className="text-primary underline" href="mailto:hello@gatehousehomecleaning.com">Email Gatehouse</a>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!received || !isBooking) {
     return (
       <div className="page-shell readable-flow min-h-[80vh] bg-background">
@@ -325,7 +345,7 @@ const ThankYou = () => {
       <h1 className="font-heading text-3xl font-bold mb-4">{card.kind === "cancelled" ? "This visit is cancelled" : "We couldn’t verify your card status"}</h1>
       <p className="mb-6 text-lg">{card.kind === "cancelled" ? "No further card step is needed for this visit." : "Your request is saved. Check again before entering your card."}</p>
       {card.kind === "unknown" && <Button variant="hero" size="lg" onClick={checkCard}>Check again</Button>}
-      <p className="mt-6"><Link className="underline" to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link></p>
+      <p className="mt-6"><Link reloadDocument className="underline" to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link></p>
     </div>);
   }
 
@@ -387,7 +407,7 @@ const ThankYou = () => {
         </div>
 
         <Button variant="hero" size="xl" className="w-full mb-6" asChild>
-          <Link to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
+          <Link reloadDocument to={`/visit?bt=${encodeURIComponent(bt)}`}>View my visit</Link>
         </Button>
         {summaryCard}
         <div className="mb-6 rounded-xl bg-sage/15 p-5 text-left">

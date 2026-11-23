@@ -7,6 +7,7 @@
 // report. Requires_action and unknown outcomes do NOT reopen (the
 // client can still complete 3DS; the money may have moved).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createChargeKey } from "../../api/_payment_intent";
 import { chargeVisit } from "../../api/_payment_obligation";
 
 const BID = "bid-h4";
@@ -48,7 +49,7 @@ function matchRow(row: Row, match: string): boolean {
 describe("H4: a failed charge after a resolved dispute reopens the dispute", () => {
   let rows: Row[];
   let events: Ev[];
-  let piBehavior: "declined" | "requires_action" | "throws";
+  let piBehavior: "declined" | "requires_action" | "throws" | "server_error" | "processing" | "off_session_auth";
   let metaPatch: Record<string, string>;
   let failedEmailSent: boolean;
 
@@ -103,6 +104,13 @@ describe("H4: a failed charge after a resolved dispute reopens the dispute", () 
         return supRes({ id: "pi_test", status: "succeeded", amount: 14900 });
       }
       if (u.includes("api.stripe.com/v1/payment_intents") && method === "POST") {
+        if (piBehavior === "processing") return supRes({ id: "pi_pending", status: "processing" });
+        if (piBehavior === "server_error") return supRes({ error: { type: "api_error" } }, false, 500);
+        if (piBehavior === "off_session_auth") return supRes({ error: {
+          code: "authentication_required", payment_intent: {
+            id: "pi_test", status: "requires_payment_method", client_secret: "pi_test_secret_x",
+          },
+        } }, false, 402);
         if (piBehavior === "throws") throw new Error("network down");
         if (piBehavior === "requires_action") {
           return supRes({ id: "pi_test", status: "requires_action", client_secret: "pi_test_secret_x", amount: 14900 });
@@ -179,6 +187,44 @@ describe("H4: a failed charge after a resolved dispute reopens the dispute", () 
     if (out.outcome === "failed") expect(out.error).toBe("payment_requires_action");
     expect(rows[0]["issue_open"]).toBe(false);
     expect(events.some((e) => e.event === "issue_opened" && e.detail?.["reason"] === "charge_unsettled_after_resolve")).toBe(false);
+  });
+
+  it("retains the pending intent and sends no decline when Stripe is processing", async () => {
+    piBehavior = "processing";
+    expect(await charge()).toEqual({ outcome: "processing", payment_intent: "pi_pending" });
+    expect(rows[0]).toMatchObject({ status: "payment_pending", payment_intent_id: "pi_pending", issue_open: false });
+    expect(failedEmailSent).toBe(false);
+  });
+
+  it("holds a Stripe 500 as unknown, with no decline email or second create on a different card", async () => {
+    piBehavior = "server_error";
+    expect(await charge()).toMatchObject({ outcome: "unknown", error: "payment_unknown" });
+    expect(rows[0].status).toBe("payment_pending");
+    expect(failedEmailSent).toBe(false);
+    events.push(ev("card_confirmed", { payment_method_id: "pm_changed" }, new Date(NOW).toISOString()));
+    expect(await charge()).toMatchObject({ outcome: "unknown", error: "payment_unknown" });
+    const createCalls = vi.mocked(fetch).mock.calls.filter(([url, init]) =>
+      String(url).endsWith("/payment_intents") && init?.method === "POST");
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it.each(["expired", "unrecorded"])("holds a pending payment with an %s replay key", async scenario => {
+    rows[0].status = "payment_pending";
+    const key = createChargeKey(BID, 1, "pm_test_h4");
+    if (scenario === "expired") events.push(ev("payment_claimed", { idem_key: key },
+      new Date(NOW - 25 * 3600 * 1000).toISOString()));
+    expect(await charge()).toMatchObject({ outcome: "unknown", error: "payment_unknown" });
+    expect(rows[0].status).toBe("payment_pending");
+    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) =>
+      String(url).endsWith("/payment_intents") && init?.method === "POST")).toHaveLength(0);
+  });
+
+  it("resumes an off-session authentication decline with the same intent and saved method", async () => {
+    piBehavior = "off_session_auth";
+    expect(await charge()).toMatchObject({ error: "payment_requires_action", client_secret: "pi_test_secret_x",
+      confirmation_method_id: "pm_test_h4", payment_intent: "pi_test" });
+    expect(failedEmailSent).toBe(false);
+    expect(events.some(e => JSON.stringify(e).includes("pi_test_secret_x"))).toBe(false);
   });
 
   it("an unknown charge outcome reopens the resolved dispute — the money may have moved, so the dispute must be visible again", async () => {

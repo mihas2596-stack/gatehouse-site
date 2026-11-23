@@ -1,10 +1,5 @@
 // @vitest-environment node
-// G3 (rebind dedup marker): rebinding a shared Stripe customer to a new
-// booking used to clear gh_last_payment / gh_fee_last_payment, so a
-// redelivered payment_intent.succeeded could no longer be recognised
-// from metadata. The rebind now carries the live dedup markers back
-// into the patch (after the stale-lifecycle clear); other lifecycle
-// keys are still cleared.
+// Starting another card setup must preserve any earlier payment and booking state.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import handler, { signBooking } from "../../api/create-checkout-session";
 
@@ -16,6 +11,8 @@ let customerMeta: Record<string, string> | null;
 let customerMetaFails: boolean;
 let rebindBody: URLSearchParams | null;
 let sessionCalls: number;
+let sessionKeys: string[];
+let sessionCustomers: string[];
 
 function res() {
   return {
@@ -40,7 +37,9 @@ beforeEach(() => {
   customerMetaFails = false;
   rebindBody = null;
   sessionCalls = 0;
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
+  sessionKeys = [];
+  sessionCustomers = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: unknown; headers?: Record<string,string> }) => {
     const u = new URL(String(url));
     const ok = (data: unknown) => ({
       ok: true, status: 200,
@@ -58,14 +57,17 @@ beforeEach(() => {
       }
       if (u.pathname === "/v1/customers/cus_old" && (init?.method ?? "GET") === "GET") {
         if (customerMetaFails) return { ok: false, status: 500, json: async () => ({}), text: async () => "{}" };
-        return ok({ id: "cus_old", metadata: customerMeta });
+        return ok({ id: "cus_old", email: "client@example.com", metadata: customerMeta });
       }
       if (u.pathname === "/v1/customers/cus_old" && (init?.method ?? "GET") === "POST") {
         rebindBody = new URLSearchParams(String(init?.body ?? ""));
         return ok({ id: "cus_old" });
       }
+      if (u.pathname === "/v1/customers" && init?.method === "POST") return ok({ id: "cus_new" });
       if (u.pathname === "/v1/checkout/sessions") {
         sessionCalls++;
+        sessionKeys.push(init?.headers?.["Idempotency-Key"] ?? "");
+        sessionCustomers.push(new URLSearchParams(String(init?.body)).get("customer") ?? "");
         return ok({ id: "cs_test_x", url: "https://checkout.stripe.com/pay/cs_test_x" });
       }
     }
@@ -79,26 +81,43 @@ const token = () => signBooking(LINK_SECRET, {
 }).token;
 const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token() } });
 
-describe("G3: rebind carries the dedup markers", () => {
-  it("re-asserts gh_last_payment / gh_fee_last_payment and still clears other lifecycle keys", async () => {
+describe("card setup preserves payment history", () => {
+  it("does not rebind an unrelated same-email customer or mutate its payment history", async () => {
     const r = res();
     await handler(reqWithToken() as never, r as never);
     expect(r.code).toBe(200);
     expect(sessionCalls).toBe(1);
-    expect(rebindBody).not.toBeNull();
-    expect(rebindBody!.get("metadata[gh_last_payment]")).toBe("pi_old_123");
-    expect(rebindBody!.get("metadata[gh_fee_last_payment]")).toBe("pi_fee_456");
-    expect(rebindBody!.get("metadata[gh_booking_confirmed]")).toBe("");
-    expect(rebindBody!.get("metadata[gh_booking_id]")).toBe(BID);
+    expect(sessionCustomers).toEqual(["cus_new"]);
+    expect(rebindBody).toBeNull();
   });
 
-  it("still completes the rebind when the customer read fails (DB row stays the dedup authority)", async () => {
+  it("reuses the visit's stored customer without resetting its lifecycle", async () => {
+    dbRow!.stripe_customer_id = "cus_old";
+    const r = res();
+    await handler(reqWithToken() as never, r as never);
+    expect(r.code).toBe(200);
+    expect(sessionCalls).toBe(1);
+    expect(sessionCustomers).toEqual(["cus_old"]);
+    expect(rebindBody).toBeNull();
+  });
+
+  it("retries one setup with the same key and starts a fresh one for a reissued link", async () => {
+    const request = reqWithToken();
+    await handler(request as never, res() as never);
+    await handler(request as never, res() as never);
+    await handler(reqWithToken() as never, res() as never);
+    expect(sessionKeys[0]).toMatch(/^setup_/);
+    expect(sessionKeys[1]).toBe(sessionKeys[0]);
+    expect(sessionKeys[2]).not.toBe(sessionKeys[0]);
+  });
+
+  it("stops when an existing customer binding cannot be verified", async () => {
+    dbRow!.stripe_customer_id = "cus_old";
     customerMetaFails = true;
     const r = res();
     await handler(reqWithToken() as never, r as never);
-    expect(r.code).toBe(200);
-    expect(sessionCalls).toBe(1);
-    expect(rebindBody).not.toBeNull();
-    expect(rebindBody!.get("metadata[gh_last_payment]")).toBe("");
+    expect(r.code).toBe(503);
+    expect(sessionCalls).toBe(0);
+    expect(rebindBody).toBeNull();
   });
 });

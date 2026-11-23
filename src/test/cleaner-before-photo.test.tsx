@@ -28,11 +28,13 @@ let posts: Record<string, unknown>[];
 // Once true, the refetch GET fails — simulates a flaky connection after
 // an upload, so a test can prove the photo still shows optimistically.
 let refetchShouldFail = false;
+let loseRegisterResponse = false;
 
 beforeEach(() => {
   posts = [];
   fixture = makeView();
   refetchShouldFail = false;
+  loseRegisterResponse = false;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).startsWith("/api/cleaner?") && !init?.method) {
       if (refetchShouldFail) return { ok: true, json: async () => ({ ok: false, error: "load_failed" }) };
@@ -40,6 +42,10 @@ beforeEach(() => {
     }
     if (String(url) === "https://upload.example.com/fixture") return { ok: true };
     const body = JSON.parse(String(init?.body ?? "{}")); posts.push(body);
+    if (body.action === "photo_register" && loseRegisterResponse) {
+      loseRegisterResponse = false;
+      throw new Error("Connection interrupted");
+    }
     if (body.action === "photo_register") { refetchShouldFail = true; return { ok: true, json: async () => ({ ok: true, photo_id: "photo-new" }) }; }
     return { ok: true, json: async () => ({ ok: true, upload_url: "https://upload.example.com/fixture", storage_path: "visits/test/kitchen/fixture.jpg" }) };
   }));
@@ -48,6 +54,19 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const open = () => render(<StrictMode><HelmetProvider><MemoryRouter initialEntries={["/cleaner?ct=test-cleaner-token"]}><Cleaner /></MemoryRouter></HelmetProvider></StrictMode>);
 
 describe("cleaner before-photo flow", () => {
+  it("retries an unconfirmed registration using the original upload", async () => {
+    loseRegisterResponse = true;
+    const { container } = open();
+    await screen.findByRole("checkbox", { name: "Counters wiped" });
+    const file = new File(["test"], "kitchen.jpg", { type: "image/jpeg" });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(posts.filter((p) => p.action === "photo_register")).toHaveLength(2));
+    expect(posts.filter((p) => p.action === "photo_sign")).toHaveLength(1);
+    const registrations = posts.filter((p) => p.action === "photo_register");
+    expect(registrations[1].storage_path).toBe(registrations[0].storage_path);
+  });
+
   it("checklist is disabled until a before photo exists, and the before step comes first", async () => {
     const { container } = open();
     const checkbox = await screen.findByRole("checkbox", { name: "Counters wiped" });

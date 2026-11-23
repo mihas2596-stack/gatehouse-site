@@ -25,7 +25,7 @@
 //     write surfaces as payment_unconfirmed, never as success.
 
 import {
-  dbSelectStrict, dbUpdateCount, logEvent,
+  dbSelectStrict, dbUpdateCount, logEvent, logEventStrict,
 } from "./_db.js";
 import {
   paymentBasis, issueStateFrom, clientApprovedEvent, everWaivedDecision,
@@ -81,7 +81,7 @@ export type ChargeOutcome =
   // can complete the challenge with Stripe.js (handleCardAction) and
   // then re-approve. Without them the card is unpayable: the server
   // cannot do 3DS, and the client has no secret to present.
-  | { outcome: "failed"; error: string; detail: string; status?: string; payment_intent?: string; client_secret?: string }
+  | { outcome: "failed"; error: string; detail: string; status?: string; payment_intent?: string; client_secret?: string; confirmation_method_id?: string }
   | { outcome: "unknown"; error: string; payment_intent?: string }
   | { outcome: "mismatch"; error: string; detail: string };
 
@@ -119,14 +119,10 @@ function latestSent(events: ObligationEvent[]): ObligationEvent | null {
 // the row already says "sent" (the exact failure the audit
 // reproduced: CAS landed, the bounced-flag write failed, the timer
 // charged at +25h for a report the client never received).
-function latestDeliveredSent(events: ObligationEvent[]): ObligationEvent | null {
-  let best: ObligationEvent | null = null;
-  for (const e of events) {
-    if (e.event !== "report_sent") continue;
-    if (e.detail?.["email_sent"] !== true) continue;
-    if (!best || e.created_at > best.created_at) best = e;
-  }
-  return best;
+function currentDeliveryProven(events: ObligationEvent[], publishedAt: string | null): boolean {
+  const sent = latestSent(events);
+  return sent?.detail?.["email_sent"] === true && !!publishedAt &&
+    Date.parse(sent.created_at) >= Date.parse(publishedAt);
 }
 
 function latestReturnedAfterSent(events: ObligationEvent[]): boolean {
@@ -310,6 +306,8 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     }
   }
 
+  const idemKey = createChargeKey(bookingId, version, paymentMethod);
+  let replayingPendingCreate = false;
   const issue = issueStateFrom(events, row.issue_open ?? null, row.issue_ever ?? null);
   const bounced = row.report_bounced === true;
   const effectiveSentMs = Math.max(
@@ -339,7 +337,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       return recordPaid(rec.intent.id, true);
     }
     if (rec.state === "live") {
-      if (rec.intent.status === "processing") {
+      if ((rec.intent.status === "processing" || rec.intent.status === "requires_capture")) {
         return { outcome: "processing", payment_intent: rec.intent.id };
       }
       return confirmExisting(rec.intent.id, rec.intent.amount, input.nowMs);
@@ -350,20 +348,23 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     if (rec.state === "unknown") {
       return { outcome: "unknown", error: "payment_unknown" };
     }
-    // failed / none: release the stale claim and fall through to a
-    // fresh claim below.
-    const released = await dbUpdateCount(
-      "gh_visits",
-      `id=eq.${row.id}&status=eq.payment_pending`,
-      { status: "report_sent" },
-    );
-    if (released === 0) {
-      const fresh = await loadRow(bookingId);
-      if (fresh.ok && fresh.row?.status === "paid") return { outcome: "blocked", error: "already_paid" };
-      return { outcome: "processing" };
+    if (rec.state === "none") {
+      // Stripe search can lag a successful create. Replay only the original
+      // parameters within Stripe's minimum 24-hour key retention window.
+      const claim = events.find(e => e.event === "payment_claimed");
+      if (!claim || claim.detail?.idem_key !== idemKey ||
+          !(input.nowMs - Date.parse(claim.created_at) < 23 * 3600 * 1000)) {
+        return { outcome: "unknown", error: "payment_unknown" };
+      }
+      replayingPendingCreate = true;
+    } else {
+      // A known cancelled intent can no longer settle.
+      const released = await dbUpdateCount("gh_visits",
+        `id=eq.${row.id}&status=eq.payment_pending`, { status: "report_sent" });
+      if (released < 0) return { outcome: "unknown", error: "db_unreadable" };
+      if (released === 0) return { outcome: "processing" };
+      row.status = "report_sent";
     }
-    if (released < 0) return { outcome: "unknown", error: "db_unreadable" };
-    row.status = "report_sent";
   }
 
   // Payment-date gate (B): a visit may be paid on or after its date,
@@ -425,7 +426,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   // N07: the timer basis additionally requires a PROVEN delivery.
   // An explicit client approval is a separate basis (the client
   // demonstrably saw the report) and is unaffected.
-  if (source === "timer_24h" && !latestDeliveredSent(events)) {
+  if ((source === "timer_24h" || basis === "timer_rule") && !currentDeliveryProven(events, row.report_sent_at)) {
     return { outcome: "blocked", error: "report_delivery_unconfirmed" };
   }
   // RA06: the timer runs from the CURRENT publication, never an old
@@ -451,7 +452,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       ? [`report_sent_at=eq.${encodeURIComponent(row.report_sent_at)}`]
       : []),
   ].join("&");
-  const claimed = await dbUpdateCount("gh_visits", claimMatch, { status: "payment_pending" });
+  const claimed = replayingPendingCreate ? 1 : await dbUpdateCount("gh_visits", claimMatch, { status: "payment_pending" });
   if (claimed === 0) {
     const fresh = await loadRow(bookingId);
     const freshRow = fresh.ok ? fresh.row : null;
@@ -472,9 +473,12 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     return { outcome: "processing" };
   }
   if (claimed < 0) return { outcome: "unknown", error: "db_unreadable" };
-  await logEvent(row.id, bookingId, "system", "payment_claimed", {
-    source, publication: row.report_sent_at, version,
-  });
+  if (!replayingPendingCreate && !await logEventStrict(row.id, bookingId, "system", "payment_claimed", {
+    source, publication: row.report_sent_at, version, idem_key: idemKey,
+  })) {
+    await releaseClaim();
+    return { outcome: "unknown", error: "db_unreadable" };
+  }
 
   // --- Reconcile before creating (RA03): adoption first. ---
   const rec = await reconcileIntent(secretKey, bookingId, knownIntentIds(row, events), {
@@ -491,7 +495,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     return { outcome: "unknown", error: "payment_unknown" };
   }
   if (rec.state === "live") {
-    if (rec.intent.status === "processing") {
+    if ((rec.intent.status === "processing" || rec.intent.status === "requires_capture")) {
       return { outcome: "processing", payment_intent: rec.intent.id };
     }
     return confirmExisting(rec.intent.id, rec.intent.amount, input.nowMs);
@@ -519,6 +523,8 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     await releaseClaim();
     return { outcome: "blocked", error: "visit_not_chargeable" };
   }
+  if (preRow.status !== "payment_pending") return { outcome: "blocked", error: "claim_lost" };
+  if (preRow.report_sent_at !== row.report_sent_at) return { outcome: "blocked", error: "report_changed" };
   if (preRow.report_status !== "sent") {
     await releaseClaim();
     return { outcome: "blocked", error: "report_not_current" };
@@ -538,6 +544,20 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     await logEvent(row.id, bookingId, "system", "payment_blocked_by_issue", { source });
     return { outcome: "blocked", error: "issue_open" };
   }
+  if (latestReturnedAfterSent(preCreateEv.events)) {
+    await releaseClaim();
+    return { outcome: "blocked", error: "report_not_current" };
+  }
+  if (basis === "timer_rule" || source === "timer_24h") {
+    if (preRow.issue_ever || issueStateFrom(preCreateEv.events).ever || preRow.report_bounced ||
+        !currentDeliveryProven(preCreateEv.events, preRow.report_sent_at)) {
+      await releaseClaim();
+      return { outcome: "blocked", error: "timer_ineligible" };
+    }
+  } else if (!clientApprovedEvent(preCreateEv.events)) {
+    await releaseClaim();
+    return { outcome: "blocked", error: "payment_basis_missing" };
+  }
   // TASK 1 (fix6): same race, waived variant — a waive landing
   // between the claim and the create must stop the payment too.
   // Ever-waived (fix round 2), not latest-decision.
@@ -552,7 +572,6 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   // card change is a real new attempt, while retrying the same card
   // replays Stripe's original result instead of minting a second
   // intent.
-  const idemKey = createChargeKey(bookingId, version, paymentMethod);
   let pi: { ok: boolean; status: number; data: Record<string, unknown> };
   try {
     pi = await stripePost(secretKey, "/payment_intents", {
@@ -573,11 +592,12 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
   return handlePiResult(pi, null);
 
   // --- Helpers (closures over the claimed row). ---
-  async function releaseClaim(): Promise<void> {
+  async function releaseClaim(knownResult = false, piId?: string): Promise<void> {
+    if (replayingPendingCreate && !knownResult) return;
     await dbUpdateCount(
       "gh_visits",
       `id=eq.${row.id}&status=eq.payment_pending`,
-      { status: "report_sent" },
+      { status: "report_sent", ...(piId ? { payment_intent_id: piId } : {}) },
     );
   }
 
@@ -598,7 +618,7 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     if (!wrote) {
       const fresh = await loadRow(bookingId);
       if (fresh.ok && fresh.row?.status === "paid") {
-        const receiptSent = await deps.sendReceipt(amountCents);
+        const receiptSent = await deps.sendReceipt(amountCents).catch(() => false);
         return { outcome: "paid", payment_intent: piId, adopted: true, receipt_sent: receiptSent };
       }
       await logEvent(row.id, bookingId, "system", "payment_unconfirmed", {
@@ -606,12 +626,12 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       });
       return { outcome: "unknown", error: "payment_unconfirmed", payment_intent: piId };
     }
-    await deps.setCustomerMeta({
-      gh_state: "paid",
-      gh_paid_at: new Date().toISOString(),
-      gh_last_payment: piId,
-    });
-    const receiptSent = await deps.sendReceipt(amountCents);
+    try {
+      await deps.setCustomerMeta({
+        gh_state: "paid", gh_paid_at: new Date().toISOString(), gh_last_payment: piId,
+      });
+    } catch { /* the paid row is authoritative */ }
+    const receiptSent = await deps.sendReceipt(amountCents).catch(() => false);
     await logEvent(row.id, bookingId, "system", "payment_succeeded", {
       payment_intent: piId, via: source, receipt_sent: receiptSent, adopted,
     });
@@ -686,7 +706,10 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
         nowMs,
       );
       if (!fbasis || !input.allowedBases.includes(fbasis)) return "payment_basis_missing";
-      if (source === "timer_24h" && !latestDeliveredSent(fevents)) {
+      if (source === "timer_24h" && (fbounced || issueStateFrom(fevents, frow.issue_open, frow.issue_ever).ever)) {
+        return "timer_ineligible";
+      }
+      if ((source === "timer_24h" || fbasis === "timer_rule") && !currentDeliveryProven(fevents, frow.report_sent_at)) {
         return "report_delivery_unconfirmed";
       }
       if (intentAmountCents !== undefined && intentAmountCents !== amountCents) {
@@ -719,7 +742,8 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
       return { outcome: "unknown", error: "payment_unknown", payment_intent: piId };
     }
     const status = String(res.data["status"] ?? "");
-    const outcome = res.ok && status === "succeeded"
+    const outcome = res.status >= 500 || res.status === 409 || res.status === 408 ? "unknown"
+      : res.ok && status === "succeeded"
       ? "succeeded"
       : res.ok && status === "requires_action"
         ? "requires_action"
@@ -737,29 +761,44 @@ async function runChargeVisit(input: ChargeInput): Promise<ChargeOutcome> {
     res: { ok: boolean; status: number; data: Record<string, unknown> },
     existingPiId: string | null,
   ): Promise<ChargeOutcome> {
-    const piId = existingPiId ?? String(res.data["id"] ?? "");
-    const status = String(res.data["status"] ?? "");
+    const stripeError = res.data["error"] as { code?: string; decline_code?: string; message?: string;
+      payment_intent?: { id?: string; status?: string; client_secret?: string } } | undefined;
+    const nestedIntent = res.status === 402 ? stripeError?.payment_intent : undefined;
+    const piId = existingPiId ?? String(res.data["id"] ?? nestedIntent?.id ?? "");
+    const status = String(res.data["status"] ?? nestedIntent?.status ?? "");
+    const knownStatus = ["succeeded", "processing", "requires_action", "requires_payment_method", "canceled"].includes(status);
+    if (res.status >= 500 || res.status === 408 || res.status === 409 || (res.ok && (!knownStatus || !piId))) {
+      await logEvent(row.id, bookingId, "system", "payment_unknown", { source, payment_intent: piId || undefined });
+      return { outcome: "unknown", error: "payment_unknown", payment_intent: piId || undefined };
+    }
+    if (res.ok && status === "processing") {
+      await dbUpdateCount("gh_visits", `id=eq.${row.id}&status=eq.payment_pending`, { payment_intent_id: piId });
+      await logEvent(row.id, bookingId, "system", "payment_processing", { source, payment_intent: piId });
+      return { outcome: "processing", payment_intent: piId };
+    }
     if (res.ok && status === "succeeded" && piId) {
       return recordPaid(piId, false);
     }
-    if (res.ok && status === "requires_action") {
-      await releaseClaim();
+    const needsOnSessionConfirmation = status === "requires_payment_method" &&
+      (stripeError?.code === "authentication_required" || stripeError?.decline_code === "authentication_required");
+    if ((res.ok || nestedIntent) && (status === "requires_action" || needsOnSessionConfirmation)) {
+      await releaseClaim(true, piId);
       // 3DS (H1): the card needs the cardholder's authentication, which
       // only the client's browser can do. Return the PaymentIntent id
       // and its client_secret so the caller can hand them to Stripe.js
       // (handleCardAction). The claim is released, so the client can
       // re-approve after the challenge and the server reconciles the
       // same intent (no second charge: createChargeKey is unchanged).
-      const clientSecret = typeof res.data["client_secret"] === "string" ? (res.data["client_secret"] as string) : "";
+      const clientSecret = String(res.data["client_secret"] ?? nestedIntent?.client_secret ?? "");
       await logEvent(row.id, bookingId, "system", "payment_requires_action", {
         payment_intent: piId,
         ...(clientSecret ? {} : { missing_client_secret: true }),
       });
-      return { outcome: "failed", error: "payment_requires_action", detail: "requires_action", status, payment_intent: piId, client_secret: clientSecret };
+      return { outcome: "failed", error: "payment_requires_action", detail: "requires_action", status, payment_intent: piId, client_secret: clientSecret, ...(needsOnSessionConfirmation ? { confirmation_method_id: paymentMethod } : {}) };
     }
     const errMsg =
       ((res.data["error"] as { message?: string } | undefined)?.message ?? `payment ${status || res.status}`);
-    await releaseClaim();
+    await releaseClaim(true, piId);
     // Mirror the failure into shared metadata: the client view and
     // the cron's selection both read gh_state, so a failed charge
     // must not look "report_sent" (and must not be retried by the

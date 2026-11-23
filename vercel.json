@@ -13,27 +13,27 @@
   "rewrites": [
     {
       "source": "/save-card",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/cleaner",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/owner",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/report",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/visit",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/areas/:city",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/(.*)",
@@ -41,6 +41,7 @@
     }
   ],
   "functions": {
+    "api/visit.ts": { "maxDuration": 60 },
     "api/send-contact-email.ts": {
       "maxDuration": 40
     },

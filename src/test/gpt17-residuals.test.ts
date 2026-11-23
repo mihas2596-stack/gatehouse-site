@@ -577,7 +577,7 @@ describe("GPT-17 residuals", () => {
     rows = [baseRow({
       status: "report_sent", report_status: "sent",
       report_sent_at: new Date(now - 30 * 3600 * 1000).toISOString(),
-      issue_open: false, issue_ever: true,
+      issue_open: false, issue_ever: true, stripe_customer_id: "cus_residual_1",
     })];
     customers = [baseCustomer({ gh_booking_id: "bid-other", gh_state: "card_ready" })];
     evts = [

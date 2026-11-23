@@ -59,7 +59,7 @@ beforeEach(() => {
     report_sent_at: hoursAgo(30), report_bounced: false, report_status: "sent",
     visit_date: "2026-11-10", window: "midday",
   };
-  events = [created(), ev("report_sent", { version: 1 }, hoursAgo(30))];
+  events = [created(), ev("report_sent", { version: 1, email_sent: true }, String(row.report_sent_at))];
   storeMeta = {
     gh_booking_id: BID, gh_state: "report_sent", gh_report_sent_at: hoursAgo(30),
     gh_report_amount_cents: "20000", gh_first_price_cents: "20000",
@@ -133,6 +133,14 @@ describe("C16 manual charge reminder guard", () => {
     expect(r.body["state"]).toBe("paid");
     expect(piCalls).toHaveLength(1);
     expect(events.some((e) => e.event === "charge_without_reminder")).toBe(true);
+  });
+
+  it("an old delivered report does not authorize a timer charge for a newer publication", async () => {
+    events = [created(), ev("report_sent", { version: 1, email_sent: true }, hoursAgo(70)),
+      ev("report_sent", { version: 2, email_sent: false }, String(row.report_sent_at))];
+    const r = await call({ action: "charge", amount_cents: 20000, report_version: 2, confirm_no_reminder: true });
+    expect(r.body.error).toBe("report_delivery_unconfirmed");
+    expect(piCalls).toHaveLength(0);
   });
 
   it("timer basis with a reminder_sent event charges without confirmation", async () => {

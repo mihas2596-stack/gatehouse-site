@@ -260,6 +260,9 @@ describe("MB-05/MB-32: cleaner checklist revision + stale conflicts", () => {
     expect(await screen.findByText(/This checklist changed in another tab/)).toBeInTheDocument();
     const save = posts.find((p) => p["action"] === "checklist");
     expect(save?.["checklist_revision"]).toBe("rev-1");
+    expect(screen.getByRole("button", { name: "Finish & send report" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
+    expect(posts.filter((p) => p["action"] === "submit")).toHaveLength(0);
     // Stale offers a reload, not the generic "Not saved — Retry".
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reload to see the latest version/ })).toBeInTheDocument();

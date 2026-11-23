@@ -1,3 +1,4 @@
+import { SMS_CLIENT, SMS_DETAILS, SMS_VERSION } from "@/lib/smsDisclosure";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -276,6 +277,7 @@ const Quote = () => {
   // pressed with a missing or invalid ZIP.
   const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [smsConsent, setSmsConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
   // Restore the step the visitor was on (a reload mid-form lands back
@@ -357,6 +359,7 @@ const Quote = () => {
   ) => {
     requestRef.current = null;
     const t = e.target as HTMLInputElement;
+    if (t.name === "phone") setSmsConsent(false);
     if (t.type === "checkbox") {
       setBooking((p) => ({ ...p, [t.name]: t.checked }));
     } else if (t.name === "state") {
@@ -617,6 +620,8 @@ const Quote = () => {
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
         photo_consent: booking.photoConsent,
+        sms_consent: smsConsent,
+        sms_version: SMS_VERSION,
       };
       setSubmitError("");
       const res = await fetch("/api/send-contact-email", {
@@ -624,7 +629,7 @@ const Quote = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      let data: { ok?: boolean; customerEmailSent?: boolean; errors?: Record<string, string>; bt?: string; server_first?: string; server_recurring?: string } | null = null;
+      let data: { ok?: boolean; customerEmailSent?: boolean; duplicate?: boolean; needs_custom_quote?: boolean; errors?: Record<string, string>; bt?: string; server_first?: string; server_recurring?: string } | null = null;
       try {
         data = await res.json();
       } catch {
@@ -635,14 +640,15 @@ const Quote = () => {
           const fieldErrs: Record<string, string> = {};
           const other: string[] = [];
           for (const [k, v] of Object.entries(data.errors)) {
-            if (k === "name" || k === "email" || k === "phone" || k === "address" || k === "date" || k === "terms_consent" || k === "photo_consent") fieldErrs[k === "terms_consent" ? "termsConsent" : k === "photo_consent" ? "photoConsent" : k] = v;
+            const key = k === "terms_consent" ? "termsConsent" : k === "photo_consent" ? "photoConsent" : k;
+            if (key in refs) fieldErrs[key] = v;
             else other.push(v);
           }
           setBookingErrors((p) => ({ ...p, ...fieldErrs }));
-          if (other.length) setSubmitError(other.join(" "));
-          const first = (Object.keys(refs) as Array<keyof typeof refs>).find((f) => fieldErrs[f]);
-          if (first) refs[first].current?.focus();
-                return;
+          setSubmitError([...Object.values(fieldErrs), ...other].join(" ") || "Please review your details and try again.");
+          if (Object.keys(fieldErrs).some((key) => key !== "termsConsent")) setStep(2);
+          else if (fieldErrs.termsConsent) refs.termsConsent.current?.focus();
+          return;
         }
         throw new Error("Booking request failed");
       }
@@ -681,9 +687,9 @@ const Quote = () => {
       navigate("/thank-you", {
         state: {
           submitted: true,
-          kind: "booking",
+          kind: data.duplicate ? "duplicate" : data.needs_custom_quote ? "custom" : "booking",
           customerEmailSent: data.customerEmailSent,
-          bt: data.bt,
+          bt: data.duplicate || data.needs_custom_quote ? undefined : data.bt,
           recap: {
             price: recapPrice,
             email: booking.email.trim(),
@@ -1318,7 +1324,7 @@ const Quote = () => {
               {step === 3 && (<>
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
               <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
-              <PaymentSummary compact />
+              {isLargeHome ? <p className="mt-4 text-base">We’ll email your custom price. You can review it before saving a card or confirming a visit.</p> : <PaymentSummary compact />}
               <p className="mt-4 text-base leading-relaxed">Cancel free at least 48 hours before your visit. Later cancellations cost $25.</p>
               <div className="mt-4 flex items-start gap-3">
                 <input
@@ -1334,6 +1340,10 @@ const Quote = () => {
                   <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. *
                 </label>
               </div>
+              <label className="mt-4 flex items-start gap-3">
+                <input type="checkbox" checked={smsConsent} onChange={e => setSmsConsent(e.target.checked)} className="mt-1 h-5 w-5 shrink-0" />
+                <span>{SMS_CLIENT} {SMS_DETAILS}</span>
+              </label>
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
               <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
               <div className="mt-5">
@@ -1342,7 +1352,7 @@ const Quote = () => {
                     ? "Sending..."
                     : !canProceed
                       ? "Enter a ZIP in our service area"
-                      : "Continue to Stripe — $0 today"}
+                      : isLargeHome ? "Request my custom quote" : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
               </>)}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HelmetProvider } from "react-helmet-async";
 import Owner from "@/pages/Owner";
 
@@ -41,6 +41,67 @@ describe("owner login and visit switching", () => {
     open();
     expect(await screen.findByRole("button", { name: "Send login link to my email" })).toBeInTheDocument();
     expect(sessionStorage.getItem("gh_owner_session")).toBeNull();
+  });
+
+  it("opens the exact request after login in fresh browser storage, regardless of list pagination or filters", async () => {
+    const id = "969fbbcd-ddf6-45c6-9bec-a9aa63810df2";
+    const target = { ...visits[0], id, client_name: "Archived request", is_test: true, status: "paid" };
+    const normal = vi.mocked(fetch).getMockImplementation()!;
+    const auth: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).includes("view=detail")) {
+        expect(String(url)).toBe(`/api/owner?view=detail&visit_id=${id}`);
+        auth.push(new Headers(init?.headers).get("Authorization") ?? "");
+        return { ok: true, json: async () => ({ ok: true, visit: target, photos: [], events: [] }) } as Response;
+      }
+      return normal(url, init);
+    });
+    window.history.replaceState({}, "", `/owner?visit=${id}`);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Send login link to my email" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/owner-auth", expect.objectContaining({
+      body: JSON.stringify({ action: "send", visit: id }),
+    })));
+    expect(auth).toHaveLength(0);
+    cleanup();
+    localStorage.clear();
+    sessionStorage.clear();
+    localStorage.setItem("gh_hide_test", "1");
+    window.history.replaceState({}, "", `/owner?visit=${id}#ol=test-login-link`);
+    open();
+    expect(await screen.findByRole("heading", { name: "Archived request" })).toBeInTheDocument();
+    expect(auth).toEqual(["Bearer test-owner-session"]);
+    expect(window.location.hash).toBe("");
+    expect(window.location.search).toBe(`?visit=${id}`);
+    cleanup();
+    open();
+    expect(await screen.findByRole("heading", { name: "Archived request" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "← Back to visits" }));
+    expect(window.location.search).toBe("");
+  });
+
+  it("offers recovery for a missing request instead of claiming the visit list is empty", async () => {
+    sessionStorage.setItem("gh_owner_session", "test-owner-session");
+    window.history.replaceState({}, "", "/owner?visit=missing");
+    open();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load this request");
+    fireEvent.click(screen.getByRole("button", { name: "Back to all visits" }));
+    expect(await screen.findByRole("button", { name: /Casey Beta/ })).toBeInTheDocument();
+  });
+
+  it("restores every loaded row when stored filters hide all visible results", async () => {
+    sessionStorage.setItem("gh_owner_session", "test-owner-session");
+    localStorage.setItem("gh_hide_test", "1");
+    const normal = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url, init) =>
+      String(url).includes("view=list")
+        ? { ok: true, json: async () => ({ ok: true, visits: visits.map(v => ({ ...v, is_test: true })) }) } as Response
+        : normal(url, init));
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: /Needs attention \(0\)/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show all visits (2)" }));
+    expect(await screen.findByRole("button", { name: /Casey Alpha/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Hide test bookings")).not.toBeChecked();
   });
 
   it("discards a cleaner link that arrives after switching customers", async () => {

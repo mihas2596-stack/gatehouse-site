@@ -304,7 +304,21 @@ const EVENT_LABELS: Record<string, string> = {
 const HIDDEN_DETAIL_KEYS = /token|hash|secret|password|api[_-]?key/i;
 type OwnerFilter = "attention" | "upcoming" | "past" | "completed" | "cancelled" | "all";
 
+type OwnerDetail = { ok: boolean; error?: string; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
+
 const Owner = () => {
+  const [requestedVisitId, setRequestedVisitId] = useState(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("visit"),
+  );
+  const [linkedError, setLinkedError] = useState("");
+  const [linkAttempt, setLinkAttempt] = useState(0);
+  const clearRequestedVisit = () => {
+    setRequestedVisitId(null);
+    setLinkedError("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("visit");
+    window.history.replaceState(window.history.state, "", url);
+  };
   const [token, setToken] = useState(() => {
     // The session persists in localStorage across tabs and browser
     // restarts (30 days); sessionStorage is read only as a fallback for
@@ -325,13 +339,12 @@ const Owner = () => {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  // Test bookings are hidden by default (the owner has dozens of them);
-  // the choice persists across sessions.
+  // Only an explicit preference hides visits, including legacy test-price rows.
   const [hideTest, setHideTest] = useState(() => {
     try {
-      return typeof localStorage !== "undefined" ? localStorage.getItem("gh_hide_test") !== "0" : true;
+      return typeof localStorage !== "undefined" && localStorage.getItem("gh_hide_test") === "1";
     } catch {
-      return true;
+      return false;
     }
   });
   const setHideTestPersist = (value: boolean) => {
@@ -386,7 +399,7 @@ const Owner = () => {
   const nextOffsetRef = useRef<number | null>(null);
   const loadAllRef = useRef(false);
   useEffect(() => { nextOffsetRef.current = nextOffset; }, [nextOffset]);
-  const [filter, setFilter] = useState<OwnerFilter>("attention");
+  const [filter, setFilter] = useState<OwnerFilter>("all");
   const [confirmDate, setConfirmDate] = useState("");
   const [confirmWindow, setConfirmWindow] = useState("");
   const [acting, setActing] = useState("");
@@ -470,9 +483,12 @@ const Owner = () => {
   // session, stored in localStorage. The token is stripped from
   // the URL right away so it does not linger in the address bar.
   useEffect(() => {
-    const ol = new URLSearchParams(window.location.search).get("ol");
+    const url = new URL(window.location.href);
+    const ol = new URLSearchParams(url.hash.slice(1)).get("ol") || url.searchParams.get("ol");
     if (!ol) return;
-    window.history.replaceState(null, "", window.location.pathname);
+    url.hash = "";
+    url.searchParams.delete("ol");
+    window.history.replaceState(window.history.state, "", url);
     // While the emailed link verifies, show a waiting state — never the
     // login form, which reads as "login failed" on a slow connection.
     setVerifyingLogin(true);
@@ -492,7 +508,19 @@ const Owner = () => {
         }
       })
       .catch(() => { setVerifyingLogin(false); setError("Couldn't verify this login link — request a new one below."); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clearSession = useCallback(() => {
+    try { localStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
+    tokenRef.current = "";
+    selectedIdRef.current = null;
+    visitEpochRef.current++;
+    setToken("");
+    setSelected(null);
+    setRoster([]);
+    setRosterLoaded(false);
+    linkSessionRef.current = null;
+    setVisits([]);
   }, []);
 
   // Task 7: returns the fetched list (null on failure) so a card
@@ -514,16 +542,7 @@ const Owner = () => {
       if (tokenRef.current !== token) return null;
       if (!j.ok) {
         if (j.error === "unauthorized") {
-          try { localStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_owner_session"); sessionStorage.removeItem("gh_admin_token"); } catch { /* storage unavailable */ }
-          tokenRef.current = "";
-          selectedIdRef.current = null;
-          visitEpochRef.current++;
-          setToken("");
-          setSelected(null);
-          setRoster([]);
-          setRosterLoaded(false);
-          linkSessionRef.current = null;
-          setVisits([]);
+          clearSession();
         }
         if (!silent) setError(j.error === "unauthorized" ? "Login expired or rejected — request a new login link or re-enter the admin token." : j.error === "db_not_configured" ? "Database isn't connected yet (SUPABASE env vars missing)." : "Couldn't load visits.");
         return null;
@@ -539,7 +558,7 @@ const Owner = () => {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [token, headers]);
+  }, [token, headers, clearSession]);
 
   // A3: re-read ONLY the open visit's detail (status, report, photos,
   // events) — deliberately NOT openVisit: that resets the cleaner-edit
@@ -710,7 +729,7 @@ const Owner = () => {
     return () => window.clearTimeout(t);
   }, [selected]);
 
-  const openVisit = async (v: Visit, focus?: FocusBlock) => {
+  const openVisit = useCallback(async (v: Visit, focus?: FocusBlock, loaded?: OwnerDetail) => {
     scrolledIdRef.current = null;
     const sameVisit = selectedIdRef.current === v.id;
     if (!sameVisit) visitEpochRef.current++;
@@ -756,10 +775,8 @@ const Owner = () => {
     // from the banner above (re-typing invited a wrong-date confirm).
     setConfirmDate(v.proposed_pending && v.proposed_date ? v.proposed_date : (v.visit_date ?? ""));
     setConfirmWindow(v.window ?? "");
-    if (!rosterLoaded) void loadRoster();
     try {
-      const r = await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() });
-      const j = (await r.json()) as { ok: boolean; visit?: Visit; photos?: Photo[]; events?: GhEvent[] };
+      const j: OwnerDetail = loaded ?? await fetch(`/api/owner?view=detail&visit_id=${v.id}`, { headers: headers() }).then(r => r.json());
       if (!isCurrentVisit(v.id, visitEpoch)) return;
       if (j.ok && j.visit) {
         setSelected(j.visit);
@@ -804,7 +821,36 @@ const Owner = () => {
     } catch {
       if (isCurrentVisit(v.id, visitEpoch)) setActionMsg("Couldn't load the visit details.");
     }
-  };
+  }, [headers]);
+
+  // Email links load the exact visit after login, even beyond the first list page.
+  useEffect(() => {
+    if (!token || !requestedVisitId) return;
+    let active = true;
+    setLinkedError("");
+    const openLinkedVisit = async () => {
+      try {
+        const response = await fetch(`/api/owner?view=detail&visit_id=${encodeURIComponent(requestedVisitId)}`, { headers: headers() });
+        const detail: OwnerDetail = await response.json();
+        if (!active || tokenRef.current !== token) return;
+        if (detail.error === "unauthorized") {
+          clearSession();
+          return;
+        }
+        if (!detail.ok || detail.visit?.id !== requestedVisitId) {
+          setLinkedError(["visit_not_found", "invalid_visit"].includes(detail.error ?? "")
+            ? "This request could not be found. Check the original email or open all visits."
+            : "Couldn't load this request. Try again.");
+          return;
+        }
+        await openVisit(detail.visit, undefined, detail);
+      } catch {
+        if (active && tokenRef.current === token) setLinkedError("Couldn't load this request. Check your connection and try again.");
+      }
+    };
+    void openLinkedVisit();
+    return () => { active = false; };
+  }, [token, requestedVisitId, linkAttempt, headers, openVisit, clearSession]);
 
   const act = async (payload: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean; error?: string }> => {
     const r = await fetch("/api/booking-action", {
@@ -895,6 +941,7 @@ const Owner = () => {
         selectedIdRef.current = null;
         visitEpochRef.current++;
         setSelected(null);
+        clearRequestedVisit();
         setActionMsg(j["already_deleted"] === true
           ? "This visit was already deleted."
           : "Visit deleted.");
@@ -1281,7 +1328,7 @@ const Owner = () => {
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
         <div className="max-w-sm mx-auto text-center">
           <h1 className="font-heading text-3xl font-bold mb-4">Owner view</h1>
-          <p className="text-sm text-muted-foreground mb-4">Get a login link by email — no key needed.</p>
+          <p className="text-sm text-muted-foreground mb-4">{requestedVisitId ? "Sign in by email to open this request." : "Get a login link by email — no key needed."}</p>
           {error && <p className="text-sm text-destructive mb-3" role="alert">{error}</p>}
           <Button
             variant="hero"
@@ -1289,9 +1336,9 @@ const Owner = () => {
             onClick={async () => {
               setLinkMsg("");
               try {
-                const r = await fetch("/api/owner-auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send" }) });
+                const r = await fetch("/api/owner-auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send", visit: requestedVisitId }) });
                 const j = await r.json();
-                setLinkMsg(j?.ok ? "Login link sent — check nikolajmihasenok@gmail.com (valid 24 hours)." : "Couldn't send the link — try again in a minute.");
+                setLinkMsg(j?.ok ? "Check the owner inbox for a login link. If you requested one in the last 5 minutes, use that email and reopen your request." : "Couldn't send the link — try again in a minute.");
               } catch {
                 setLinkMsg("Couldn't send the link — try again in a minute.");
               }
@@ -1333,6 +1380,20 @@ const Owner = () => {
     );
   }
 
+
+  if (requestedVisitId && !selected) {
+    return (
+      <main className="min-h-screen bg-background px-4 py-16">
+        <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
+        <div className="max-w-sm mx-auto">
+          <h1 className="font-heading text-3xl font-bold mb-4">Cleaning request</h1>
+          {linkedError ? <p role="alert">{linkedError}</p> : <p role="status">Opening your request…</p>}
+          {linkedError && <Button className="mt-4 mr-3" onClick={() => setLinkAttempt(n => n + 1)}>Try again</Button>}
+          <Button variant="outline" className="mt-4" onClick={clearRequestedVisit}>Back to all visits</Button>
+        </div>
+      </main>
+    );
+  }
 
   // Next action for a list row — the shared nextActionFor, from the row
   // alone (no event/stripe detail on the list).
@@ -1508,7 +1569,7 @@ const Owner = () => {
               <ul className="mt-3 space-y-3">
                 {openIssues.map((v) => (
                   <li key={v.id} className="rounded-lg border border-red-200 bg-card p-3">
-                    <button type="button" className="w-full text-left" onClick={() => void openVisit(v)}>
+                    <button type="button" className="w-full text-left" onClick={() => { if (requestedVisitId && requestedVisitId !== v.id) clearRequestedVisit(); void openVisit(v); }}>
                       <span className="font-semibold">{v.client_name ?? "—"}</span>
                       <span className="text-sm text-muted-foreground"> · {money(v.amount_cents)}</span>
                       <span className="block text-sm mt-1">
@@ -1545,7 +1606,7 @@ const Owner = () => {
                 key={v.id}
                 type="button"
                 className={`w-full text-left rounded-xl border bg-card p-4 hover:border-primary ${selected?.id === v.id ? "border-primary ring-1 ring-primary" : "border-border"}`}
-                onClick={() => void openVisit(v)}
+                onClick={() => { if (requestedVisitId && requestedVisitId !== v.id) clearRequestedVisit(); void openVisit(v); }}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{v.client_name ?? "—"}</span>
@@ -1594,6 +1655,11 @@ const Owner = () => {
                         ? (visits.length === 0 ? "No visits in the database yet." : "No non-test visits — uncheck “Hide test bookings” to see them.")
                         : FILTERS.find((f) => f.key === filter)?.empty}
                     </p>
+                    {(filter !== "all" || hideTest) && visits.length > 0 && (
+                      <Button variant="outline" className="mt-3" onClick={() => { setFilter("all"); setHideTestPersist(false); }}>
+                        Show all visits ({visits.length}{nextOffset !== null ? "+" : ""})
+                      </Button>
+                    )}
                     {filter === "all" && visits.length === 0 && (
                       <Button variant="outline" className="mt-3" asChild>
                         <a href="/quote">Create a visit</a>
@@ -1723,7 +1789,7 @@ const Owner = () => {
 
           return (
             <div>
-              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { scrolledIdRef.current = null; selectedIdRef.current = null; visitEpochRef.current++; setSelected(null); }}>
+              <button type="button" className="text-sm underline text-muted-foreground mb-3" onClick={() => { clearRequestedVisit(); scrolledIdRef.current = null; selectedIdRef.current = null; visitEpochRef.current++; setSelected(null); }}>
                 ← Back to visits
               </button>
               {/* Action feedback lives here, at the top of the detail —

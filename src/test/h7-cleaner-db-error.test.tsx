@@ -3,7 +3,7 @@
 // this visit" with a retry — never "This link doesn't work".
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HelmetProvider } from "react-helmet-async";
 import { MemoryRouter } from "react-router-dom";
 import Cleaner from "@/pages/Cleaner";
@@ -34,6 +34,24 @@ describe("cleaner page DB-error state", () => {
     expect(screen.getByText(/Something went wrong on our side — your link is fine/)).toBeInTheDocument();
     expect(screen.queryByText(/This link doesn't work/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("offers retry after starting offline and opens the same assignment after reconnect", async () => {
+    let offline = true;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      expect(String(url)).toContain("ct=test-cleaner-token-1234567890");
+      if (offline) throw new Error("Disconnected");
+      return { ok: true, json: async () => ({
+        ok: true, visit: { date: "2026-01-01", service: "Standard cleaning", client_first_name: "Casey" },
+        checklist: { rooms: [] }, photos: [], report_status: "draft", editable: true, confirmed: true,
+      }) };
+    }));
+    open();
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(screen.queryByText("This link doesn't work")).not.toBeInTheDocument();
+    offline = false;
+    fireEvent.click(retry);
+    expect(await screen.findByRole("heading", { name: "Your cleaning job" })).toBeInTheDocument();
   });
 
   it("still shows 'This link doesn't work' for a genuinely invalid link", async () => {

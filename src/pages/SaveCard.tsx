@@ -26,6 +26,7 @@ const fmtMoney = (v?: string): string => {
 
 export default function SaveCard() {
   const [params] = useSearchParams();
+  const [setupAttempt] = useState(() => globalThis.crypto?.randomUUID?.());
   // One-time link token: resolved from the URL once, then stripped from
   // the address bar so it never reaches analytics (see tokenStrip.ts).
   const [bt] = useState<string>(() => resolveLinkToken("bt", "gh_visit_bt", params.toString()));
@@ -89,7 +90,7 @@ export default function SaveCard() {
     setErrors(fields); if (Object.keys(fields).length) return;
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt } : { name: name.trim(), email: email.trim() }) });
+      const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt, request_id: setupAttempt } : { name: name.trim(), email: email.trim() }) });
       const data = await r.json();
       if (!r.ok || !data.ok || typeof data.url !== "string") throw new Error("checkout");
       window.location.href = data.url;

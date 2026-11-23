@@ -1,3 +1,4 @@
+import { SMS_CLEANER, SMS_DETAILS, SMS_VERSION } from "@/lib/smsDisclosure";
 import { resolveLinkToken } from "@/lib/tokenStrip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -81,6 +82,7 @@ type UploadState = {
   status: "working" | "error";
   error?: string;
   file?: File;
+  uploaded?: { path: string; blob: Blob };
 };
 
 // A room is photo-complete only when it has a before photo AND an after
@@ -133,6 +135,7 @@ const Cleaner = () => {
   // Whether a load has ever succeeded. A refetch that fails on the
   // network must not wipe a loaded page (see load()).
   const dataLoaded = useRef(false);
+  const loadId = useRef(0);
 
   // MB-05: the server revision of the checklist this tab loaded (and
   // the newest one a save returned). Every save/submit echoes it back;
@@ -149,8 +152,11 @@ const Cleaner = () => {
   const [submitStale, setSubmitStale] = useState(false);
   // MB-30: the photo waiting for the owner-style in-page delete
   // confirmation — null when no delete is pending.
+  const [deleteError, setDeleteError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<Photo | null>(null);
 
+  const [smsChecked, setSmsChecked] = useState(false);
+  const [smsFeedback, setSmsFeedback] = useState("");
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
       const r = await fetch("/api/cleaner", {
@@ -164,6 +170,7 @@ const Cleaner = () => {
   );
   const saver = useMemo(() => createAutosaveQueue<Checklist>(
     async (next) => {
+      if (staleRef.current) return "stale";
       const r = await post({
         action: "checklist",
         checklist: next,
@@ -172,7 +179,6 @@ const Cleaner = () => {
         ...(revisionRef.current ? { checklist_revision: revisionRef.current } : {}),
       });
       if (r.error === "checklist_stale") {
-        if (typeof r["checklist_revision"] === "string") revisionRef.current = r["checklist_revision"] as string;
         staleRef.current = true;
         return "stale";
       }
@@ -188,7 +194,9 @@ const Cleaner = () => {
   useEffect(() => { saver.activate(); return () => saver.dispose(); }, [saver]);
 
   const load = useCallback(async () => {
+    const id = ++loadId.current;
     const startedAtRevision = saver.revision();
+    const revisionBeforeLoad = revisionRef.current;
     try {
       // C1: preserve the owner/QA preview flag (?pv=1) on every load, so a
       // preview reload never creates a cleaner_link_opened event.
@@ -196,6 +204,7 @@ const Cleaner = () => {
       const qs = `ct=${encodeURIComponent(ct)}${pv === "1" ? "&pv=1" : ""}`;
       const r = await fetch(`/api/cleaner?${qs}`);
       const j = (await r.json()) as CleanerView;
+      if (id !== loadId.current) return;
       if (!j.ok) {
         const err = j.error ?? "load_failed";
         // A refetch that fails must not wipe a loaded page: the cleaner
@@ -210,15 +219,13 @@ const Cleaner = () => {
         return;
       }
       dataLoaded.current = true;
+      setError("");
       setData(j);
-      // MB-05: remember the revision this load carried, so the next
-      // save echoes it back.
-      if (typeof j.checklist_revision === "string") revisionRef.current = j.checklist_revision;
-      else if (j.checklist_revision === null) revisionRef.current = null;
       setLastUpdated(new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }));
       // Photo uploads refresh the page data too. A response started before
       // an edit must not replace the cleaner's newer local checklist.
-      if (!saver.isDirty() && saver.revision() === startedAtRevision) {
+      if (!staleRef.current && !saver.isDirty() && saver.revision() === startedAtRevision && revisionBeforeLoad === revisionRef.current) {
+        revisionRef.current = j.checklist_revision ?? null;
         setChecklist(j.checklist ?? { rooms: [] });
       }
       // The server list replaces any optimistically shown photo (same id,
@@ -228,7 +235,7 @@ const Cleaner = () => {
       setPhotos(j.photos ?? []);
     } catch {
       // Same as above: a failed refetch never wipes a loaded page.
-      if (!dataLoaded.current) setError("load_failed");
+      if (id === loadId.current && !dataLoaded.current) setError("load_failed");
     }
   }, [ct, searchParams, saver]);
 
@@ -257,13 +264,24 @@ const Cleaner = () => {
 
   const retrySave = () => { void saver.flush(); };
 
-  const seenFiles = useRef<Set<string>>(new Set());
+  // A navigation while offline can discard a checklist or the only copy of a pending upload.
+  useEffect(() => {
+    const warnIfUnsaved = (event: BeforeUnloadEvent) => {
+      if (staleRef.current || (!saver.isDirty() && !Object.values(uploads).some((upload) => upload.file))) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnIfUnsaved);
+    return () => window.removeEventListener("beforeunload", warnIfUnsaved);
+  }, [saver, uploads]);
+
+  const seenFiles = useRef(new Map<string, string | null>());
   // Blob URLs of optimistically shown photos (a photo whose register
   // succeeded but whose refetch has not landed yet). Revoked as soon as
   // the server list replaces them, so they never leak past the session.
   const optimisticBlobUrls = useRef<Set<string>>(new Set());
 
-  const uploadPhoto = async (room: string, kind: "after" | "before", file: File) => {
+  const uploadPhoto = async (room: string, kind: "after" | "before", file: File, uploaded?: UploadState["uploaded"]) => {
     if (photoBlocked(data?.visit.no_photo_zones, room)) return;
     const tempId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const signature = `${room}|${kind}|${file.name}|${file.size}|${file.lastModified}`;
@@ -277,25 +295,29 @@ const Cleaner = () => {
       }));
       return;
     }
+    seenFiles.current.set(signature, null);
     setUploads((u) => ({ ...u, [tempId]: { room, kind, label: file.name || "photo", status: "working", file } }));
     try {
-      const blob = await convertToJpeg(file);
-      const sign = await post({ action: "photo_sign", room, kind });
-      if (sign.error === "photo_not_allowed") throw new Error("The client asked for no photos in this room. Use the reason field instead.");
-      if (!sign.ok || typeof sign["upload_url"] !== "string" || typeof sign["storage_path"] !== "string") {
-        throw new Error("Couldn't start the upload. Check your connection and retry.");
+      if (!uploaded) {
+        const blob = await convertToJpeg(file);
+        const sign = await post({ action: "photo_sign", room, kind });
+        if (sign.error === "photo_not_allowed") throw new Error("The client asked for no photos in this room. Use the reason field instead.");
+        if (!sign.ok || typeof sign["upload_url"] !== "string" || typeof sign["storage_path"] !== "string") {
+          throw new Error("Couldn't start the upload. Check your connection and retry.");
+        }
+        const put = await fetch(sign["upload_url"] as string, {
+          method: "PUT",
+          headers: { "Content-Type": "image/jpeg", "x-upsert": "false" },
+          body: blob,
+        });
+        if (!put.ok) throw new Error("The upload failed. Check your connection and retry.");
+        uploaded = { path: sign["storage_path"], blob };
       }
-      const put = await fetch(sign["upload_url"] as string, {
-        method: "PUT",
-        headers: { "Content-Type": "image/jpeg", "x-upsert": "false" },
-        body: blob,
-      });
-      if (!put.ok) throw new Error("The upload failed. Check your connection and retry.");
       const reg = await post({
         action: "photo_register",
         room,
         kind,
-        storage_path: sign["storage_path"],
+        storage_path: uploaded.path,
       });
       if (!reg.ok) {
         if (reg.error === "photo_not_allowed") throw new Error("The client asked for no photos in this room. Use the reason field instead.");
@@ -304,7 +326,7 @@ const Cleaner = () => {
         }
         throw new Error("The photo uploaded but couldn't be saved. Please retry.");
       }
-      seenFiles.current.add(signature);
+
       // Optimistic: show the photo at once, with the real id from the
       // register response, so the room reads as photo-complete even if
       // the refetch below fails (flaky connection). Without this, a
@@ -313,12 +335,13 @@ const Cleaner = () => {
       // a dead end for the cleaner. The refetch replaces this entry
       // with the server row (same id, signed URL) when it lands.
       const photoId = typeof reg["photo_id"] === "string" ? (reg["photo_id"] as string) : null;
+      seenFiles.current.set(signature, photoId);
       if (photoId) {
         // createObjectURL is universal in browsers; guard it so a
         // non-browser runtime (tests) never turns a saved photo into
         // an error — the refetch below is the fallback there.
         try {
-          const previewUrl = URL.createObjectURL(blob);
+          const previewUrl = URL.createObjectURL(uploaded.blob);
           optimisticBlobUrls.current.add(previewUrl);
           setPhotos((prev) => {
             if (prev.some((p) => p.id === photoId)) return prev;
@@ -330,10 +353,11 @@ const Cleaner = () => {
       }
       await load();
     } catch (err) {
+      seenFiles.current.delete(signature);
       setUploads((u) => ({
         ...u,
         [tempId]: {
-          room, kind, file,
+          room, kind, file, uploaded,
           label: file.name || "photo",
           status: "error",
           error: err instanceof Error ? err.message : "Upload failed. Please retry.",
@@ -356,7 +380,7 @@ const Cleaner = () => {
       delete next[tempId];
       return next;
     });
-    void uploadPhoto(u.room, u.kind, u.file);
+    void uploadPhoto(u.room, u.kind, u.file, u.uploaded);
   };
   const dismissUpload = (tempId: string) =>
     setUploads((prev) => {
@@ -369,17 +393,27 @@ const Cleaner = () => {
     // MB-30: the actual delete runs only after the in-page confirm
     // (see the AlertDialog below) — a stray tap on the trash icon
     // never deletes a photo on its own.
-    const r = await post({ action: "photo_delete", photo_id: photo.id });
-    if (r.ok) {
+    setDeleteError("");
+    try {
+      const r = await post({ action: "photo_delete", photo_id: photo.id });
+      if (!r.ok) throw new Error("photo_delete");
+
       if (photo.url && photo.url.startsWith("blob:")) {
         URL.revokeObjectURL(photo.url);
         optimisticBlobUrls.current.delete(photo.url);
       }
+      for (const [signature, id] of seenFiles.current) {
+        if (id === photo.id) seenFiles.current.delete(signature);
+      }
       setPhotos((list) => list.filter((p) => p.id !== photo.id));
+    } catch {
+      setDeleteError("We couldn't confirm that the photo was removed. Refresh and check before trying again.");
+      await load();
     }
   };
 
   const submit = async () => {
+    if (staleRef.current) return;
     // C3: never submit while a photo is still uploading — a photo_register
     // landing after submit would hit report_locked and be lost from the
     // published report.
@@ -447,7 +481,7 @@ const Cleaner = () => {
       // newer version. The Reload button below is the ask: nothing is
       // overwritten until the cleaner taps it.
       if (r.error === "checklist_stale") {
-        if (typeof r["checklist_revision"] === "string") revisionRef.current = r["checklist_revision"] as string;
+        staleRef.current = true;
         setSubmitStale(true);
         setSubmitError("This checklist changed in another tab — reload the page to see the latest version before sending the report.");
         return;
@@ -500,12 +534,13 @@ const Cleaner = () => {
   // the working view uses (88px desktop, 64px mobile), so the full icon
   // renders; shrink-0 keeps it from collapsing in the centered layout.
   if (error) {
+    const retryable = !["invalid_link", "link_expired", "db_not_configured"].includes(error);
     return (
       <div className="min-h-screen bg-background page-shell px-4 pb-16 text-center">
         <Helmet><meta name="robots" content="noindex,nofollow" /></Helmet>
         <AlertTriangle className="w-14 h-14 shrink-0 text-destructive mx-auto mb-4" strokeWidth={1.5} />
         <h1 className="font-heading text-2xl font-bold mb-3">
-          {error === "link_expired" ? "This link has expired" : error === "db_unavailable" ? "We couldn't load this visit" : "This link doesn't work"}
+          {error === "link_expired" ? "This link has expired" : retryable ? "We couldn't load this visit" : "This link doesn't work"}
         </h1>
         <p className="text-muted-foreground max-w-sm mx-auto">
           {error === "link_expired"
@@ -514,10 +549,11 @@ const Cleaner = () => {
               ? "The visit system isn't set up yet. Please contact the office."
               : error === "db_unavailable"
                 ? "Something went wrong on our side — your link is fine. Please try again in a moment."
+                : retryable ? "Check your connection, then try again."
                 : "The link may be incomplete or no longer active. Ask the office for a fresh link."}
         </p>
-        {error === "db_unavailable" && (
-          <button type="button" onClick={() => window.location.reload()} className="mt-6 px-5 py-3 rounded-lg border border-border bg-background font-semibold min-h-[44px]">
+        {retryable && (
+          <button type="button" onClick={() => void load()} className="mt-6 px-5 py-3 rounded-lg border border-border bg-background font-semibold min-h-[44px]">
             Try again
           </button>
         )}
@@ -599,6 +635,18 @@ const Cleaner = () => {
             {`This visit is on ${fmtDate(v.date)} — you can send the report after the visit.`}
           </p>
         )}
+        {searchParams.get("pv") !== "1" && <details className="my-3">
+          <summary>Assignment text messages</summary>
+          <label><input type="checkbox" checked={smsChecked} onChange={e => setSmsChecked(e.target.checked)} /> {SMS_CLEANER} {SMS_DETAILS}</label>
+          <p><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a></p>
+          <button type="button" disabled={!smsChecked} onClick={async () => {
+            try {
+              const result = await post({ action: "sms_consent", agreed: true, version: SMS_VERSION });
+              setSmsFeedback(result.ok ? "Preference saved. If previously opted out, reply START to the sender." : "Could not save. Check your roster phone with the owner.");
+            } catch { setSmsFeedback("Could not save. Please try again."); }
+          }}>Save text preference</button>
+          <p role="status">{smsFeedback}</p>
+        </details>}
         {lastUpdated && (
           <p className="text-xs text-muted-foreground mt-3">
             Updated {lastUpdated} Atlanta time.
@@ -1185,6 +1233,7 @@ const Cleaner = () => {
                 onChange={(e) => saveChecklist({ ...checklist, problem_note: e.target.value })}
               />
             </details>
+            {deleteError && <p className="text-base text-destructive mt-4" role="alert">{deleteError}</p>}
             {submitError && (
               <p className="text-base text-destructive mt-4" role="alert">
                 {submitError}
@@ -1238,7 +1287,7 @@ const Cleaner = () => {
             })()}
             {/* Item 12: the button itself states why it is disabled —
                 the cleaner must not have to guess. */}
-            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || isFutureVisit || !allRoomsReady || uploadingCount > 0} onClick={() => void submit()}>
+            <Button variant="hero" size="lg" className="w-full mt-4" disabled={busy || saveState === "stale" || submitStale || isFutureVisit || !allRoomsReady || uploadingCount > 0} onClick={() => void submit()}>
               {busy
                 ? "Sending report…"
                 : isFutureVisit

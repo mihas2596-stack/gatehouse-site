@@ -14,12 +14,15 @@ vi.mock("@/lib/imageConvert", () => ({ convertToJpeg: async () => new Blob(["fix
 // (handleCardAction) and then re-approve once — the same intent, no
 // second charge. Before the fix /visit had no Stripe.js at all, so
 // Approve dead-ended on a generic error.
-const { handleCardActionMock, loadStripeMock } = vi.hoisted(() => ({
+const { handleCardActionMock, confirmCardPaymentMock, loadStripeMock } = vi.hoisted(() => ({
+  confirmCardPaymentMock: vi.fn(async () => ({})),
   handleCardActionMock: vi.fn(async (_secret: string) => ({
     error: undefined,
     paymentIntent: { id: "pi_test_1", status: "succeeded" },
   })),
   loadStripeMock: vi.fn(async (_key: string) => ({
+    confirmCardPayment: (...args: unknown[]) =>
+      (confirmCardPaymentMock as (...a: unknown[]) => unknown)(...args),
     handleCardAction: (...args: unknown[]) =>
       (handleCardActionMock as (...a: unknown[]) => unknown)(...args),
   })),
@@ -55,9 +58,12 @@ const REPORT = {
 
 let approveCalls: number;
 let publishableKey: string;
+let methodId: string | undefined;
 
 beforeEach(() => {
   approveCalls = 0;
+  methodId = undefined;
+  confirmCardPaymentMock.mockClear();
   publishableKey = "pk_test_3ds";
   handleCardActionMock.mockClear();
   loadStripeMock.mockClear();
@@ -80,6 +86,7 @@ beforeEach(() => {
             client_secret: "pi_test_1_secret_abc",
             payment_intent: "pi_test_1",
             publishable_key: publishableKey,
+            confirmation_method_id: methodId,
           }),
         };
       }
@@ -109,6 +116,16 @@ describe("DA-03: 3DS on /visit — Approve with a card that needs authentication
     expect(loadStripeMock).toHaveBeenCalledWith("pk_test_3ds");
     expect(handleCardActionMock).toHaveBeenCalledWith("pi_test_1_secret_abc");
     expect(handleCardActionMock).toHaveBeenCalledTimes(1);
+    expect(approveCalls).toBe(2);
+  });
+
+  it("authenticates a declined off-session card on the original intent", async () => {
+    methodId = "pm_saved";
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Approve & pay $1.50" }));
+    expect(await screen.findByText(/Paid — thank you/)).toBeInTheDocument();
+    expect(confirmCardPaymentMock).toHaveBeenCalledWith("pi_test_1_secret_abc", { payment_method: "pm_saved" });
+    expect(handleCardActionMock).not.toHaveBeenCalled();
     expect(approveCalls).toBe(2);
   });
 

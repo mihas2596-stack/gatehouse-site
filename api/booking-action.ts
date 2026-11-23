@@ -355,7 +355,7 @@ export async function sendPaymentFailedEmailOnce(
 
 export async function sendReceiptEmailOnce(
   secretKey: string,
-  customerId: string,
+  customerId: string | null,
   meta: Record<string, string>,
   bookingId: string,
 ): Promise<boolean> {
@@ -447,7 +447,7 @@ export async function sendReceiptEmailOnce(
 
 async function sendReceiptAfterClaim(
   secretKey: string,
-  customerId: string,
+  customerId: string | null,
   meta: Record<string, string>,
   bookingId: string,
   rowId: string | null,
@@ -455,7 +455,7 @@ async function sendReceiptAfterClaim(
   const key = process.env["RESEND_API_KEY"];
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
   if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
-  const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
+  const custRes = customerId ? await stripeGet(secretKey, `/customers/${customerId}`) : { data: {} as Record<string, unknown> };
   const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
   const custEmail = contact.email;
   const custName = contact.name;
@@ -503,7 +503,7 @@ async function sendReceiptAfterClaim(
     if (!resp.ok) return false;
     const j = (await resp.json()) as { id?: string };
     if (typeof j.id === "string" && j.id) {
-      await stripePost(secretKey, `/customers/${customerId}`, {
+      if (customerId) await stripePost(secretKey, `/customers/${customerId}`, {
         "metadata[gh_receipt_email_id]": j.id,
       });
       if (dbConfigured()) {
@@ -1448,6 +1448,7 @@ export default async function handler(req: Req, res: Res) {
       } else {
         const phone = await loadClientPhone(visit.id);
         const body = ownerRequestEmailBody({
+          visitId: visit.id,
           name: visit.client_name ?? "",
           email: visit.client_email ?? "",
           phone: phone ?? undefined,

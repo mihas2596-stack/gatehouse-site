@@ -284,6 +284,7 @@ describe("minimal flow (part 2)", () => {
 
     it("assign_confirm to another cleaner re-sends the confirmation and rotates the link", async () => {
       const a = await addCleaner();
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-16T12:00:00Z"));
       const first = await call({
         action: "assign_confirm", booking_id: BID, cleaner_id: a,
         confirmed_date: "2026-11-22", confirmed_window: "morning",

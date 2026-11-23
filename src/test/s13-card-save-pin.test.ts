@@ -89,14 +89,14 @@ describe("S13: card-save pins stripe_customer_id on the booking row", () => {
     expect(supabasePatches[0].body["stripe_customer_id"]).toBe("cus_new_1");
   });
 
-  it("pins a reused customer too", async () => {
+  it("isolates the new booking even if another Stripe Customer has the same email", async () => {
     installFetch({ reuseCustomer: { id: "cus_existing" } });
     const res = response();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handler({ method: "POST", headers: {}, body: { bt: token() } } as any, res as any);
     expect(res.code).toBe(200);
     expect(supabasePatches).toHaveLength(1);
-    expect(supabasePatches[0].body["stripe_customer_id"]).toBe("cus_existing");
+    expect(supabasePatches[0].body["stripe_customer_id"]).toBe("cus_new_1");
   });
 
   it("standalone save (no booking token) writes nothing to the DB", async () => {
