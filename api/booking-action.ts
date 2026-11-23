@@ -34,6 +34,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
+import { isAllowedOrigin } from "./_origin.js";
 import { buildWorkRooms } from "./_work_scope.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
@@ -1274,7 +1275,7 @@ async function sendConfirmationEmail(args: {
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }

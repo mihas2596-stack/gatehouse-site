@@ -9,6 +9,7 @@
 
 import { dbConfigured, dbConfig, dbSelectStrict, storageSignDownload } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
+import { isAllowedOrigin } from "./_origin.js";
 import { paymentBasis } from "./_payment_basis.js";
 import { confirmedDateOf, effectiveVisitDate, autoChargeDeadlineMs } from "./_visit_date.js";
 import { decryptEntrySecret, loadAccess } from "./_visit_access.js";
@@ -162,7 +163,7 @@ export default async function handler(req: Req, res: Res) {
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     return json(403, { ok: false, error: "origin_not_allowed" });
   }
   if (req.method !== "GET") return json(405, { ok: false, error: "method_not_allowed" });

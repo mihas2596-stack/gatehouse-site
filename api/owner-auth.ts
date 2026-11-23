@@ -25,6 +25,7 @@ import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { mintOwnerLoginToken, mintOwnerSessionToken, verifyOwnerLoginToken } from "./_owner_auth.js";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { notFoundHandler } from "./_not_found.js";
+import { isAllowedOrigin } from "./_origin.js";
 
 type Req = {
   method?: string;
@@ -57,7 +58,7 @@ export default async function handler(req: Req, res: Res) {
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     return json(403, { ok: false, error: "origin_not_allowed" });
   }
   if (req.method === "GET") {

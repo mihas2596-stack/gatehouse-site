@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
 import { pickCustomerByEmail, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
+import { isAllowedOrigin } from "./_origin.js";
 
 type BookingPayload = {
   bid: string;
@@ -282,7 +283,7 @@ const toCents = (raw: string | undefined): number | null => {
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }

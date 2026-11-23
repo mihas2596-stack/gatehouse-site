@@ -3,6 +3,7 @@ import { buildWorkRooms } from "./_work_scope.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, logEvent } from "./_db.js";
 import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
+import { isAllowedOrigin } from "./_origin.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -598,7 +599,7 @@ async function sendEmail(apiKey: string, payload: Record<string, unknown>, idemp
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }
