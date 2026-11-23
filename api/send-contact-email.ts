@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, logEvent } from "./_db.js";
-import { ownerNotificationEmail } from "./_owner_email.js";
+import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
@@ -492,8 +492,7 @@ const ContactSchema = z.object({
   terms_consent: z.boolean().optional(),
   photo_consent: z.boolean().optional(),
   sms_consent: z.boolean().optional(),
-  // Explicit second-visit request: bypasses BOTH the request_id dedup
-  // and the natural-key dedup below. Only an intentional second visit
+  // Explicit second-visit request: bypasses natural-key dedup only. Only an intentional second visit
   // sends this — never set by default, never implied by a retry.
   force_new_booking: z.boolean().optional(),
 });
@@ -729,6 +728,9 @@ export default async function handler(req: Req, res: Res) {
     const cutScale = globalTestCutActive();
     let serverRecurring: string | undefined;
     if (isQuote) {
+      if (process.env.VERCEL_ENV === "production" && !dbConfigured()) {
+        return json(503, { ok: false, error: "booking_save_failed" });
+      }
       const signingSecret = process.env["STRIPE_SECRET_KEY"];
       if (!signingSecret) {
         logErr("config", "STRIPE_SECRET_KEY is not configured (needed for booking token)");
@@ -839,13 +841,10 @@ export default async function handler(req: Req, res: Res) {
         recurring: tokenRecurring,
         service: (service ?? "").trim() || undefined,
         date: (date ?? "").trim() || undefined,
-        // An explicit second visit bypasses the request_id dedup too:
-        // a fresh random bid makes it a fully independent booking.
-        bid: forceNewBooking
-          ? undefined
-          : parsed.data.request_id
-            ? bidFromRequestId(parsed.data.request_id)
-            : undefined,
+        // A second visit is independent, but retries of that same intent share an ID.
+        bid: parsed.data.request_id
+          ? bidFromRequestId(forceNewBooking ? `second:${parsed.data.request_id}` : parsed.data.request_id)
+          : undefined,
       });
       bookingToken = signed.token;
       bookingId = signed.bid;
@@ -855,32 +854,9 @@ export default async function handler(req: Req, res: Res) {
       if (dbConfigured()) {
         try {
           const actualService = parsed.data.service_key === "moveinout" ? "Move-in / Move-out cleaning" : server?.first_service === "deep" ? "Deep cleaning" : (service ?? "Standard cleaning");
-          // L2: the duplicate answer, shared by the pre-insert check
-          // and the post-insert race re-check below — same bid, a
-          // fresh link token, the same server-verified totals. No new
-          // row, no new journal events, no emails: the original
-          // submission already owns the booking.
-          // P1-4: the answer must NOT claim the confirmation email was
-          // delivered — the first attempt may have failed to send it.
-          // Return the SAVED delivery outcome from the
-          // customer_confirmation journal event (written by the
-          // autoresponse step below). When no outcome was recorded
-          // (legacy row, or the first send never ran), the field is
-          // omitted: the client treats an absent value as unknown —
-          // neither a promise nor a failure — while the booking id and
-          // fresh link below still give the working path to the record.
+          // Matching booking details is sufficient to suppress a duplicate,
+          // but only the original confirmation email grants access to the visit.
           const duplicateBody = async (duplicateRow: VisitDedupRow) => {
-            const dupSigned = signBooking(bookingLinkSecret(signingSecret), {
-              email: (duplicateRow.client_email ?? "").trim(),
-              name: (duplicateRow.client_name ?? "").trim(),
-              first: duplicateRow.amount_cents != null
-                ? String(duplicateRow.amount_cents / 100)
-                : tokenPrice,
-              recurring: tokenRecurring,
-              service: (duplicateRow.service ?? "").trim() || undefined,
-              date: (duplicateRow.visit_date ?? "").trim() || undefined,
-              bid: duplicateRow.booking_id,
-            });
             let savedEmailSent: boolean | undefined;
             try {
               const prior = await dbSelect<{ detail?: unknown }>(
@@ -899,10 +875,6 @@ export default async function handler(req: Req, res: Res) {
               success: true,
               ...(savedEmailSent !== undefined ? { customerEmailSent: savedEmailSent } : {}),
               duplicate: true,
-              ...(serverFirst ? { server_first: serverFirst } : {}),
-              ...(serverRecurring ? { server_recurring: serverRecurring } : {}),
-              booking_id: duplicateRow.booking_id,
-              bt: dupSigned.token,
             };
           };
           // LB-42: an empty full_baths is "missing", not zero — `??`
@@ -923,12 +895,20 @@ export default async function handler(req: Req, res: Res) {
           // merge overwrote the first row's amount/status. Now the
           // unique constraint decides: the insert winner owns the
           // row, the loser re-reads it unchanged (409 → select).
-          const existingRows = await dbSelect<{ id: string }>(
+          const existingRows = await dbSelect<VisitDedupRow>(
             "gh_visits",
             `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
           );
           let visitRow = existingRows[0] ?? null;
           let createdByThisCall = false;
+          const naturalKey: NaturalBookingKey = {
+            email: (email ?? "").trim().toLowerCase(),
+            date: (date ?? "").trim(),
+            service: actualService,
+            address: (address ?? "").trim().toLowerCase(),
+            window: (time ?? "").trim(),
+            amountCents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
+          };
           if (!visitRow) {
             // Natural-key dedup (L2): the bid above is new (fresh
             // request_id — a new tab or browser), but the booking itself
@@ -936,14 +916,6 @@ export default async function handler(req: Req, res: Res) {
             // window is the same request, not a second visit: return it
             // instead of inserting a duplicate row. Skipped for an
             // explicit second visit (force_new_booking).
-            const naturalKey: NaturalBookingKey = {
-              email: (email ?? "").trim().toLowerCase(),
-              date: (date ?? "").trim(),
-              service: actualService,
-              address: (address ?? "").trim().toLowerCase(),
-              window: (time ?? "").trim(),
-              amountCents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
-            };
             if (!forceNewBooking) {
               // The same-date scan is capped at 200 rows: on a busy
               // day more than 50 same-date bookings would push the
@@ -962,7 +934,7 @@ export default async function handler(req: Req, res: Res) {
                 return json(200, await duplicateBody(duplicateRow));
               }
             }
-            const inserted = await dbInsert<{ id: string }>("gh_visits", {
+            const inserted = await dbInsert<VisitDedupRow>("gh_visits", {
               booking_id: bookingId,
               visit_no: 1,
               client_name: (name ?? "").trim() || null,
@@ -981,7 +953,7 @@ export default async function handler(req: Req, res: Res) {
               amount_cents: serverFirst ? Math.round(parseFloat(serverFirst) * 100) : null,
               checklist: { rooms },
               status: "requested",
-              is_test: testScale || cutScale || /\b(qa|test|probe)\b|прогон|провер|тест/i.test(name ?? ""),
+              is_test: testScale,
             });
             if (inserted) {
               visitRow = inserted;
@@ -989,39 +961,45 @@ export default async function handler(req: Req, res: Res) {
             } else {
               // Lost the insert race (or the row appeared between the
               // select and the insert): re-read the winner unchanged.
-              const reread = await dbSelect<{ id: string }>(
+              const reread = await dbSelect<VisitDedupRow>(
                 "gh_visits",
                 `booking_id=eq.${encodeURIComponent(bookingId ?? "")}&visit_no=eq.1&limit=1`,
               );
               visitRow = reread[0] ?? null;
             }
-            // L2: close the check-then-act race — two identical
-            // submissions with different request_ids can both pass the
-            // pre-insert check (neither row exists yet) and both
-            // insert. Re-check now: if an EARLIER identical row
-            // exists, this call's row is the duplicate — delete it
-            // (no journal events or emails exist for it yet; those are
-            // logged after this block) and return the earlier booking.
-            // A failed re-check fails OPEN: the booking already exists
-            // and must not fail on a read error.
-            if (createdByThisCall && !forceNewBooking && visitRow) {
-              const recheck = await dbSelectStrict<VisitDedupRow>(
-                "gh_visits",
-                `visit_date=eq.${encodeURIComponent((date ?? "").trim())}&order=created_at.desc&limit=200`,
+          }
+          // Reconcile an unprocessed row again on retry. A failed cleanup must
+          // never turn the second row into an accepted visit on the next call.
+          if (!forceNewBooking && visitRow?.created_at && (createdByThisCall || visitRow.status === "requested")) {
+            const recheck = await dbSelectStrict<VisitDedupRow>(
+              "gh_visits",
+              `visit_date=eq.${encodeURIComponent(visitRow.visit_date ?? date ?? "")}&order=created_at.desc&limit=200`,
+            );
+            if (!recheck.ok) return json(503, { ok: false, error: "booking_save_failed" });
+            const mineCreatedAt = visitRow.created_at;
+            const savedKey: NaturalBookingKey = {
+              email: (visitRow.client_email ?? "").trim().toLowerCase(),
+              date: visitRow.visit_date ?? "", service: visitRow.service ?? "",
+              address: (visitRow.address ?? "").trim().toLowerCase(),
+              window: visitRow.window ?? "", amountCents: visitRow.amount_cents,
+            };
+            const earlier = recheck.rows.find((row) =>
+              row.booking_id !== bookingId && isNaturalDuplicate(savedKey, row, Date.parse(mineCreatedAt))
+              && ((row.created_at ?? "") < mineCreatedAt
+                || (row.created_at === mineCreatedAt && row.booking_id < (bookingId ?? ""))));
+            if (earlier) {
+              // A previously accepted booking must never be removed on a retry.
+              const history = createdByThisCall ? null : await dbSelectStrict<{ id: string }>(
+                "gh_events", `visit_id=eq.${encodeURIComponent(visitRow.id)}&limit=1`,
               );
-              if (recheck.ok) {
-                const mineCreatedAt = (visitRow as { created_at?: string }).created_at ?? "";
-                const earlier = recheck.rows
-                  .filter((row) => row.booking_id !== bookingId)
-                  .find((row) => isNaturalDuplicate(naturalKey, row)
-                    && ((row.created_at ?? "") < mineCreatedAt
-                      || ((row.created_at ?? "") === mineCreatedAt
-                        && (row.booking_id ?? "") < (bookingId ?? ""))));
-                if (earlier && earlier.booking_id) {
-                  await dbDelete("gh_visits", `id=eq.${visitRow.id}`);
-                  log("booking_duplicate_race", { kept: earlier.booking_id, dropped: bookingId ?? "" });
-                  return json(200, await duplicateBody(earlier));
-                }
+              if (history && !history.ok) return json(503, { ok: false, error: "booking_save_failed" });
+              if (!history?.rows.length) {
+                const removed = await dbDelete("gh_visits", `id=eq.${encodeURIComponent(visitRow.id)}&status=eq.requested`);
+                if (!removed) return json(503, { ok: false, error: "booking_save_failed" });
+                const remaining = await dbSelectStrict<{ id: string }>("gh_visits", `id=eq.${encodeURIComponent(visitRow.id)}&limit=1`);
+                if (!remaining.ok || remaining.rows.length) return json(503, { ok: false, error: "booking_save_failed" });
+                log("booking_duplicate_race", { kept: earlier.booking_id, dropped: bookingId ?? "" });
+                return json(200, await duplicateBody(earlier));
               }
             }
           }
@@ -1104,10 +1082,11 @@ export default async function handler(req: Req, res: Res) {
     // forwarded/leaked inbox message used to carry a 24h panel token.
     // The owner enters the panel with the "Send login link" button in
     // /owner itself (POST /api/owner-auth { action: "send" }).
+    const ownerUrl = ownerPanelUrl(visitRowId);
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background:${testScale || cutScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale || cutScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale || cutScale ? "#8B4513" : "#444"};">
-          ${isQuote ? (testScale || cutScale ? "TEST BOOKING — owner price test at reduced test prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
+        <div style="background:${testScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale ? "#8B4513" : "#444"};">
+          ${isQuote ? (testScale ? "TEST BOOKING — owner price test at reduced test prices" : "CLEANING REQUEST — Verify estimate before confirming") : "GENERAL INQUIRY"}
         </div>
         <h2 style="color: #8B5E3C; border-bottom: 2px solid #D4A853; padding-bottom: 10px;">
           ${isQuote ? "New Cleaning Request" : "New General Inquiry"} from ${escapeHtml(name)}
@@ -1136,7 +1115,7 @@ ${isQuote && extra_zones ? row("Extra areas to clean", escapeHtml(extra_zones)) 
 ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reasons || "check scope")}. Agree the scope (and any price change) with the client BEFORE confirming the visit.`) : ""}
           ${Object.entries(parsed.data.attribution || {}).map(([key, value]) => value ? row(key, escapeHtml(value)) : "").join("")}
         </table>
-        ${emailButton("https://www.gatehousehomecleaning.com/owner", "Open request")}
+        ${visitRowId ? emailButton(ownerUrl, "Open request") : ""}
         <p style="margin-top: 24px; font-size: 12px; color: #999;">Sent from Gatehouse Home Cleaning website contact form${bookingId ? ` · Booking ID: ${bookingId}` : ""}</p>
       </div>
     `;
@@ -1184,8 +1163,8 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
             reply_to: email || undefined,
             subject: `${isQuote ? "New quote request" : "New general inquiry"} — ${name}${zip ? `, ${zip}` : ""}`,
             html: htmlContent,
-            text: htmlContent.replace(/<\/tr>/g, "\n").replace(/<\/td>/g, " ").replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'),
-          }, parsed.data.request_id ? `owner/${parsed.data.request_id}` : undefined);
+            text: htmlContent.replace(/<\/tr>/g, "\n").replace(/<\/td>/g, " ").replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') + (visitRowId ? `\nOpen request: ${ownerUrl}` : ""),
+          }, parsed.data.request_id ? `owner/${parsed.data.force_new_booking ? "second/" : ""}${parsed.data.request_id}` : undefined);
           if (!sent.ok) {
             logErr("owner_notification", `provider ${sent.status}: ${sent.data?.name ?? ""} ${sent.data?.message ?? ""}`);
             if (visitRowId) {
@@ -1239,7 +1218,7 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
           return Number.isFinite(n) ? `$${n.toFixed(2)}` : `$${v}`;
         };
         const priceDisplay = serverFirst ? fmtUsd(serverFirst) : price ? fmtUsd(price) : "—";
-        const testNote = testScale || cutScale ? "\nThis is a test booking at reduced test prices for an owner payment check.\n" : "";
+        const testNote = testScale ? "\nThis is a test booking at reduced test prices for an owner payment check.\n" : "";
         // Equal first and recurring prices collapse into one line — "$189 for
         // the first visit, then $189 per visit" reads like a typo.
         const sameVisitPrice = !!serverRecurring && !!serverFirst && serverFirst === serverRecurring && !firstVisitDeep;
@@ -1250,21 +1229,21 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
         // continue" — their request email is the card-saved confirmation
         // for THIS booking instead.
         let cardOnFile = false;
-        if (isQuote) {
+        if (isQuote && !needsCustomQuote) {
           try {
             const sk = process.env["STRIPE_SECRET_KEY"];
             if (sk) {
-              const q = new URLSearchParams({ query: `email:"${(email ?? "").replace(/"/g, "")}"`, limit: "1" });
+              const q = new URLSearchParams({ query: `metadata['gh_booking_id']:'${bookingId}'`, limit: "1" });
               const sr = await fetch(`https://api.stripe.com/v1/customers/search?${q}`, {
                 headers: { Authorization: `Bearer ${sk}` },
                 signal: AbortSignal.timeout(10000),
               });
               if (sr.ok) {
-                const sd = (await sr.json()) as { data?: { id: string; email?: string }[] };
+                const sd = (await sr.json()) as { data?: { id: string; email?: string; metadata?: Record<string, string> }[] };
                 // C13: the search can return a near-matching email —
                 // only use the record whose email matches exactly.
                 // (Display hint only: which save-card email variant to send.)
-                const cid = sd.data?.find((c) => typeof c.email === "string"
+                const cid = sd.data?.find((c) => c.metadata?.gh_booking_id === bookingId && typeof c.email === "string"
                   && c.email.trim().toLowerCase() === (email ?? "").trim().toLowerCase())?.id;
                 if (cid) {
                   const pr = await fetch(`https://api.stripe.com/v1/customers/${cid}/payment_methods?type=card&limit=1`, {
@@ -1284,26 +1263,28 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
         const scopeNote = scope_review
           ? "One note: we may check a couple of scope details with you before confirming. The quoted price above won't change unless you agree to a change."
           : "";
-        const hasPrice = Boolean(serverFirst || price);
+        const hasPrice = !needsCustomQuote && Boolean(serverFirst || price);
         const requestLines =
           `Requested date: ${date ? emailDate(date) : "To be confirmed"}\nArrival preference: ${emailArrivalWindow(time || "flexible")}\nService: ${serviceLabel}\nFrequency: ${parsed.data.frequency === "onetime" ? "One-time" : "Every other week"}\n\n${hasPrice
             ? `Quoted price: ${priceDisplay}${sameVisitPrice ? " per visit" : " for the first visit"}${recurringDisplay}.`
             : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
-        const action = {
+        const action = needsCustomQuote ? undefined : {
           url: cardOnFile
             ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
             : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
           label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
         };
-        const heading = "Cleaning request received";
-        const nextStep = cardOnFile
+        const heading = needsCustomQuote ? "Custom quote requested" : "Cleaning request received";
+        const nextStep = needsCustomQuote
+          ? "We’ll email you a custom price before you choose a card or confirm a visit. Nothing is charged today."
+          : cardOnFile
           ? "Choose a card for this visit. $0 is charged today."
           : "Save a card securely through Stripe to complete your request. $0 is charged today.";
         const payment = "After cleaning, approve your photo report to pay. If you don't approve or report an issue within 24 hours, we'll charge your card at the next scheduled billing time after that window. Reporting an issue stops automatic payment, and closing the issue does not restart it.";
         const paragraphs = [
           nextStep,
           requestLines,
-          `Once your card is ready, we’ll email you an update on your date, arrival window and cleaner by ${deadline}.`,
+          needsCustomQuote ? `We’ll contact you about your quote by ${deadline}.` : `Once your card is ready, we’ll email you an update on your date, arrival window and cleaner by ${deadline}.`,
           scopeNote,
           testNote.trim(),
           deepPara.trim(),
@@ -1311,17 +1292,17 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
         ].filter(Boolean);
         const textBody = !isQuote
           ? `Hi ${firstName},\n\nThanks for your question. We’ll reply within one business day. This is a general inquiry, not a booking request.\n\nGatehouse Home Cleaning`
-          : `Hi ${firstName},\n\n${heading}\n\n${nextStep}\n\n${action.label}: ${action.url}\n\n${paragraphs.slice(1).join("\n\n")}\n\nGatehouse Home Cleaning`;
+          : `Hi ${firstName},\n\n${heading}\n\n${nextStep}\n\n${action ? `${action.label}: ${action.url}\n\n` : ""}${paragraphs.slice(1).join("\n\n")}\n\nGatehouse Home Cleaning`;
         const htmlBody = isQuote ? emailDocument({ firstName, heading, paragraphs, action }) : undefined;
 
         const auto = await sendEmail(RESEND_API_KEY, {
           from: FROM_AUTO,
           to: [email],
           reply_to: REPLY_TO_AUTO,
-          subject: !isQuote ? "Got your question — we’ll reply within one business day" : cardOnFile ? "Request received — confirm your card" : "Request received — save your card to continue",
+          subject: !isQuote ? "Got your question — we’ll reply within one business day" : needsCustomQuote ? "Your custom cleaning quote request" : cardOnFile ? "Request received — confirm your card" : "Request received — save your card to continue",
           text: textBody,
           ...(htmlBody ? { html: htmlBody } : {}),
-        }, parsed.data.request_id ? `customer/${parsed.data.request_id}` : undefined);
+        }, parsed.data.request_id ? `customer/${parsed.data.force_new_booking ? "second/" : ""}${parsed.data.request_id}` : undefined);
         // §3: the request email no longer claims "Card saved" — the
         // card_saved_email event is journaled only by the explicit
         // confirm_card action or a verified Checkout save.

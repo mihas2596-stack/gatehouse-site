@@ -12,7 +12,7 @@
 // signed upload URL (bytes never pass through this function).
 
 import { reportReplyAddress } from "./_report_reply.js";
-import { ownerNotificationEmail } from "./_owner_email.js";
+import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import {
   dbConfigured,
   dbSelect,
@@ -21,6 +21,7 @@ import {
   dbUpsert,
   dbUpdate,
   dbUpdateCount,
+  dbUpdateReturning,
   dbDeleteCount,
   logEvent,
   storageSignUpload,
@@ -980,14 +981,14 @@ async function publishReportToClient(
   return { status: "published", email_sent: emailSent, version, sent_at: sentAt };
 }
 
-async function sendOwnerEmail(subject: string, text: string): Promise<boolean> {
+async function sendOwnerEmail(visitId: string, subject: string, text: string): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   if (!key) return false;
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: FROM_EMAIL, to: [ownerNotificationEmail()], subject, text }),
+      body: JSON.stringify({ from: FROM_EMAIL, to: [ownerNotificationEmail()], subject, text: `${text}\n\nOpen visit: ${ownerPanelUrl(visitId)}` }),
       signal: AbortSignal.timeout(15000),
     });
     return r.ok;
@@ -1095,12 +1096,16 @@ export default async function handler(req: Req, res: Res) {
       // report_status-only CAS.
       const casFilter = `id=eq.${visit.id}&report_status=in.(none,draft,returned)` +
         (expectedRevision && visit.updated_at ? `&updated_at=eq.${encodeURIComponent(visit.updated_at)}` : "");
-      const changed = await dbUpdateCount("gh_visits", casFilter, {
+      // The next editor must receive the revision of its own write, even when
+      // another editor saves immediately after it.
+      const previousMs = Date.parse(visit.updated_at ?? "");
+      const nextRevision = new Date(Math.max(Date.now(), Number.isFinite(previousMs) ? previousMs + 1 : 0)).toISOString();
+      const written = await dbUpdateReturning<{ updated_at: string }>("gh_visits", casFilter, {
         checklist,
         report_status: visit.report_status === "none" ? "draft" : visit.report_status,
-      });
-      if (changed < 0) return json(502, { ok: false, error: "db_error" });
-      if (changed === 0) {
+      }, nextRevision);
+      if (!written) return json(502, { ok: false, error: "db_error" });
+      if (written.length === 0) {
         const fresh = await dbSelectStrict<VisitRow>("gh_visits", `id=eq.${visit.id}&limit=1`);
         if (fresh.ok && fresh.rows[0] && expectedRevision && checklistRevisionStale(fresh.rows[0].updated_at, expectedRevision)) {
           return json(409, { ok: false, error: "checklist_stale", checklist_revision: fresh.rows[0].updated_at ?? null });
@@ -1108,8 +1113,7 @@ export default async function handler(req: Req, res: Res) {
         return json(409, { ok: false, error: "report_locked" });
       }
       // M2: hand the writer its new revision for the next save.
-      const fresh = await dbSelect<{ updated_at: string | null }>("gh_visits", `id=eq.${visit.id}&limit=1`);
-      return json(200, { ok: true, ...(fresh[0]?.updated_at ? { checklist_revision: fresh[0].updated_at } : {}) });
+      return json(200, { ok: true, checklist_revision: written[0].updated_at });
     }
 
     if (action === "photo_sign") {
@@ -1194,8 +1198,9 @@ export default async function handler(req: Req, res: Res) {
         return json(400, { ok: false, error: "invalid_photo_file" });
       }
       const existing = await photosOf(visit.id);
-      if (existing.some((p) => p.storage_path === storagePath)) {
-        return json(200, { ok: true, already: true });
+      const savedPhoto = existing.find((p) => p.storage_path === storagePath);
+      if (savedPhoto) {
+        return json(200, { ok: true, already: true, photo_id: savedPhoto.id });
       }
       if (existing.length >= 60) return json(400, { ok: false, error: "too_many_photos" });
       const note = typeof body["note"] === "string" ? (body["note"] as string).slice(0, 300) : null;
@@ -1219,8 +1224,9 @@ export default async function handler(req: Req, res: Res) {
         const claimed = await dbUpsert<PhotoRow>("gh_photos", newRow, "storage_path");
         if (claimed) return json(200, { ok: true, photo_id: claimed.id });
         const reread = await photosOf(visit.id);
-        if (reread.some((p) => p.storage_path === storagePath)) {
-          return json(200, { ok: true, already: true });
+        const savedPhoto = reread.find((p) => p.storage_path === storagePath);
+        if (savedPhoto) {
+          return json(200, { ok: true, already: true, photo_id: savedPhoto.id });
         }
         // The upsert returns null when the unique index does not exist
         // yet (migration not applied): fall back to the plain insert
@@ -1228,8 +1234,9 @@ export default async function handler(req: Req, res: Res) {
         const inserted = await dbInsert<PhotoRow>("gh_photos", newRow);
         if (inserted) return json(200, { ok: true, photo_id: inserted.id });
         const rereadAfterInsert = await photosOf(visit.id);
-        if (rereadAfterInsert.some((p) => p.storage_path === storagePath)) {
-          return json(200, { ok: true, already: true });
+        const insertedPhoto = rereadAfterInsert.find((p) => p.storage_path === storagePath);
+        if (insertedPhoto) {
+          return json(200, { ok: true, already: true, photo_id: insertedPhoto.id });
         }
         if (attempt < 2) await new Promise((r) => setTimeout(r, attempt === 0 ? 250 : 700));
       }
@@ -1379,14 +1386,27 @@ export default async function handler(req: Req, res: Res) {
       // publication and a second client email.
       const changed = await dbUpdateCount(
         "gh_visits",
-        `id=eq.${visit.id}&report_status=in.(none,draft,returned)`,
+        `id=eq.${visit.id}&report_status=in.(none,draft,returned)&status=neq.cancelled` +
+          (submitRevision && visit.updated_at ? `&updated_at=eq.${encodeURIComponent(visit.updated_at)}` : ""),
         {
           checklist,
           report_status: "submitted",
           status: "report_submitted",
         },
       );
-      if (changed === 0) return json(200, { ok: true, already: true });
+      if (changed === 0) {
+        const fresh = await dbSelectStrict<VisitRow>("gh_visits", `id=eq.${visit.id}&limit=1`);
+        if (!fresh.ok) return json(502, { ok: false, error: "db_unavailable" });
+        const current = fresh.rows[0];
+        if (current?.status === "cancelled") return json(409, { ok: false, error: "visit_not_confirmed" });
+        if (current?.report_status === "submitted" || current?.report_status === "sent") {
+          return json(200, { ok: true, already: true });
+        }
+        if (current && submitRevision && checklistRevisionStale(current.updated_at, submitRevision)) {
+          return json(409, { ok: false, error: "checklist_stale", checklist_revision: current.updated_at });
+        }
+        return json(409, { ok: false, error: "report_locked" });
+      }
       if (changed < 0) return json(502, { ok: false, error: "db_error" });
       // Task 4: a submitted re-clean report moves the re-clean to
       // "submitted" (best-effort, separate from the CAS above — the
@@ -1414,7 +1434,7 @@ export default async function handler(req: Req, res: Res) {
       // back to the same queue instead of starting an invisible clock.
       const held = visit.issue_open === true;
       if (held) {
-        const emailed = await sendOwnerEmail(
+        const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
         );
@@ -1440,7 +1460,7 @@ export default async function handler(req: Req, res: Res) {
         // claim — the report stays in the owner review queue, exactly
         // as if the issue had been open at submit time. Nothing was
         // emailed to the client and no clock started.
-        const emailed = await sendOwnerEmail(
+        const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
         );
@@ -1460,7 +1480,7 @@ export default async function handler(req: Req, res: Res) {
         // re-sends to reconcile (no duplicate) instead of assuming
         // the client never got it.
         const emailMayHaveGoneOut = published.email_sent === true;
-        const emailed = await sendOwnerEmail(
+        const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but automatic publishing failed (${published.error}). The report is waiting in the owner review queue — publish it from the owner panel.${emailMayHaveGoneOut ? " The report email may already have reached the client — re-sending from the panel reconciles the delivery record without sending a duplicate." : ""}\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}`,
         );
@@ -1471,7 +1491,7 @@ export default async function handler(req: Req, res: Res) {
         }
         return json(200, { ok: true, published: false, publish_error: published.error, email_sent: emailMayHaveGoneOut });
       }
-      const emailed = await sendOwnerEmail(
+      const emailed = await sendOwnerEmail(visit.id,
         `Report published to client — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
         `The cleaner finished the visit and the photo report went straight to the client — no action needed.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\nReport email to the client: ${published.email_sent ? "sent" : "FAILED — the 24h clock is blocked; re-send it from the owner panel."}\n\nOpen the owner view to see the report and its notification status.`,
       );

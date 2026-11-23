@@ -10,17 +10,18 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests",
-  testMatch: /(hero-overlay|areas-map|hero-gap)\.spec\.ts/,
+  testMatch: /(hero-overlay|areas-map|hero-gap|cabinet-mobile)\.spec\.ts/,
   timeout: 30_000,
   fullyParallel: false,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:8080",
+    baseURL: "http://127.0.0.1:8080",
     ...devices["Desktop Chrome"],
+    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH },
   },
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:8080",
+    command: "npm run dev -- --host 127.0.0.1 --port 8080 --strictPort",
+    url: "http://127.0.0.1:8080",
     reuseExistingServer: true,
     timeout: 60_000,
   },

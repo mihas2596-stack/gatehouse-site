@@ -189,7 +189,7 @@ describe("isNaturalDuplicate", () => {
 });
 
 describe("booking submit natural-key dedup", () => {
-  it("a new-tab resubmission (fresh request_id, identical content) returns the existing booking, no second row, no second email", async () => {
+  it("a new-tab resubmission (fresh request_id, identical content) acknowledges the duplicate without sharing its private link or creating another booking", async () => {
     const first = await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
     expect(first.code).toBe(200);
     expect(first.body.booking_id).toBe(bidFromRequestId("11111111-2222-4333-8444-555555555555"));
@@ -200,9 +200,8 @@ describe("booking submit natural-key dedup", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe(first.body.booking_id);
-    expect(second.body.bt).toBeTruthy();
-    expect(second.body.bt).not.toBe(first.body.bt); // fresh token, same booking
+    expect(second.body.booking_id).toBeUndefined();
+    expect(second.body.bt).toBeUndefined();
     expect(rows).toHaveLength(1);
     expect(resendCalls).toHaveLength(2); // no second email
     expect(evts.filter((e) => e["event"] === "visit_created")).toHaveLength(1);
@@ -226,6 +225,9 @@ describe("booking submit natural-key dedup", () => {
     expect(second.body.duplicate).toBeUndefined();
     expect(second.body.booking_id).not.toBe(first.body.booking_id);
     expect(second.body.booking_id).not.toBe(bidFromRequestId("99999999-8888-4777-8666-555555555555"));
+    expect(rows).toHaveLength(2);
+    const retry = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555", force_new_booking: true });
+    expect(retry.body.booking_id).toBe(second.body.booking_id);
     expect(rows).toHaveLength(2);
   });
 
@@ -283,14 +285,14 @@ describe("duplicate answer reports the saved email outcome (P1-4)", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe(first.body.booking_id);
+    expect(second.body.booking_id).toBeUndefined();
     expect(second.body.customerEmailSent).toBe(true);
-    expect(second.body.bt).toBeTruthy();
+    expect(second.body.bt).toBeUndefined();
     expect(rows).toHaveLength(1);
     expect(resendCalls).toHaveLength(2); // no second email
   });
 
-  it("duplicate after a failed first send reports false, creates no second booking, keeps the path to the record", async () => {
+  it("duplicate after a failed first send reports false, creates no second booking, withholds the private link", async () => {
     resendFailCustomer = true;
     const first = await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
     expect(first.code).toBe(200);
@@ -301,10 +303,10 @@ describe("duplicate answer reports the saved email outcome (P1-4)", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe(first.body.booking_id);
+    expect(second.body.booking_id).toBeUndefined();
     // Must NOT promise a delivered email for the failed first attempt.
     expect(second.body.customerEmailSent).toBe(false);
-    expect(second.body.bt).toBeTruthy();
+    expect(second.body.bt).toBeUndefined();
     expect(rows).toHaveLength(1);
     expect(resendCalls).toHaveLength(2); // owner notice + failed customer attempt only
   });
@@ -320,9 +322,9 @@ describe("duplicate answer reports the saved email outcome (P1-4)", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe("bid-legacy");
+    expect(second.body.booking_id).toBeUndefined();
     expect(second.body.customerEmailSent).toBeUndefined();
-    expect(second.body.bt).toBeTruthy();
+    expect(second.body.bt).toBeUndefined();
     expect(rows).toHaveLength(1);
   });
 });

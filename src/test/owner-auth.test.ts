@@ -133,6 +133,20 @@ describe("owner-auth handler", () => {
     expect(bad.body.ok).toBe(false);
   });
 
+  it.each(["44856594-2caf-4cba-9500-cc6dbd8c701a", "https://outside.invalid/"])(
+    "builds a first-party login URL for the requested visit %s", async (visit) => {
+      const r = await callAuth({ method: "POST", headers: {}, body: { action: "send", visit } });
+      expect(r.body.ok).toBe(true);
+      const email = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("api.resend.com"));
+      const login = new URL(JSON.parse(String(email?.[1]?.body)).text.match(/https:\/\/[^\s]+/)[0]);
+      expect(login.origin + login.pathname).toBe("https://www.gatehousehomecleaning.com/owner");
+      expect(login.searchParams.get("visit")).toBe(visit.startsWith("https:") ? null : visit);
+      expect(login.searchParams.has("ol")).toBe(false);
+      const token = new URLSearchParams(login.hash.slice(1)).get("ol") ?? "";
+      expect(verifyOwnerLoginToken(token, ADMIN, Math.floor(Date.now() / 1000))).toBe(true);
+    },
+  );
+
   it("POST send answers ok (link email path)", async () => {
     const r = await callAuth({ method: "POST", headers: {}, body: { action: "send" } });
     expect(r.body.ok).toBe(true);

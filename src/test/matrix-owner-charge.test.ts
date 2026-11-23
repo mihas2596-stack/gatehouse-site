@@ -117,8 +117,9 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
       if (table === "gh_events") {
         evSeq += 1;
-        evts.push({ ...body, created_at: new Date(Date.now() + evSeq).toISOString() });
-        return res(201, {});
+        const inserted = { ...body, created_at: new Date(Date.now() + evSeq).toISOString() };
+        evts.push(inserted);
+        return res(201, [inserted]);
       }
       return res(201, {});
     }
@@ -213,7 +214,7 @@ describe("owner charge matrix", () => {
                   if (report !== "sent" && report !== "returned") rows[0]["report_sent_at"] = null;
                   evts = [];
                   if (sentEvMs !== null) {
-                    evts.push({ visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: iso(sentEvMs) });
+                    evts.push({ visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: iso(sentEvMs) });
                   }
                   // C16: a publication 20h+ old carries its 20h reminder,
                   // so timer-basis combos reach chargeVisit instead of

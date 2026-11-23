@@ -22,7 +22,7 @@ import { emailDocument } from "./_email_copy.js";
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbUpdate, dbUpdateCount, logEvent, logEventStrict } from "./_db.js";
-import { ownerNotificationEmail } from "./_owner_email.js";
+import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { issueStateFrom, everWaivedDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { listCustomerCards } from "./card-status.js";
@@ -1031,7 +1031,7 @@ export default async function handler(req: Req, res: Res) {
       res.status(200).json(view());
       return;
     }
-    if (!customer.id) {
+    if (!customer.id && !(row && action === "cancel")) {
       res.status(404).json({ requestId, ok: false, error: "booking_not_found" });
       return;
     }
@@ -1052,8 +1052,8 @@ export default async function handler(req: Req, res: Res) {
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-            to, reply_to: "hello@gatehousehomecleaning.com", subject, text,
-            html: emailDocument({ firstName: toClient ? (customer.name || "there").split(/\s+/)[0] : "Gatehouse", heading: subject.replace(/ — booking .+$/, ""), paragraphs: [text.replace(/^Hi [^,]+,\n\n/, "").replace(/\n\nGatehouse Home Cleaning\n?$/, "")], action: { url: toClient ? clientVisitLink(STRIPE_SECRET_KEY, { bid: payload.bid, email: customer.email || payload.email, name: customer.name }) : "https://www.gatehousehomecleaning.com/owner", label: toClient ? "View my visit" : "Open owner panel" } }),
+            to, reply_to: "hello@gatehousehomecleaning.com", subject, text: toClient ? text : `${text}\n\nOpen visit: ${ownerPanelUrl(row?.id)}`,
+            html: emailDocument({ firstName: toClient ? (customer.name || "there").split(/\s+/)[0] : "Gatehouse", heading: subject.replace(/ — booking .+$/, ""), paragraphs: [text.replace(/^Hi [^,]+,\n\n/, "").replace(/\n\nGatehouse Home Cleaning\n?$/, "")], action: { url: toClient ? clientVisitLink(STRIPE_SECRET_KEY, { bid: payload.bid, email: customer.email || payload.email, name: customer.name }) : ownerPanelUrl(row?.id), label: toClient ? "View my visit" : "Open owner panel" } }),
           }),
           signal: AbortSignal.timeout(15000),
         });
@@ -1268,13 +1268,13 @@ export default async function handler(req: Req, res: Res) {
         accessDeleted = await deleteAccess(row.id);
         await logEvent(row.id, payload.bid, "client", accessDeleted ? "entry_revoked" : "entry_revoke_failed");
       }
-      const cancellationSync = await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
+      const cancellationSync = customer.id ? await stripePost(STRIPE_SECRET_KEY, `/customers/${customer.id}`, {
         "metadata[gh_state]": "cancelled",
         "metadata[gh_cancel_scope]": scope,
         "metadata[gh_cancel_fee_cents]": String(fee),
         "metadata[gh_cancelled_at]": new Date().toISOString(),
-      });
-      if (!cancellationSync.ok && !row) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
+      }) : null;
+      if (!cancellationSync?.ok && !row) { res.status(503).json({ requestId, ok: false, error: "cancellation_not_saved" }); return; }
       Object.assign(meta, { gh_state: "cancelled", gh_cancel_scope: scope, gh_cancel_fee_cents: String(fee) });
       const scopeText = scope === "stop"
         ? "This visit is cancelled. Your request to stop repeat visits is recorded. Gatehouse will confirm changes to any other separately confirmed visits."

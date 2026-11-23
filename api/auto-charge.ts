@@ -908,26 +908,11 @@ export default async function handler(req: Req, res: Res) {
         log("skip_no_row", { booking: item.bookingId });
         continue;
       } catch (err) {
-        failed++;
+        syncNeeded++;
         logErr("charge_exception", `${item.bookingId}: ${err instanceof Error ? err.message : String(err)}`);
-        try {
-          await stripePost(STRIPE_SECRET_KEY, `/customers/${item.customerId}`, {
-            "metadata[gh_state]": "payment_failed",
-          });
-        } catch {
-          /* ignore */
-        }
-        try {
-          const vrows = await dbSelect<{ id: string }>(
-            "gh_visits",
-            `booking_id=eq.${encodeURIComponent(item.bookingId)}&order=visit_no.desc&limit=1`,
-          );
-          await logEvent(vrows[0]?.id ?? null, item.bookingId, "system", "payment_failed", {
-            source: "timer_24h",
-            error: String(err instanceof Error ? err.message : String(err)).slice(0, 200),
-          });
-          await sendPaymentFailedEmailOnce(STRIPE_SECRET_KEY, item.customerId, item.bookingId, vrows[0]?.id ?? null);
-        } catch { /* journal + email are best-effort; the meta flag still surfaces the failure */ }
+        // An exception may happen after Stripe accepted the request. The next
+        // pass reconciles the intent; only a definite decline warrants email.
+        await logEvent(null, item.bookingId, "system", "payment_unknown", { source: "timer_24h" });
       }
     }
 
@@ -1133,24 +1118,21 @@ export default async function handler(req: Req, res: Res) {
         // still gets its receipt instead of starving.
         const paidRows = await dbSelect<{
           id: string; booking_id: string; amount_cents: number | null; receipt_email_id: string | null;
-          client_email: string | null; paid_at: string | null;
+          client_email: string | null; paid_at: string | null; status: string; stripe_customer_id?: string | null;
         }>(
           "gh_visits",
           `status=eq.paid&or=(receipt_email_id.is.null,receipt_email_id.like.claim:*)&order=paid_at.asc.nullsfirst&limit=50`,
         );
         for (const prow of paidRows) {
-          if (!prow.booking_id) continue;
+          if (!prow.booking_id || prow.status !== "paid") continue;
           if (prow.receipt_email_id && !prow.receipt_email_id.startsWith("claim:")) continue;
           const evs = await bookingEvents(prow.booking_id);
           if (evs.some((e) => e.event === "payment_succeeded"
             && (e.detail?.["receipt_sent"] === true))) continue;
-          // Resolve the Stripe customer by the visit's own email —
-          // never by the shared metadata binding, which may currently
-          // point at another booking of the same client.
+          // A paid row has its own verified recipient and receipt marker.
+          // Older bookings can receive their receipt even without a Stripe pin.
           if (!prow.client_email) continue;
-          const match = await findCustomerByEmail(STRIPE_SECRET_KEY, prow.client_email, prow.booking_id);
-          if (!match) continue;
-          const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, match.id, {
+          const sent = await sendReceiptEmailOnce(STRIPE_SECRET_KEY, prow.stripe_customer_id ?? null, {
             gh_state: "paid",
             gh_report_amount_cents: prow.amount_cents != null ? String(prow.amount_cents) : "",
           }, prow.booking_id);

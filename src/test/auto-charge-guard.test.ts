@@ -81,7 +81,7 @@ beforeEach(() => {
         piCalls++;
         return okRes(piResult.status === "succeeded"
           ? { id: "pi_1", status: "succeeded" }
-          : { status: piResult.status, error: { message: piResult.error ?? "card declined" } });
+          : { id: "pi_1", status: piResult.status, error: { message: piResult.error ?? "card declined" } });
       }
       if (u.pathname.endsWith("/payment_methods")) return okRes({ data: [] });
       const custM = /\/customers\/(cus_[A-Za-z0-9_]+)$/.exec(u.pathname);

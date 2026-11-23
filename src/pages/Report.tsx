@@ -83,6 +83,7 @@ type ReportData = {
   // publishable key — so the client can complete the challenge with
   // Stripe.js and then re-approve. Absent on every other response.
   client_secret?: string;
+  confirmation_method_id?: string;
   publishable_key?: string;
   payment_intent?: string;
   // Follow-up on an already-open issue: the server records it and
@@ -218,7 +219,7 @@ const Report = () => {
   // or cancels it — no charge is made and nothing retries on its own.
   // Stripe.js is loaded lazily, only when a 3DS challenge is actually
   // needed, so the report page stays light for every other visitor.
-  const complete3DS = async (clientSecret: string, publishableKey: string): Promise<boolean> => {
+  const complete3DS = async (clientSecret: string, publishableKey: string, methodId?: string): Promise<boolean> => {
     if (!publishableKey) {
       setActionError("Your card needs extra verification to complete this payment, and we couldn't start it — please email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
@@ -235,7 +236,9 @@ const Report = () => {
       setActionError("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
     }
-    const { error } = await stripe.handleCardAction(clientSecret);
+    const { error } = methodId
+      ? await stripe.confirmCardPayment(clientSecret, { payment_method: methodId })
+      : await stripe.handleCardAction(clientSecret);
     if (error) {
       setActionError(error.message || "The card verification didn't complete — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
@@ -274,7 +277,7 @@ const Report = () => {
       // re-approve still needs action, the message below (not a loop)
       // tells the client to try again or email us.
       if (action === "approve" && j && j.error === "payment_requires_action" && j.client_secret) {
-        const done = await complete3DS(j.client_secret, j.publishable_key ?? "");
+        const done = await complete3DS(j.client_secret, j.publishable_key ?? "", j.confirmation_method_id);
         if (!done) {
           setBusy(false);
           return;

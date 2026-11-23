@@ -255,7 +255,7 @@ describe("LB-01 — owner-charge reminder guard is publication-scoped", () => {
     storeMeta["gh_state"] = "report_sent";
     storeMeta["gh_report_sent_at"] = hoursAgo(30);
     events = [
-      ev("report_sent", { version: 2 }, hoursAgo(30)),
+      ev("report_sent", { version: 2, email_sent: true }, String(visitRows[0].report_sent_at)),
       ev("report_sent", { version: 1 }, hoursAgo(50)),
       ev("visit_created", {}, hoursAgo(50)),
     ];

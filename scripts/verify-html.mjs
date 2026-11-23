@@ -11,3 +11,14 @@ for (const path of paths) {
   if (path === '/thank-you' && !d.querySelector('meta[name=robots]')?.content.includes('noindex')) throw Error('Receipt must not be indexed');
 }
 console.log(`${paths.length} pages: metadata, textual content, assets, structured data and noindex verified.`);
+
+const privateHtml = new JSDOM(readFileSync('dist/cabinet.html', 'utf8')).window.document;
+const privateScripts = [...privateHtml.querySelectorAll('script')];
+if (!privateScripts.length || privateScripts.some(s => !s.getAttribute('src')?.startsWith('/assets/')) ||
+    privateHtml.querySelector('iframe') || !privateHtml.querySelector('meta[name=robots]')?.content.includes('noindex')) {
+  throw Error('Private portals must boot from local assets without tracking scripts');
+}
+const config = JSON.parse(readFileSync('vercel.json', 'utf8'));
+for (const route of ['/visit','/save-card','/report','/cleaner','/owner']) {
+  if (!config.rewrites.some(r => r.source === route && r.destination === '/cabinet.html')) throw Error('Missing private shell for ' + route);
+}

@@ -67,11 +67,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const openDetail = async (opts: { showTest?: boolean } = {}) => {
+const openDetail = async () => {
   render(<HelmetProvider><Owner /></HelmetProvider>);
-  // Test bookings are hidden by default — reveal them first when the
-  // variant under test is one.
-  if (opts.showTest) fireEvent.click(await screen.findByLabelText("Hide test bookings"));
   fireEvent.click(await screen.findByRole("button", { name: "All visits (1)" }));
   fireEvent.click(screen.getByRole("button", { name: /Casey/ }));
   expect(await screen.findByRole("heading", { name: "Casey Test" })).toBeInTheDocument();
@@ -92,7 +89,7 @@ describe("C8: the entry warning fires only for a confirmed upcoming real visit",
 
   it("stays silent for a test booking even when upcoming", async () => {
     visit = baseVisit({ client_name: "Casey Test", visit_date: "2027-01-15", is_test: true, report_status: "", entry_agreed: false });
-    await openDetail({ showTest: true });
+    await openDetail();
     expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
   });
 

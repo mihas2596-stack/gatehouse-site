@@ -193,6 +193,12 @@ describe("LB-04 — bad room counts are refused, big homes are a custom quote", 
     expect(r.body["server_first"]).toBeUndefined();
     expect(inserts).toHaveLength(1);
     expect(inserts[0]["amount_cents"]).toBeNull();
+    const notice = (resendCalls as Row[]).find((mail) => JSON.stringify(mail.to).includes("test@example.com"));
+    expect(notice?.subject).toContain("custom cleaning quote");
+    expect(notice?.text).toContain("before you choose a card");
+    expect(notice?.text).not.toContain("/save-card");
+    expect(notice?.html).not.toContain("Save my card");
+
   });
 });
 
