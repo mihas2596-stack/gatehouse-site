@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { dbRpc, dbSelectStrict, logEventStrict } from "./_db.js";
-import { ownerNotificationEmail } from "./_owner_email.js";
+import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 
 export type ResendEmailData = {
   email_id?: string;
@@ -101,7 +101,7 @@ export async function processReportReply(data?: ResendEmailData): Promise<Webhoo
       reply_to: sender, subject: "Customer reply to a cleaning report — review needed",
       text: [statusText, `Booking: ${bookingId}`, `From: ${sender}`, `Subject: ${subject || "(no subject)"}`,
         `Open the original under Receiving in Resend: https://resend.com/emails\nMessage ID: ${emailId}`,
-        "Review the visit: https://www.gatehousehomecleaning.com/owner"].join("\n\n"),
+        `Review the visit: ${ownerPanelUrl(visitId)}`].join("\n\n"),
     }),
     signal: AbortSignal.timeout(12000),
   });

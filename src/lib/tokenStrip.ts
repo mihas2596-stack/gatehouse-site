@@ -22,21 +22,21 @@
  * reads the token back from sessionStorage and strips nothing.
  */
 export function resolveLinkToken(param: "bt" | "ct", storageKey: string, search?: string): string {
+  const fromUrl = new URLSearchParams(search ?? (typeof window === "undefined" ? "" : window.location.search)).get(param);
   try {
-    const qs = new URLSearchParams(search ?? window.location.search);
-    const fromUrl = qs.get(param);
     if (fromUrl) {
       sessionStorage.setItem(storageKey, fromUrl);
       const real = new URLSearchParams(window.location.search);
       if (real.get(param)) {
         real.delete(param);
         const rest = real.toString();
-        window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
+        window.history.replaceState(window.history.state, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
       }
       return fromUrl;
     }
     return sessionStorage.getItem(storageKey) ?? "";
   } catch {
-    return "";
+    // Keep the emailed link usable when an embedded browser blocks storage.
+    return fromUrl ?? "";
   }
 }

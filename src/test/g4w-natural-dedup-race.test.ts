@@ -18,6 +18,7 @@ let evts: Evt[];
 let resendCalls: { key: string | null }[];
 let sameDateCalls: number;
 let raceArmed: boolean;
+let failDelete: boolean;
 
 function res(code: number, body: unknown) {
   return {
@@ -89,6 +90,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
       return res(201, [body]);
     }
     if (method === "DELETE") {
+      if (failDelete) return res(503, {});
       if (table === "gh_visits") {
         const idEq = u.searchParams.get("id");
         if (idEq?.startsWith("eq.")) {
@@ -161,12 +163,31 @@ beforeEach(() => {
   resendCalls = [];
   sameDateCalls = 0;
   raceArmed = false;
+  failDelete = false;
   vi.stubGlobal("fetch", vi.fn(fetchMock));
 });
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("L2 check-then-act race", () => {
+  it("recovers after a failed duplicate-row cleanup without sending a second notice", async () => {
+    await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
+    raceArmed = true;
+    failDelete = true;
+    const retry = { ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" };
+    const failed = await submit(retry);
+    expect(failed.code).toBe(503);
+    expect(rows).toHaveLength(2);
+    expect(resendCalls).toHaveLength(2);
+    failDelete = false;
+    const recovered = await submit(retry);
+    expect(recovered.code).toBe(200);
+    expect(recovered.body.duplicate).toBe(true);
+    expect(recovered.body.bt).toBeUndefined();
+    expect(rows).toHaveLength(1);
+    expect(resendCalls).toHaveLength(2);
+  });
+
   it("a duplicate that lands between the check and the insert is caught by the re-check", async () => {
     const first = await submit({ ...baseBody, request_id: "11111111-2222-4333-8444-555555555555" });
     expect(first.code).toBe(200);
@@ -180,7 +201,8 @@ describe("L2 check-then-act race", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe(keptBid);
+    expect(second.body.booking_id).toBeUndefined();
+    expect(second.body.bt).toBeUndefined();
     // The loser's row was deleted; no second email went out.
     expect(rows).toHaveLength(1);
     expect(rows[0]["booking_id"]).toBe(keptBid);
@@ -213,7 +235,8 @@ describe("L2 window edge (busy same-date page)", () => {
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
     expect(second.code).toBe(200);
     expect(second.body.duplicate).toBe(true);
-    expect(second.body.booking_id).toBe(keptBid);
+    expect(second.body.booking_id).toBeUndefined();
+    expect(second.body.bt).toBeUndefined();
     expect(rows).toHaveLength(61);
     expect(resendCalls).toHaveLength(2);
     expect(bidFromRequestId("99999999-8888-4777-8666-555555555555")).not.toBe(keptBid);

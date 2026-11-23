@@ -97,6 +97,11 @@ describe("fix7 — UX audit fixes", () => {
 
   it("step 3: arbitration opt-out note and Stripe button", () => {
     goToStep3();
+    const consent = screen.getByRole("checkbox", { name: /automated service texts/ });
+    expect(consent).not.toBeChecked();
+    expect(consent).not.toBeRequired();
+    fireEvent.click(consent);
+    expect(consent).toBeChecked();
     expect(screen.getByText("Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue to Stripe — $0 today" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Continue to save card/ })).not.toBeInTheDocument();

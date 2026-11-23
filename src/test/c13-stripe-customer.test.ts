@@ -33,13 +33,13 @@ describe("pickCustomerByEmail (pure)", () => {
     expect(pickCustomerByEmail([b, a], EMAIL, BID)).toBe(b);
   });
 
-  it("returns the exact match when no booking binding exists", () => {
-    expect(pickCustomerByEmail([a], EMAIL, BID)).toBe(a);
-    expect(pickCustomerByEmail([a], EMAIL)).toBe(a);
+  it("requires a booking binding even for a single exact match", () => {
+    expect(pickCustomerByEmail([a], EMAIL, BID)).toBeNull();
+    expect(pickCustomerByEmail([a], EMAIL)).toBeNull();
   });
 
   it("is case-insensitive and rejects near matches", () => {
-    expect(pickCustomerByEmail([a], "Client@Example.com", BID)).toBe(a);
+    expect(pickCustomerByEmail([b], "Client@Example.com", BID)).toBe(b);
     expect(pickCustomerByEmail([c], EMAIL, BID)).toBeNull();
     expect(pickCustomerByEmail([{ id: "cus_x", email: "client@example.com.evil.com", metadata: {} }], EMAIL, BID)).toBeNull();
     expect(pickCustomerByEmail([], EMAIL, BID)).toBeNull();

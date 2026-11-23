@@ -450,7 +450,7 @@ describe("RA07 issue vs charge barrier", () => {
       },
     }];
     evts = [
-      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1 }, created_at: sentAt },
+      { visit_id: ROW_ID, booking_id: BID, event: "report_sent", detail: { version: 1, email_sent: true }, created_at: sentAt },
       // C16: a 30h-old report carries its 20h reminder, so the manual
       // timer-basis charges pass the reminder guard.
       { visit_id: ROW_ID, booking_id: BID, event: "reminder_sent", detail: {}, created_at: new Date(Date.now() - 10 * 3600 * 1000).toISOString() },

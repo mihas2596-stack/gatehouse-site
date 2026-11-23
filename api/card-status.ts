@@ -578,6 +578,17 @@ async function findCustomerByBooking(
   return found ? { id: found.id, metadata: found.metadata ?? {}, email: found.email, name: found.name } : null;
 }
 
+async function bookingCardCustomer(key: string, bookingId: string, email: string, pinnedId?: string | null) {
+  if (pinnedId) {
+    const linked = await resolveCustomerByRowId(
+      (id) => stripeGet(key, `/customers/${encodeURIComponent(id)}`), pinnedId, email,
+    );
+    if (!linked) throw new Error("customer_unavailable");
+    return { ...linked, metadata: linked.metadata ?? {} };
+  }
+  return await findCustomerByBooking(key, bookingId) ?? await findCustomerByEmail(key, email, bookingId);
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   const headers: Record<string, string> = { Vary: "Origin" };
@@ -616,31 +627,20 @@ export default async function handler(req: Req, res: Res) {
       return;
     }
     const bid = verified.payload.bid;
-    let cust = (await findCustomerByBooking(STRIPE_SECRET_KEY, bid))
-      ?? (verified.payload.email ? await findCustomerByEmail(STRIPE_SECRET_KEY, verified.payload.email, bid) : null);
-    if (!cust) {
-      res.status(409).json({ ok: false, error: "no_card" });
-      return;
-    }
-    if (cust.email && cust.email.toLowerCase() !== verified.payload.email.toLowerCase()) {
-      res.status(403).json({ ok: false, error: "identity_mismatch" }); return;
-    }
     const rowResult = dbConfigured() ? await dbSelectStrict<BookingRow>("gh_visits", `booking_id=eq.${encodeURIComponent(bid)}&order=visit_no.desc&limit=1`) : { ok: true, rows: [] };
     if (!rowResult.ok) { res.status(503).json({ ok: false, error: "status_unavailable" }); return; }
     const row = rowResult.rows[0] ?? null;
     if (row?.status === "cancelled") { res.status(409).json({ ok: false, error: "visit_cancelled" }); return; }
     const events = row ? await bookingEvents(bid) : [];
-    // C13: the visit row's own stripe_customer_id, where present, is
-    // the strongest binding — resolve it directly and verify its
-    // email, instead of trusting the email search.
-    if (row?.stripe_customer_id && row.stripe_customer_id !== cust.id) {
-      const byRow = await resolveCustomerByRowId(
-        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
-        row.stripe_customer_id, verified.payload.email,
-      );
-      if (byRow) {
-        cust = { id: byRow.id, metadata: byRow.metadata ?? {}, email: byRow.email, name: byRow.name };
-      }
+    let cust;
+    try {
+      cust = await bookingCardCustomer(STRIPE_SECRET_KEY, bid, verified.payload.email, row?.stripe_customer_id);
+    } catch {
+      res.status(503).json({ ok: false, error: "status_unavailable" }); return;
+    }
+    if (!cust) { res.status(409).json({ ok: false, error: "no_card" }); return; }
+    if (cust.email && cust.email.toLowerCase() !== verified.payload.email.toLowerCase()) {
+      res.status(403).json({ ok: false, error: "identity_mismatch" }); return;
     }
     // 16.11 (item 6): an explicit client choice of a saved card.
     // The selection is bound to this booking by the bt token that
@@ -767,11 +767,8 @@ export default async function handler(req: Req, res: Res) {
             if (row.visit_date) booking.date = row.visit_date;
           }
           const confirmEv = latestEvent(events, "visit_confirmed");
-          const boundCust = await findCustomerByBooking(revisitKey, bookingId);
-          // The saved card belongs to the client (email), not to whichever
-          // booking the shared customer is bound to right now.
-          const emailCust = !boundCust && p.email ? await findCustomerByEmail(revisitKey, p.email, bookingId) : null;
-          const cust = boundCust ?? emailCust;
+          const cust = await bookingCardCustomer(revisitKey, bookingId, p.email, row?.stripe_customer_id);
+          const boundCust = cust?.metadata.gh_booking_id === bookingId || (cust && row?.stripe_customer_id === cust.id) ? cust : null;
           if (cust) {
             if (cust.email && cust.email.toLowerCase() !== p.email.toLowerCase()) throw new Error("identity_mismatch");
             const selectedId = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"];

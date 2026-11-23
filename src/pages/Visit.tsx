@@ -148,6 +148,7 @@ type ReportData = {
   // can complete the challenge with Stripe.js and then re-approve.
   // Absent on every other response.
   client_secret?: string;
+  confirmation_method_id?: string;
   publishable_key?: string;
   payment_intent?: string;
 };
@@ -257,7 +258,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   // cannot start or the cardholder fails or cancels it — no charge is
   // made and nothing retries on its own. Stripe.js is loaded lazily,
   // only when a 3DS challenge is actually needed.
-  const complete3DS = async (clientSecret: string, publishableKey: string): Promise<boolean> => {
+  const complete3DS = async (clientSecret: string, publishableKey: string, methodId?: string): Promise<boolean> => {
     if (!publishableKey) {
       setErr("Your card needs extra verification to complete this payment, and we couldn't start it — please email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
@@ -274,7 +275,9 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       setErr("We couldn't load the card verification — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
     }
-    const { error } = await stripe.handleCardAction(clientSecret);
+    const { error } = methodId
+      ? await stripe.confirmCardPayment(clientSecret, { payment_method: methodId })
+      : await stripe.handleCardAction(clientSecret);
     if (error) {
       setErr(error.message || "The card verification didn't complete — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
       return false;
@@ -313,7 +316,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       // message below (not a loop) tells the client to try again or
       // email us.
       if (payload.action === "approve" && j && j.error === "payment_requires_action" && j.client_secret) {
-        const done = await complete3DS(j.client_secret, j.publishable_key ?? "");
+        const done = await complete3DS(j.client_secret, j.publishable_key ?? "", j.confirmation_method_id);
         if (!done) {
           setBusy(false);
           return;
@@ -751,6 +754,11 @@ const Visit = () => {
 
   const [data, setData] = useState<VisitData | null>(null);
   const [loading, setLoading] = useState(true);
+  const focusReport = useCallback((element: HTMLElement | null) => {
+    if (element && window.location.hash === "#report") {
+      element.scrollIntoView({ block: "start" });
+    }
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // G6: a failed refetch must not wipe a loaded visit, and a network
@@ -1124,7 +1132,7 @@ const Visit = () => {
             )}
 
             {(data.state === "report_sent" || data.state === "issue_open" || data.state === "approved" || data.state === "paid" || data.state === "payment_issue" || data.state === "payment_unknown" || data.state === "waived" || data.state === "refunded") && (
-              <section id="report" className="scroll-mt-28">
+              <section ref={focusReport} id="report" className="scroll-mt-28">
                 <ReportSection bt={bt} visitState={data.state} cleanerName={data.cleaner?.name ?? null} cleanerPhoto={data.cleaner?.photo ?? null} visitDate={b.confirmed_date || b.requested_date} visitWindow={b.window} cardLabel={cardLabel} onChanged={() => void load()} />
               </section>
             )}
@@ -1176,7 +1184,7 @@ const Visit = () => {
             )}
 
             {(data.state !== "report_sent" && data.state !== "issue_open" && data.state !== "approved" && data.state !== "paid" && data.state !== "payment_issue" && data.state !== "payment_unknown" && data.state !== "waived" && data.state !== "refunded") && (
-              <section id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
+              <section ref={focusReport} id="report" className="scroll-mt-28 rounded-xl border border-border bg-card p-4 mb-6 text-left">
                 <h2 className="font-heading text-lg font-bold mb-2">Cleaning report</h2>
                 <p className="text-sm text-foreground">Your photos and checklist will appear here after your cleaning.</p>
               </section>

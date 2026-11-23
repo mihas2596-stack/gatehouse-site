@@ -6,11 +6,14 @@
 // sat in /owner as "Needs attention" while the client waited for a
 // confirmation nobody processed ("Test Client", 2026-11-20).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHmac, createHash } from "node:crypto";
+import { notifyOwnerCardReady } from "../../api/_owner_email";
 import sendContactEmail from "../../api/send-contact-email";
 import bookingAction from "../../api/booking-action";
 
 const ORIGIN = "https://www.gatehousehomecleaning.com";
 const OWNER_EMAIL = "nikolajmihasenok@gmail.com";
+const VISIT_ID = "7cdbda4b-ccab-4ec7-b1b3-0e96a00e7f5b";
 const OWNER_URL = "https://www.gatehousehomecleaning.com/owner";
 
 type Row = Record<string, unknown>;
@@ -90,7 +93,7 @@ describe("owner notification for a new quote", () => {
       if (u.includes("/rest/v1/gh_visits")) {
         if (method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}")) as Row;
-          const created = { ...body, id: body["id"] ?? `visit-${rows.length + 1}`, created_at: new Date().toISOString() };
+          const created = { ...body, id: body["id"] ?? VISIT_ID, created_at: new Date().toISOString() };
           rows.push(created);
           return supRes([created]);
         }
@@ -214,11 +217,52 @@ describe("owner notification for a new quote", () => {
     expect(owner.html).toContain("Standard cleaning");
     expect(owner.html).toContain(body["date"] as string);
     expect(owner.html).toContain("Open request");
-    expect(owner.html).toContain(OWNER_URL);
+    expect(owner.html).toContain(`href="${OWNER_URL}?visit=${VISIT_ID}"`);
+    expect(owner.text).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
+    expect(owner.html).not.toMatch(/ol1\.|os1\.|adm-secret/);
     // Journaled once, so /owner and the resend action can see it.
     const notified = events.filter((e) => e.event === "owner_notification");
     expect(notified).toHaveLength(1);
     expect(events.filter((e) => e.event === "owner_notification_failed")).toHaveLength(0);
+  });
+
+  it("keeps ordinary requests visible during the public test-price window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-22T12:00:00Z"));
+      expect((await submitQuote(quoteBody())).code).toBe(200);
+      expect(rows[0]).toMatchObject({ is_test: false, amount_cents: 149 });
+      expect(resendCalls[0].html).not.toContain("TEST BOOKING");
+      expect(resendCalls[1].text).not.toContain("owner payment check");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("a signed owner price test marks the booking explicitly", async () => {
+    const email = "owner@example.com";
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const unsigned = `tp1.${exp}.${Buffer.from(email).toString("base64url")}`;
+    const key = createHash("sha256").update("gatehouse-test-price:adm-secret").digest();
+    const sig = createHmac("sha256", key).update(unsigned).digest("base64url");
+    expect((await submitQuote(quoteBody({ email, test_token: `${unsigned}.${sig}` }))).code).toBe(200);
+    expect(rows[0]).toMatchObject({ is_test: true, amount_cents: 149 });
+    expect(resendCalls[0].html).toContain("TEST BOOKING");
+  });
+
+  it("fails a production quote before confirmation when visit storage is not configured", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("SUPABASE_URL", "");
+    const r = await submitQuote(quoteBody());
+    expect(r.code).toBe(503);
+    expect(r.body.error).toBe("booking_save_failed");
+    expect(resendCalls).toHaveLength(0);
+  });
+
+  it("links the card-ready notification to the same visit in HTML and plain text", async () => {
+    await notifyOwnerCardReady({ id: VISIT_ID, booking_id: "test-bid", status: "requested",
+      service: "Standard", visit_date: serviceDate(), amount_cents: 149 });
+    expect(resendCalls).toHaveLength(1);
+    expect(resendCalls[0].html).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
+    expect(resendCalls[0].text).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
   });
 
   it("does not send a second owner email when the same request is retried", async () => {
@@ -266,7 +310,7 @@ describe("owner notification for a new quote", () => {
     expect(resent.subject).toContain("Test Client");
     expect(resent.html).toContain("123 Test Street");
     expect(resent.html).toContain("Open request");
-    expect(resent.html).toContain(OWNER_URL);
+    expect(resent.html).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
     expect(resent.key).toBe(`owner-resend/${bookingId}`);
     expect(events.filter((e) => e.event === "owner_notification")).toHaveLength(1);
   });
@@ -285,7 +329,7 @@ describe("owner notification for a new quote", () => {
     expect(sent.html).toContain("123 Test Street, Sugar Hill, GA 30009");
     expect(sent.html).toContain("4045550100");
     expect(sent.html).toContain("Open request");
-    expect(sent.html).toContain(OWNER_URL);
+    expect(sent.html).toContain(`${OWNER_URL}?visit=${row.id}`);
     expect(events.filter((e) => e.event === "owner_notification")).toHaveLength(1);
   });
 

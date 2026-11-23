@@ -95,6 +95,11 @@ describe("searchIntents pagination (G3Z)", () => {
     expect(searchCalls).toEqual(["", "t1", "t2", "t3", "t4", "t5"]);
   });
 
+  it("fails closed if the provider keeps returning a continuation", async () => {
+    pages = { "": { data: [], next_page: "loop" }, loop: { data: [], next_page: "loop" } };
+    expect(await searchIntents("sk_test_x", BID)).toEqual({ status: "error", error: "search_incomplete" });
+  });
+
   it("stops when there is no next_page", async () => {
     pages = { "": { data: [intent({ id: "pi_only" })] } };
     const r = await searchIntents("sk_test_x", BID);

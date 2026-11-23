@@ -3,7 +3,10 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 
 // https://vitejs.dev/config/
-export default defineConfig(() => ({
+export default defineConfig(({ isSsrBuild }) => ({
+  build: isSsrBuild ? {} : {
+    rollupOptions: { input: { public: "index.html", cabinet: "cabinet.html" } },
+  },
   server: {
     host: "::",
     port: 8080,

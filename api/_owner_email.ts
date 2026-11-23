@@ -14,12 +14,22 @@ export function ownerNotificationEmail(): string {
   return env || FALLBACK_OWNER_EMAIL;
 }
 
+// This is a locator only. The detail API authenticates every read.
+export function ownerPanelUrl(visitId?: string | null): string {
+  const url = new URL("https://www.gatehousehomecleaning.com/owner");
+  if (visitId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visitId)) {
+    url.searchParams.set("visit", visitId);
+  }
+  return url.toString();
+}
+
 // Concise owner-request notice (used by the owner-panel resend action,
 // and mirroring the creation email in api/send-contact-email.ts): the
 // same facts — date, service, address, amount — rebuilt from the stored
 // visit row, with an "Open request" action that opens the owner panel
 // (a plain link, no login token — C20).
 export type OwnerRequestNotice = {
+  visitId: string;
   name: string;
   email?: string | null;
   phone?: string | null;
@@ -45,7 +55,7 @@ export function ownerRequestEmailBody(n: OwnerRequestNotice): { subject: string;
     n.amountCents != null && `Visit price: $${(n.amountCents / 100).toFixed(2)}`,
     n.bookingId && `Booking ID: ${n.bookingId}`,
   ].filter(Boolean).join("\n");
-  const url = "https://www.gatehousehomecleaning.com/owner";
+  const url = ownerPanelUrl(n.visitId);
   const text = `${heading}\n\n${details}\n\nOpen the request in the owner panel:\n${url}\n\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`;
   const html = emailDocument({
     firstName: "Gatehouse",
@@ -81,7 +91,7 @@ export async function notifyOwnerCardReady(visit: ReadyVisit | null): Promise<vo
     visit.amount_cents != null && `Visit price: $${(visit.amount_cents / 100).toFixed(2)}`,
   ].filter(Boolean).join("\n");
   const nextStep = "The client’s card is ready. Open Schedule, select a cleaner and confirm the arrival window. Gatehouse will email the client.";
-  const url = "https://www.gatehousehomecleaning.com/owner";
+  const url = ownerPanelUrl(visit.id);
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": `owner-card-ready/${visit.id}` },

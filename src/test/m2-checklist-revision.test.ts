@@ -5,7 +5,7 @@
 // revision (old clients) still works; two saves that both loaded the
 // same revision cannot both win.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { installEnv, scopeChecklist } from "./m-cleaner-harness";
+import { installEnv, makePhotos, scopeChecklist } from "./m-cleaner-harness";
 import { checklistRevisionStale } from "../../api/cleaner";
 
 beforeEach(() => { vi.spyOn(console, "log").mockImplementation(() => {}); });
@@ -65,6 +65,25 @@ describe("M2 checklist save (handler)", () => {
     const second = await env.call({ action: "checklist", checklist: scopeChecklist(), checklist_revision: rev });
     expect(second.code).toBe(409);
     expect(second.body["error"]).toBe("checklist_stale");
+  });
+
+  it("refuses Finish when another editor saves between validation and the write", async () => {
+    const env = installEnv({ photos: makePhotos() });
+    const underlyingFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH" && String(url).includes("/rest/v1/gh_visits") &&
+          JSON.parse(String(init.body)).report_status === "submitted") {
+        env.rows[0].updated_at = "2026-11-13T10:01:00.000Z";
+      }
+      return underlyingFetch(url, init);
+    });
+    const result = await env.call({
+      action: "submit", checklist: scopeChecklist(), checklist_revision: "2026-11-13T10:00:00.000Z",
+    });
+    expect(result.code).toBe(409);
+    expect(result.body.error).toBe("checklist_stale");
+    expect(env.rows[0].report_status).toBe("draft");
+    expect(env.resendCalls).toHaveLength(0);
   });
 
   it("a save with no revision still works (old clients)", async () => {
