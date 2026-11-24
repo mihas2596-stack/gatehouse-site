@@ -18,6 +18,7 @@ import {
   dbSelect,
   dbSelectStrict,
   dbInsert,
+  dbRpc,
   dbUpsert,
   dbUpdate,
   dbUpdateCount,
@@ -1045,6 +1046,13 @@ export default async function handler(req: Req, res: Res) {
     // through whenever its report is still in an editable state).
     if (resolved.restricted) {
       return json(409, { ok: false, error: "visit_closed" });
+    }
+
+    if (action === "sms_consent" && body.agreed === true) {
+      const saved = await dbRpc<boolean>("gh_sms_cleaner_consent", {
+        visit: visit.id, token_hash: hashToken(ct), disclosure: body.version,
+      });
+      return json(saved ? 200 : 409, { ok: saved === true });
     }
 
     // Pipeline gate: no ordinary work on an unconfirmed or cancelled

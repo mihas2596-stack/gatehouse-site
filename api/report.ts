@@ -1029,6 +1029,31 @@ export default async function handler(req: Req, res: Res) {
       res.status(409).json({ requestId, ok: false, error: "already_paid" });
       return;
     }
+    const storeIssuePhoto = async (visitId: string): Promise<void> => {
+      if (!photoB64) return;
+      try {
+        const bytes = Buffer.from(photoB64, "base64");
+        if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
+          const path = `visits/${visitId}/client-issue/${Date.now()}.jpg`;
+          if (await storagePut(path, bytes, "image/jpeg")) {
+            const inserted = await dbInsert("gh_photos", {
+              visit_id: visitId,
+              room: room || "Client photo",
+              storage_path: path,
+              kind: "client",
+              note: reason.slice(0, 300) || null,
+            });
+            if (inserted && dbIssuePhotoCount !== null) dbIssuePhotoCount++;
+            await logEvent(visitId, payload.bid, "system",
+              inserted ? "client_photo_stored" : "client_photo_store_failed", {});
+          } else {
+            await logEvent(visitId, payload.bid, "system", "client_photo_store_failed", {});
+          }
+        }
+      } catch {
+        /* the emailed copy still reaches the owner */
+      }
+    };
     if (state === "paid" && action === "issue") {
       // Post-payment issue: the visit is already paid, so this does NOT
       // pause or reverse anything automatically. The issue is recorded,
@@ -1043,30 +1068,6 @@ export default async function handler(req: Req, res: Res) {
       // is stored with the visit (kind "client") like a pre-payment one,
       // so it stays visible in the owner review and is protected by the
       // issue flags instead of living only in an email attachment.
-      const storePostpayPhoto = async (visitId: string): Promise<void> => {
-        if (!photoB64) return;
-        try {
-          const bytes = Buffer.from(photoB64, "base64");
-          if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-            const path = `visits/${visitId}/client-issue/${Date.now()}.jpg`;
-            if (await storagePut(path, bytes, "image/jpeg")) {
-              const inserted = await dbInsert("gh_photos", {
-                visit_id: visitId,
-                room: room || "Client photo",
-                storage_path: path,
-                kind: "client",
-                note: reason.slice(0, 300) || null,
-              });
-              await logEvent(visitId, payload.bid, "system",
-                inserted ? "client_photo_stored" : "client_photo_store_failed", {});
-            } else {
-              await logEvent(visitId, payload.bid, "system", "client_photo_store_failed", {});
-            }
-          }
-        } catch {
-          /* the emailed copy still reaches the owner */
-        }
-      };
       if (events.some((e) => e.event === "postpay_issue") || (!dbConfigured() && meta["gh_postpay_issue"] === "1")) {
         // MA-04: a second complaint after payment is a FOLLOW-UP, not a
         // silent drop. Mirror the pre-payment follow-up branch below
@@ -1096,7 +1097,7 @@ export default async function handler(req: Req, res: Res) {
               followupRecorded = await logEventStrict(vid, payload.bid, "client", "issue_followup", {
                 reason: reason.slice(0, 200), room: room.slice(0, 60),
               });
-              if (followupRecorded) await storePostpayPhoto(vid);
+              if (followupRecorded) await storeIssuePhoto(vid);
             }
           }
           if (followupRecorded && RESEND_PP) {
@@ -1205,7 +1206,7 @@ export default async function handler(req: Req, res: Res) {
             res.status(502).json({ requestId, ok: false, error: "db_error" });
             return;
           }
-          await storePostpayPhoto(vrows[0].id);
+          await storeIssuePhoto(vrows[0].id);
         }
       }
       if (RESEND_PP) {
@@ -1545,13 +1546,14 @@ export default async function handler(req: Req, res: Res) {
       // The old code returned already:true here and the message never
       // reached anyone.
       let followupRecorded = false;
-      if (reason.trim()) {
+      if (reason.trim() || photoB64) {
         followupRecorded = row
           ? await logEventStrict(row.id, payload.bid, "client", "issue_followup", {
               reason: reason.slice(0, 200), room: room.slice(0, 60),
             })
           : true;
         if (followupRecorded) {
+          if (row) await storeIssuePhoto(row.id);
           await sendMail({
             from: "Gatehouse site <info@gatehousehomecleaning.com>",
             to: [ownerNotificationEmail()],
@@ -1661,34 +1663,7 @@ export default async function handler(req: Req, res: Res) {
       gh_state: "issue_open", gh_issue_open: "1",
       gh_issue_reason: reason.slice(0, 200), gh_issue_source: "client", gh_issue_room: room.slice(0, 60),
     });
-    if (row) {
-      // Persist the customer's own photo on the visit (it is also emailed
-      // to the owner below) so it stays visible in the owner review
-      // instead of living only in an email attachment.
-      if (photoB64) {
-        try {
-          const bytes = Buffer.from(photoB64, "base64");
-          if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-            const path = `visits/${row.id}/client-issue/${Date.now()}.jpg`;
-            if (await storagePut(path, bytes, "image/jpeg")) {
-              const inserted = await dbInsert("gh_photos", {
-                visit_id: row.id,
-                room: room || "Client photo",
-                storage_path: path,
-                kind: "client",
-                note: reason.slice(0, 300) || null,
-              });
-              await logEvent(row.id, payload.bid, "system",
-                inserted ? "client_photo_stored" : "client_photo_store_failed", {});
-            } else {
-              await logEvent(row.id, payload.bid, "system", "client_photo_store_failed", {});
-            }
-          }
-        } catch {
-          /* the emailed copy still reaches the owner */
-        }
-      }
-    }
+    if (row) await storeIssuePhoto(row.id);
 
     // Best-effort notifications — the issue is already recorded on the
     // server at this point; an email failure changes nothing for the

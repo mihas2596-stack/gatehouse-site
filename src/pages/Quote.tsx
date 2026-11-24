@@ -1,3 +1,4 @@
+import { SMS_CLIENT, SMS_DETAILS, SMS_VERSION } from "@/lib/smsDisclosure";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -276,6 +277,7 @@ const Quote = () => {
   // pressed with a missing or invalid ZIP.
   const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [smsConsent, setSmsConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
   // Restore the step the visitor was on (a reload mid-form lands back
@@ -357,6 +359,7 @@ const Quote = () => {
   ) => {
     requestRef.current = null;
     const t = e.target as HTMLInputElement;
+    if (t.name === "phone") setSmsConsent(false);
     if (t.type === "checkbox") {
       setBooking((p) => ({ ...p, [t.name]: t.checked }));
     } else if (t.name === "state") {
@@ -617,6 +620,8 @@ const Quote = () => {
         attribution: campaignAttribution(),
         terms_consent: booking.termsConsent,
         photo_consent: booking.photoConsent,
+        sms_consent: import.meta.env.VITE_SERVICE_SMS_ENABLED === "true" && smsConsent,
+        sms_version: SMS_VERSION,
       };
       setSubmitError("");
       const res = await fetch("/api/send-contact-email", {
@@ -1335,6 +1340,10 @@ const Quote = () => {
                   <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary">Privacy Policy</a>. *
                 </label>
               </div>
+              {import.meta.env.VITE_SERVICE_SMS_ENABLED === "true" && <label className="mt-4 flex items-start gap-3">
+                <input type="checkbox" checked={smsConsent} onChange={e => setSmsConsent(e.target.checked)} className="mt-1 h-5 w-5 shrink-0" />
+                <span>{SMS_CLIENT} {SMS_DETAILS}</span>
+              </label>}
               {bookingErrors.termsConsent && <p id="b-terms-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.termsConsent}</p>}
               <p className="mt-2 text-sm text-muted-foreground">Binding arbitration means disputes are resolved outside court. You can opt out within 30 days — see Terms, Section 16.5.</p>
               <div className="mt-5">

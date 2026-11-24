@@ -17,6 +17,7 @@ const Privacy = () => {
         <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-8">
           Privacy Policy
         </h1>
+        <p className="mb-4">Gatehouse Home Cleaning offers optional automated service texts to customers and contractors who opt in. Frequency varies with bookings. Message and data rates may apply. Reply STOP to unsubscribe or HELP for assistance. Consent is optional for booking or working with us. We share mobile numbers and consent information with messaging providers for delivery and opt-out handling. We do not share mobile opt-in information with third parties for their marketing.</p>
 
         <p className="mb-6 font-semibold">Last updated November 6, 2026</p>
 

@@ -1,3 +1,4 @@
+import { SMS_CLEANER, SMS_DETAILS, SMS_VERSION } from "@/lib/smsDisclosure";
 import { resolveLinkToken } from "@/lib/tokenStrip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -154,6 +155,8 @@ const Cleaner = () => {
   const [deleteError, setDeleteError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<Photo | null>(null);
 
+  const [smsChecked, setSmsChecked] = useState(false);
+  const [smsFeedback, setSmsFeedback] = useState("");
   const post = useCallback(
     async (payload: Record<string, unknown>) => {
       const r = await fetch("/api/cleaner", {
@@ -632,6 +635,18 @@ const Cleaner = () => {
             {`This visit is on ${fmtDate(v.date)} — you can send the report after the visit.`}
           </p>
         )}
+        {import.meta.env.VITE_SERVICE_SMS_ENABLED === "true" && searchParams.get("pv") !== "1" && <details className="my-3">
+          <summary>Assignment text messages</summary>
+          <label><input type="checkbox" checked={smsChecked} onChange={e => setSmsChecked(e.target.checked)} /> {SMS_CLEANER} {SMS_DETAILS}</label>
+          <p><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a></p>
+          <button type="button" disabled={!smsChecked} onClick={async () => {
+            try {
+              const result = await post({ action: "sms_consent", agreed: true, version: SMS_VERSION });
+              setSmsFeedback(result.ok ? "Preference saved. If previously opted out, reply START to the sender." : "Could not save. Check your roster phone with the owner.");
+            } catch { setSmsFeedback("Could not save. Please try again."); }
+          }}>Save text preference</button>
+          <p role="status">{smsFeedback}</p>
+        </details>}
         {lastUpdated && (
           <p className="text-xs text-muted-foreground mt-3">
             Updated {lastUpdated} Atlanta time.
