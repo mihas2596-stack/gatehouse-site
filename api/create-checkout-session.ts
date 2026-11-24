@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
-import { carryDedupMarkers } from "./_stripe_customer.js";
+import { pickCustomerByEmail, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
+import { isAllowedOrigin } from "./_origin.js";
 
 type BookingPayload = {
   bid: string;
@@ -282,7 +283,7 @@ const toCents = (raw: string | undefined): number | null => {
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }
@@ -398,8 +399,9 @@ export default async function handler(req: Req, res: Res) {
     // skip the gate. When the DB is not configured there is no row to
     // check (legacy token-only path); when it is configured but
     // unreadable, fail closed instead of issuing a session blind.
+    let linkedCustomerId: string | null = null;
     if (arrivedWithToken && dbConfigured()) {
-      const visitRes = await dbSelectStrict<{ status: string | null }>(
+      const visitRes = await dbSelectStrict<{ status: string | null; stripe_customer_id?: string | null }>(
         "gh_visits",
         `booking_id=eq.${encodeURIComponent(bookingId)}&order=visit_no.desc&limit=1`,
       );
@@ -408,6 +410,7 @@ export default async function handler(req: Req, res: Res) {
         return json(503, { ok: false, error: "db_unreadable" });
       }
       const visitRow = visitRes.rows[0] ?? null;
+      linkedCustomerId = visitRow?.stripe_customer_id ?? null;
       const visitStatus = visitRow?.status ?? "";
       if (visitStatus === "cancelled") return json(409, { ok: false, error: "visit_cancelled" });
       if (visitStatus === "paid") return json(409, { ok: false, error: "already_paid" });
@@ -415,47 +418,32 @@ export default async function handler(req: Req, res: Res) {
       if (visitStatus === "payment_pending") return json(409, { ok: false, error: "payment_in_progress" });
     }
 
-    // Step: reuse an existing customer when the email is already known,
-    // so repeat visits don't create duplicates. Uses the list endpoint with
-    // an email filter (not /customers/search) so restricted API keys work.
-    //
-    // SECURITY: reuse is allowed ONLY when the email came from a verified
-    // booking token (bt). In standalone mode (typed email, no token) we MUST
-    // NOT look up an existing customer: the typed email is unverified, and
-    // reusing would let anyone attach to — and overwrite metadata of —
-    // someone else's Stripe Customer. Standalone always creates a fresh
-    // customer.
-    // M2: bt is ALWAYS non-empty here (the standalone branch just minted
-    // one), so the guard must look at whether the request ARRIVED with a
-    // verified token — not at the current value of bt.
-    const hasVerifiedBooking = arrivedWithToken;
+    // A new quote contains the email typed by the visitor. Only a stored
+    // visit/customer link or Stripe metadata for this booking authorizes reuse.
     let customerId: string | null = null;
-    if (hasVerifiedBooking) {
-    try {
-      const found = await stripeGet(
-        STRIPE_SECRET_KEY,
-        `/customers?${new URLSearchParams({ email, limit: "1" }).toString()}`,
+    if (linkedCustomerId) {
+      const linked = await resolveCustomerByRowId(
+        (id) => stripeGet(STRIPE_SECRET_KEY, `/customers/${encodeURIComponent(id)}`),
+        linkedCustomerId, email,
       );
-      if (!found.ok) {
-        logErr("customer_lookup", `stripe ${found.status}: ${stripeErrMsg(found.data)}`);
-        return json(500, { ok: false, error: "server_error" });
+      if (!linked) return json(503, { ok: false, error: "customer_unavailable" });
+      customerId = linked.id;
+    } else if (arrivedWithToken) {
+      const lookup = await stripeGet(
+        STRIPE_SECRET_KEY,
+        `/customers?${new URLSearchParams({ email, limit: "100" })}`,
+      );
+      if (!lookup.ok) return json(503, { ok: false, error: "customer_unavailable" });
+      const candidates = (lookup.data.data as StripeCustomerLite[] | undefined) ?? [];
+      customerId = pickCustomerByEmail(candidates, email, bookingId)?.id ?? null;
+      if (!customerId && lookup.data.has_more === true) {
+        // The list is incomplete. Search by the booking's identity before
+        // creating a second customer for a long-running booking.
+        const query = "metadata['gh_booking_id']:'" + bookingId.replace(/'/g, "") + "'";
+        const scoped = await stripeGet(STRIPE_SECRET_KEY, `/customers/search?${new URLSearchParams({ query })}`);
+        if (!scoped.ok) return json(503, { ok: false, error: "customer_unavailable" });
+        customerId = pickCustomerByEmail((scoped.data.data as StripeCustomerLite[]) ?? [], email, bookingId)?.id ?? null;
       }
-      const list = (found.data["data"] as Array<{ id?: string; email?: string }> | undefined) ?? [];
-      // C13: /customers?email is a prefix-ish match, not an exact one —
-      // reuse only a record whose email matches exactly; otherwise a
-      // fresh customer is created below.
-      const match = list.find((c) => typeof c.id === "string"
-        && typeof c.email === "string" && c.email.trim().toLowerCase() === email.trim().toLowerCase());
-      if (match?.id) {
-        customerId = match.id;
-        log("customer_lookup", "reused");
-      }
-    } catch (err) {
-      logErr("customer_lookup", err);
-      return json(500, { ok: false, error: "server_error" });
-    }
-    } else {
-      log("customer_lookup", "skipped_standalone");
     }
 
     if (!customerId) {
@@ -484,59 +472,6 @@ export default async function handler(req: Req, res: Res) {
         logErr("customer_create", err);
         return json(500, { ok: false, error: "server_error" });
       }
-    } else {
-      // Link the existing customer to this booking (server-verified email only).
-      // The customer is shared by every booking of this email, and its
-      // metadata doubles as the lifecycle record — so rebinding MUST clear
-      // the previous booking's lifecycle keys. Anything left behind (a
-      // confirmed date, a sent report, a cleaner, an amount) would leak
-      // into THIS booking's pages and charges. Booking-scoped truth lives
-      // in gh_visits/gh_events and is re-hydrated on demand; clearing here
-      // loses nothing.
-      const clearStale: Record<string, string> = {};
-      for (const k of [
-        "gh_booking_confirmed", "gh_confirmed_date", "gh_confirmed_window",
-        "gh_proposed_date", "gh_alt_dates", "gh_cleaner_name", "gh_cleaner_photo",
-        "gh_report_sent_at", "gh_report_version", "gh_report_amount_cents",
-        "gh_report_bounced", "gh_report_email_id", "gh_rp_source",
-        "gh_rp_0", "gh_rp_1", "gh_rp_2", "gh_rp_3",
-        "gh_issue_open", "gh_issue_ever", "gh_issue_reason", "gh_issue_room",
-        "gh_issue_resolved_at", "gh_reclean_date",
-        "gh_cancel_scope", "gh_cancel_fee_cents", "gh_cancelled_at",
-        "gh_receipt_email_id", "gh_charge_id", "gh_last_payment",
-        "gh_reminded_at", "gh_reminder_for", "gh_early_reminded_at", "gh_early_reminder_for",
-        "gh_card_email_sent",
-        "gh_postpay_issue", "gh_postpay_issue_reason", "gh_postpay_issue_room", "gh_postpay_issue_at",
-        "gh_report_client_action", "gh_report_responded_at", "gh_access_notes", "gh_no_photo_zones",
-      ]) clearStale[`metadata[${k}]`] = "";
-      // G3Z: the dedup markers (gh_last_payment, gh_fee_last_payment)
-      // must survive the rebind — read the live values first and carry
-      // them back into the patch AFTER the clear, so a redelivered
-      // payment_intent.succeeded is still recognised as recorded.
-      // Best-effort: if the read fails, the DB row/journal remains the
-      // durable dedup authority.
-      let currentMeta: Record<string, string> | undefined;
-      try {
-        const current = await stripeGet(STRIPE_SECRET_KEY, `/customers/${customerId}`);
-        if (current.ok) currentMeta = (current.data["metadata"] as Record<string, string> | undefined);
-      } catch { /* ignore — carry nothing */ }
-      try {
-        await stripePost(STRIPE_SECRET_KEY, `/customers/${customerId}`, {
-          ...clearStale,
-          ...carryDedupMarkers(currentMeta),
-          "metadata[gh_booking_id]": bookingId,
-          "metadata[gh_state]": "awaiting_card",
-          ...(toCents(bookingSummary.first) !== null
-            ? { "metadata[gh_first_price_cents]": String(toCents(bookingSummary.first)) }
-            : { "metadata[gh_first_price_cents]": "" }),
-          ...(toCents(bookingSummary.recurring) !== null
-            ? { "metadata[gh_recurring_price_cents]": String(toCents(bookingSummary.recurring)) }
-            : { "metadata[gh_recurring_price_cents]": "" }),
-        }, `customer_meta_${bookingId}`);
-      } catch (err) {
-        logErr("customer_meta", err);
-        // Non-fatal: the session below carries the booking linkage too.
-      }
     }
 
     // Step: Checkout Session in setup mode — $0 today, card saved on the
@@ -545,6 +480,9 @@ export default async function handler(req: Req, res: Res) {
     // success_url carries the Stripe session id so /save-card verifies it
     // server-side (never trusts ?saved=1 alone).
     const base = siteBase(origin);
+    // A reopened email may carry a newly issued token. Stripe requires all
+    // parameters under one key to match, including the return URLs.
+    const sessionAttempt = createHash("sha256").update(JSON.stringify([base, bt, parsed.data.request_id ?? ""])).digest("hex");
     try {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",
@@ -562,7 +500,7 @@ export default async function handler(req: Req, res: Res) {
         cancel_url: `${base}/save-card?canceled=1&bt=${encodeURIComponent(bt)}`,
         "metadata[source]": "gatehouse_save_card",
         "metadata[gh_booking_id]": bookingId,
-      }, `setup_${bookingId}`);
+      }, `setup_${sessionAttempt}`);
       if (!session.ok || typeof session.data["url"] !== "string") {
         logErr("checkout_session", `stripe ${session.status}: ${stripeErrMsg(session.data)}`);
         return json(500, { ok: false, error: "server_error" });

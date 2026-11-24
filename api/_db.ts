@@ -125,6 +125,23 @@ export async function dbUpdate(
   return r.ok;
 }
 
+/** Return exactly the rows written by this PATCH, including their revisions. */
+export async function dbUpdateReturning<T = Record<string, unknown>>(
+  table: string,
+  match: string,
+  patch: Record<string, unknown>,
+  updatedAt = new Date().toISOString(),
+): Promise<T[] | null> {
+  const cfg = dbConfig();
+  if (!cfg) return null;
+  const r = await rest(cfg, `${table}?${match}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...patch, updated_at: updatedAt }),
+    prefer: "return=representation",
+  });
+  return r.ok && Array.isArray(r.data) ? r.data as T[] : null;
+}
+
 /**
  * Conditional update with a row count (compare-and-swap for status
  * transitions, R01). PATCHes only rows matching `match` and returns
@@ -140,15 +157,8 @@ export async function dbUpdateCount(
   match: string,
   patch: Record<string, unknown>,
 ): Promise<number> {
-  const cfg = dbConfig();
-  if (!cfg) return -1;
-  const r = await rest(cfg, `${table}?${match}`, {
-    method: "PATCH",
-    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
-    prefer: "return=representation",
-  });
-  if (!r.ok || !Array.isArray(r.data)) return -1;
-  return r.data.length;
+  const rows = await dbUpdateReturning(table, match, patch);
+  return rows?.length ?? -1;
 }
 
 /** Upsert on a unique constraint (e.g. booking_id,visit_no). */

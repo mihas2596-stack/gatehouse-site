@@ -13,23 +13,23 @@
   "rewrites": [
     {
       "source": "/save-card",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/cleaner",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/owner",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/report",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/visit",
-      "destination": "/"
+      "destination": "/cabinet.html"
     },
     {
       "source": "/areas/:city",

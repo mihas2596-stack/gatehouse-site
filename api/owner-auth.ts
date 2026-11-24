@@ -21,10 +21,11 @@
 // the database is unavailable the throttle fails open — the panel itself
 // needs the database anyway, so this only matters for the send step.
 import { dbSelect, logEvent } from "./_db.js";
-import { ownerNotificationEmail } from "./_owner_email.js";
+import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { mintOwnerLoginToken, mintOwnerSessionToken, verifyOwnerLoginToken } from "./_owner_auth.js";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { notFoundHandler } from "./_not_found.js";
+import { isAllowedOrigin } from "./_origin.js";
 
 type Req = {
   method?: string;
@@ -57,7 +58,7 @@ export default async function handler(req: Req, res: Res) {
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     return json(403, { ok: false, error: "origin_not_allowed" });
   }
   if (req.method === "GET") {
@@ -112,8 +113,8 @@ export default async function handler(req: Req, res: Res) {
   }
 
   const token = mintOwnerLoginToken(ADMIN_TOKEN, Math.floor(Date.now() / 1000));
-  const link = `https://www.gatehousehomecleaning.com/owner?ol=${token}`;
-  await logEvent(null, null, "owner", "owner_login_link_sent");
+  const link = new URL(ownerPanelUrl(typeof body.visit === "string" ? body.visit : null));
+  link.hash = new URLSearchParams({ ol: token }).toString();
 
   try {
     const r = await fetch("https://api.resend.com/emails", {
@@ -128,6 +129,7 @@ export default async function handler(req: Req, res: Res) {
       signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) return json(500, { ok: false, error: "email_failed" });
+    await logEvent(null, null, "owner", "owner_login_link_sent");
   } catch {
     return json(500, { ok: false, error: "email_failed" });
   }

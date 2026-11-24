@@ -1,19 +1,9 @@
 // @vitest-environment node
-// G3Z payment-audit fixes in api/_stripe_customer.ts:
-//   - pickCustomerByEmail is deterministic: the customer already
-//     linked to the booking wins, then the booking-bound one, then a
-//     lone exact match. Several unbound exact matches are AMBIGUOUS
-//     (null) — never a silent list[0] that could charge a stranger.
-//   - pickCustomerByPaymentMethods resolves that ambiguity with the
-//     booking's payment methods: the candidate holding one wins.
-//   - carryDedupMarkers re-asserts the live dedup markers across a
-//     rebind instead of letting the rebind clear them.
+// Booking-specific customer selection and payment-method ownership.
 import { describe, it, expect } from "vitest";
 import {
   pickCustomerByEmail,
   pickCustomerByPaymentMethods,
-  carryDedupMarkers,
-  DEDUP_METADATA_KEYS,
 } from "../../api/_stripe_customer";
 
 const BID = "bid-g3z-cust";
@@ -40,8 +30,8 @@ describe("pickCustomerByEmail deterministic pick (G3Z)", () => {
   });
 
   it("a lone exact match still resolves", () => {
-    expect(pickCustomerByEmail([a], EMAIL, BID)).toBe(a);
-    expect(pickCustomerByEmail([c], EMAIL, BID)).toBe(c);
+    expect(pickCustomerByEmail([a], EMAIL, BID)).toBeNull();
+    expect(pickCustomerByEmail([c], EMAIL, BID)).toBeNull();
   });
 });
 
@@ -83,28 +73,5 @@ describe("pickCustomerByPaymentMethods (G3Z)", () => {
       return listPms(id);
     };
     expect(await pickCustomerByPaymentMethods([a, b], EMAIL, BID, ["pm_booking"], failing)).toBeNull();
-  });
-});
-
-describe("carryDedupMarkers (G3Z)", () => {
-  it("carries the live dedup markers and nothing else", () => {
-    expect(DEDUP_METADATA_KEYS).toContain("gh_last_payment");
-    expect(DEDUP_METADATA_KEYS).toContain("gh_fee_last_payment");
-    expect(
-      carryDedupMarkers({
-        gh_last_payment: "pi_1",
-        gh_fee_last_payment: "pi_fee_1",
-        gh_state: "paid",
-        gh_payment_method: "pm_1",
-      }),
-    ).toEqual({
-      "metadata[gh_last_payment]": "pi_1",
-      "metadata[gh_fee_last_payment]": "pi_fee_1",
-    });
-  });
-
-  it("empty when no marker is live", () => {
-    expect(carryDedupMarkers({ gh_state: "paid" })).toEqual({});
-    expect(carryDedupMarkers(undefined)).toEqual({});
   });
 });

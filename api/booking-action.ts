@@ -34,6 +34,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
+import { isAllowedOrigin } from "./_origin.js";
 import { buildWorkRooms } from "./_work_scope.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
@@ -355,7 +356,7 @@ export async function sendPaymentFailedEmailOnce(
 
 export async function sendReceiptEmailOnce(
   secretKey: string,
-  customerId: string,
+  customerId: string | null,
   meta: Record<string, string>,
   bookingId: string,
 ): Promise<boolean> {
@@ -447,7 +448,7 @@ export async function sendReceiptEmailOnce(
 
 async function sendReceiptAfterClaim(
   secretKey: string,
-  customerId: string,
+  customerId: string | null,
   meta: Record<string, string>,
   bookingId: string,
   rowId: string | null,
@@ -455,7 +456,7 @@ async function sendReceiptAfterClaim(
   const key = process.env["RESEND_API_KEY"];
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
   if (!key || !Number.isFinite(amountCents) || amountCents <= 0) return false;
-  const custRes = await stripeGet(secretKey, `/customers/${customerId}`);
+  const custRes = customerId ? await stripeGet(secretKey, `/customers/${customerId}`) : { data: {} as Record<string, unknown> };
   const contact = await bookingEmailContact(bookingId, typeof custRes.data["email"] === "string" ? (custRes.data["email"] as string) : "", typeof custRes.data["name"] === "string" ? (custRes.data["name"] as string) : "");
   const custEmail = contact.email;
   const custName = contact.name;
@@ -503,7 +504,7 @@ async function sendReceiptAfterClaim(
     if (!resp.ok) return false;
     const j = (await resp.json()) as { id?: string };
     if (typeof j.id === "string" && j.id) {
-      await stripePost(secretKey, `/customers/${customerId}`, {
+      if (customerId) await stripePost(secretKey, `/customers/${customerId}`, {
         "metadata[gh_receipt_email_id]": j.id,
       });
       if (dbConfigured()) {
@@ -1274,7 +1275,7 @@ async function sendConfirmationEmail(args: {
 
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
-  if (origin && (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin))) {
+  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }
@@ -1448,6 +1449,7 @@ export default async function handler(req: Req, res: Res) {
       } else {
         const phone = await loadClientPhone(visit.id);
         const body = ownerRequestEmailBody({
+          visitId: visit.id,
           name: visit.client_name ?? "",
           email: visit.client_email ?? "",
           phone: phone ?? undefined,
