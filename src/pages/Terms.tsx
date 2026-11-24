@@ -261,7 +261,7 @@ const Terms = () => {
 
         <h2 id="terms-15" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">15. Electronic Communications</h2>
         <p className="mb-8">
-          We send booking emails to the address you provide. Standard message and data rates may apply. You may opt out of marketing communications at any time by replying STOP to text messages, clicking "unsubscribe" in emails, or contacting us directly. Text messages are sent only if you opt in at booking. Reply STOP at any time to stop text messages, or HELP for help.
+          We send booking emails to the address you provide. Gatehouse Home Cleaning offers optional automated service texts to customers and contractors who opt in. Frequency varies with bookings. Message and data rates may apply. Reply STOP to unsubscribe or HELP for assistance. Consent is optional for booking or working with us. We share mobile numbers and consent information with messaging providers for delivery and opt-out handling. We do not share mobile opt-in information with third parties for their marketing.
         </p>
 
         <h2 id="terms-16" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">16. Dispute Resolution and Binding Arbitration</h2>

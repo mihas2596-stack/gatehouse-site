@@ -1,9 +1,10 @@
+import { isAllowedOrigin } from "./_origin.js";
+import { normalizePhone } from "./_sms.js";
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbDelete, logEvent } from "./_db.js";
 import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { emailDate, emailArrivalWindow, emailDocument, paymentEmailCopy } from "./_email_copy.js";
-import { isAllowedOrigin } from "./_origin.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 
 type BookingPayload = {
@@ -493,6 +494,7 @@ const ContactSchema = z.object({
   terms_consent: z.boolean().optional(),
   photo_consent: z.boolean().optional(),
   sms_consent: z.boolean().optional(),
+  sms_version: z.string().max(30).optional(),
   // Explicit second-visit request: bypasses natural-key dedup only. Only an intentional second visit
   // sends this — never set by default, never implied by a retry.
   force_new_booking: z.boolean().optional(),
@@ -937,6 +939,8 @@ export default async function handler(req: Req, res: Res) {
             }
             const inserted = await dbInsert<VisitDedupRow>("gh_visits", {
               booking_id: bookingId,
+              ...((process.env.SMS_MODE === "live" || process.env.SMS_MODE === "pilot") && parsed.data.sms_consent && parsed.data.sms_version === "2026-11-23" && normalizePhone(phone)
+                ? { sms_opt_in_phone: normalizePhone(phone) } : {}),
               visit_no: 1,
               client_name: (name ?? "").trim() || null,
               client_email: (email ?? "").trim() || null,

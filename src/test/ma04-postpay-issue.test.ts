@@ -224,6 +224,7 @@ describe("MA-04/MA-05: post-payment complaint sets the row flags", () => {
   it("a photo is stored with kind client (retention-protected by the flags)", async () => {
     const issue = await postIssue({ reason: "found a crack", room: "Kitchen", photo: JPEG_B64 });
     expect(issue.code).toBe(200);
+    expect(issue.body["issue_photo_count"]).toBe(1);
     expect(dbPhotos).toHaveLength(1);
     expect(dbPhotos[0]["kind"]).toBe("client");
     expect(dbPhotos[0]["visit_id"]).toBe(ROW_ID);

@@ -391,6 +391,7 @@ function clientIp(headers: Record<string, string | string[] | undefined>): strin
 }
 
 type Req = {
+  url?: string;
   method?: string;
   headers: Record<string, string | string[] | undefined>;
   query?: Record<string, string | string[] | undefined>;
@@ -736,6 +737,10 @@ async function reconcileCard(
 }
 
 export default async function handler(req: Req, res: Res) {
+  if (req.query?.sms === "1") {
+    const { default: smsHandler } = await import("./_sms_handler.js");
+    return smsHandler(req, res);
+  }
   const origin = req.headers["origin"];
   const o = Array.isArray(origin) ? origin[0] : origin;
   if (o && ALLOWED_ORIGINS.includes(o)) {

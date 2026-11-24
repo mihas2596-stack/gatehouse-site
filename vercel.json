@@ -41,6 +41,7 @@
     }
   ],
   "functions": {
+    "api/visit.ts": { "maxDuration": 60 },
     "api/send-contact-email.ts": {
       "maxDuration": 40
     },
