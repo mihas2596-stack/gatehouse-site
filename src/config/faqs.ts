@@ -42,7 +42,7 @@ export const FAQS: { q: string; a: string; group: FaqGroup; link?: { href: strin
   {
     q: "What if I'm not happy with the cleaning?",
     group: "Quality",
-    a: "Missed something on the checklist? We fix it free within 72 hours after you report it. Tap Report an issue on your photo report page within 24 hours after it is sent. This immediately blocks automatic payment. You can also email hello@gatehousehomecleaning.com; email needs a manual response, so use the report button for an immediate payment block. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
+    a: "Missed something on the checklist? Report it within 24 hours after your photo report is sent: tap Report an issue on your photo report page. This immediately blocks automatic payment. We fix it free within 72 hours after you report it. You can also email hello@gatehousehomecleaning.com; email needs a manual response, so use the report button for an immediate payment block. While your issue is open, the automatic charge is blocked for this visit. After we fix it, you approve the report again to pay — the automatic charge never resumes on its own.",
   },
   {
     q: "Who will be cleaning my home?",
