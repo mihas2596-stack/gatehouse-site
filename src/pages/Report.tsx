@@ -305,7 +305,10 @@ const Report = () => {
       } else if (j && j.error === "issue_window_expired") {
         setActionError("The 24-hour window for reporting an issue on this report has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
       } else if (j && j.error === "claim_window_expired") {
-        setActionError("The window for reporting an issue after this visit has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
+        // O-063: claim_window_expired fires only outside BOTH Terms windows
+        // (api/report.ts C26) — §7, 24h after the report, and §10.2, 48h
+        // after service completion — so name both, like the message above.
+        setActionError("The 24-hour window for reporting an issue on this report and the 48-hour window for a damage claim after this visit have both passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
       } else if (j && j.state && j.state !== "invalid_link") {
         setData(j);
         if (j.already === true && j.followup_recorded === true) {
@@ -1023,7 +1026,7 @@ const Report = () => {
           <div className="text-center">
             <h1 className="font-heading text-3xl md:text-[44px] font-bold mb-4">Refunded</h1>
             <p className="text-lg text-foreground mb-6">
-              This visit was refunded — no charge stands for it. If you have any questions, reply to your receipt email or contact us.
+              This visit was refunded — no charge stands for it. If you have any questions, email hello@gatehousehomecleaning.com.
             </p>
             {summary}
             {(data.photo_items && data.photo_items.length > 0) || (data.checklist && data.checklist.rooms.length > 0) ? (
