@@ -397,6 +397,12 @@ a:focus-visible, button:focus-visible { outline: 2px solid hsl(var(--ring)); out
   footer .font-script { font-size: 1.75rem; letter-spacing: normal; }
   input, select, textarea { font-size: 1rem; }
   #booking-request { padding-bottom: 6rem; }
+  /* Mobile fix (25.11.2026): grid children default to min-width:auto,
+     so a wide min-content child (e.g. the native date input) can push
+     the form wider than the viewport. The overflow-x:hidden mask on
+     html/body stays — this only stops the grid from expanding. */
+  #booking-request .grid > * { min-width: 0; }
+  #booking-request input[type="date"] { min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }

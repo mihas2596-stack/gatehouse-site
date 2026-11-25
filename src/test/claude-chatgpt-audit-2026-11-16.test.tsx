@@ -286,11 +286,15 @@ describe("V1: When you pay has three labelled lines (visual report)", () => {
 describe("V2: rooms to skip, entry codes, date is a request (visual report)", () => {
   beforeEach(() => setNow("2026-11-26T00:00:00Z"));
 
-  it("shows the skip-rooms line above the photo checkbox, the no-codes line, and the date-request line by the price", () => {
+  it("shows the photo-report intro, the skip-rooms line in photo privacy, the no-codes line, and the date-request line by the price", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByText("You can mark rooms to skip in photos on your visit page before the visit.")).toBeInTheDocument();
+    // Mobile copy (25.11.2026): the intro is one plain sentence; the
+    // skip-rooms sentence lives in the "Photo privacy & rooms to skip"
+    // details below the checkbox.
+    expect(screen.getByText("After cleaning, we send you photos of the cleaned rooms. Only you can see them.")).toBeInTheDocument();
+    expect(screen.getByText(/On your visit page, you can mark rooms to skip in photos\./)).toBeInTheDocument();
     expect(screen.getByText(/No keys or entry codes needed now/)).toBeInTheDocument();
     expect(screen.getByText(/Your date is a request/)).toBeInTheDocument();
     expect(screen.getByText(/confirm your date, arrival window, and who.s coming/)).toBeInTheDocument();

@@ -53,7 +53,7 @@ const TERMS_CONSENT_TEXT =
   "I agree to the Terms, including binding arbitration (Section 16), and acknowledge the Privacy Policy.";
 const PHOTO_CONSENT_MAIN =
   "I agree to photos of the cleaned rooms for my private cleaning report.";
-const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without separate written permission. You can mark rooms you'd rather we skip in photos on your visit page before the visit.";
+const PHOTO_CONSENT_SUB = "Kept for 90 days. Never published without your separate written permission. On your visit page, you can mark rooms to skip in photos.";
 const PHOTO_CONSENT_TEXT = `${PHOTO_CONSENT_MAIN} ${PHOTO_CONSENT_SUB}`;
 
 type QuoteDraft = {
@@ -427,6 +427,37 @@ const Quote = () => {
     }
     setStep(2);
   };
+  // Mobile fix (25.11.2026): on iOS Safari .focus() on a radio does NOT
+  // scroll, so a validation failure looked like a dead button — the only
+  // error text sat far above the fold. Scroll the first invalid field
+  // into view (center) AND focus it, and return its message so the
+  // caller can also show it next to the button. scrollIntoView is
+  // optional-chained: jsdom (unit tests) does not implement it.
+  const scrollToFirstInvalid = (errs: Record<string, string>): string => {
+    const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date", "termsConsent", "photoConsent"];
+    for (const f of order) {
+      const el = refs[f].current;
+      if (errs[f] && el) {
+        el.scrollIntoView?.({ block: "center" });
+        el.focus();
+        return errs[f];
+      }
+    }
+    const entryHome = errs.entryMethod ? document.getElementById("entry-home") : null;
+    if (entryHome) {
+      entryHome.scrollIntoView?.({ block: "center" });
+      entryHome.focus();
+      return errs.entryMethod;
+    }
+    const entryDoorCode = errs.entryDetail ? document.getElementById("entry-detail-door_code") : null;
+    if (entryDoorCode) {
+      entryDoorCode.scrollIntoView?.({ block: "center" });
+      entryDoorCode.focus();
+      return errs.entryDetail;
+    }
+    return "";
+  };
+
   const goToStep3 = () => {
     // Step-2 validation: visit fields + the choices that live on step 2
     // (entry method, photo consent). Terms stay on step 3.
@@ -435,13 +466,15 @@ const Quote = () => {
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
-      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
-      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
-      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
-      if (errs.photoConsent) { refs.photoConsent.current?.focus(); return; }
+      // The error must be visible where the tap happened, not only as
+      // inline text under a field above the fold.
+      const firstMsg = scrollToFirstInvalid(errs);
+      setSubmitError(firstMsg || Object.values(errs)[0] || "");
       return;
     }
+    // A stale step-2 error must not linger on step 3 (it renders the
+    // same submitError alert above the final button).
+    setSubmitError("");
     setStep(3);
     // Audit fix (§10): gh_quote_review was declared but never fired,
     // so "reached review" was unmeasurable. Fired once per entry here
@@ -508,25 +541,21 @@ const Quote = () => {
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
-      // A stale submit error from an earlier attempt must not linger
-      // next to the inline error shown for this attempt.
-      setSubmitError("");
-      const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date", "termsConsent", "photoConsent"];
-      for (const f of order) if (errs[f] && refs[f].current) { refs[f].current.focus(); return; }
-      const entryHome = errs.entryMethod ? document.getElementById("entry-home") : null;
-      if (entryHome) { entryHome.focus(); return; }
-      const entryDoorCode = errs.entryDetail ? document.getElementById("entry-detail-door_code") : null;
-      if (entryDoorCode) { entryDoorCode.focus(); return; }
+      // Mobile fix (25.11.2026): the error must be visible next to the
+      // submit button as well as inline — on step 3 the button sits
+      // below the fold and the inline error alone is easy to miss.
+      // scrollToFirstInvalid scrolls AND focuses; its message goes to
+      // the alert above the button.
+      const firstMsg = scrollToFirstInvalid(errs);
       // MA-06 (belt-and-braces): no failing field could be focused — its
       // input is not mounted on this step. The photo-consent checkbox
-      // lives only on step 2, so on step 3 its ref is null and the loop
+      // lives only on step 2, so on step 3 its ref is null and the helper
       // above can neither focus it nor show it inline. Say so in the
       // submit error instead of returning silently.
-      if (errs.photoConsent) {
+      if (!firstMsg && errs.photoConsent) {
         setSubmitError("Please agree to photos for your private report. Go back to step 2 to check the photo consent box.");
       } else {
-        const firstErr = Object.values(errs)[0];
-        if (firstErr) setSubmitError(firstErr);
+        setSubmitError(firstMsg || Object.values(errs)[0] || "");
       }
       return;
     }
@@ -1102,7 +1131,7 @@ const Quote = () => {
                 <details className="mt-2">
                   <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 break-words">
-                    <dt className="font-semibold">Address</dt><dd className="min-w-0">{fullAddress || "—"}</dd>
+                    <dt className="font-semibold">Address</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{fullAddress || "—"}</dd>
                     <dt className="font-semibold">Home</dt><dd>{`${bedrooms} ${bedrooms === 1 ? "bedroom" : "bedrooms"} · ${fullBaths} full bathroom${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? ` · ${halfBaths} half bathroom${halfBaths === 1 ? "" : "s"}` : ""}`}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{`${booking.name} · ${booking.email} · ${booking.phone}`}</dd>
                     <dt className="font-semibold">Entry</dt><dd>{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd>
@@ -1162,14 +1191,15 @@ const Quote = () => {
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
-                    id="b-date" name="date" type="date" min={minDate} ref={refs.date}
+                    id="b-date" name="date" type="date" min={minDate} ref={refs.date} lang="en-US"
                     required maxLength={10} pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
                     value={booking.date} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.date} aria-describedby={bookingErrors.date ? "b-date-error" : undefined}
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.date && <p id="b-date-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.date}</p>}
-                  <p className="mt-1.5 text-sm text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
+                  {booking.date && !bookingErrors.date && <p className="mt-1.5 text-sm text-muted-foreground">Selected: {fmtDate(booking.date)}</p>}
+                  <p className="mt-1.5 text-sm text-muted-foreground">Please pick a date at least 3 days ahead. We&apos;ll confirm it within one business day.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="b-time" className="block text-sm font-medium mb-1.5">Preferred arrival window</label>
@@ -1190,7 +1220,7 @@ const Quote = () => {
                   <textarea
                     id="b-notes" name="notes" rows={3}
                     value={booking.notes} onChange={handleBookingChange}
-                    placeholder="Pets, focus areas, rooms to skip…"
+                    placeholder="Pets, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
                   <p className="mt-1.5 text-sm text-muted-foreground">Please don&apos;t put door codes or key details here — you&apos;ll add them privately on your confirmed visit page.</p>
@@ -1202,7 +1232,7 @@ const Quote = () => {
                     id="b-address" name="address" type="text" ref={refs.address} required autoComplete="street-address" maxLength={200}
                     value={booking.address} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.address} aria-describedby={bookingErrors.address ? "b-address-error" : undefined}
-                    placeholder="Street number and street name"
+                    placeholder="Street and number"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
@@ -1243,7 +1273,7 @@ const Quote = () => {
                 <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
                   <p id="entry-label" className="block text-sm font-medium mb-1">How will your cleaner get in? *</p>
                   <p className="text-sm text-muted-foreground mb-3">Choose an option. No keys or entry codes needed now.</p>
-                  <div role="radiogroup" aria-labelledby="entry-label" className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div role="radiogroup" aria-labelledby="entry-label" aria-invalid={!!bookingErrors.entryMethod} className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${bookingErrors.entryMethod ? "rounded-xl p-1 ring-2 ring-destructive" : ""}`}>
                     {ENTRY_METHODS.map((m) => (
                       <label key={m} className={`flex min-h-[64px] cursor-pointer items-center gap-3 rounded-xl border p-4 text-base ${entryMethod === m ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card"}`}>
                         <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
@@ -1275,7 +1305,7 @@ const Quote = () => {
                     <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
                     <input
                       id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
-                      placeholder="e.g. Park in the driveway, gate intercom at the front"
+                      placeholder="e.g. Park in the driveway"
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                     <p className="mt-1 text-sm text-muted-foreground">For parking and directions only. Add codes privately after confirmation.</p>
@@ -1284,8 +1314,7 @@ const Quote = () => {
 
               </div>
               <h3 className="font-heading text-base font-bold mb-2">Your private photo report</h3>
-              <p className="text-sm text-foreground mb-3">See the results after cleaning. Photos are never published without your separate written permission.</p>
-              <p className="text-sm text-foreground mb-3">You can mark rooms to skip in photos on your visit page before the visit.</p>
+              <p className="text-sm text-foreground mb-3">After cleaning, we send you photos of the cleaned rooms. Only you can see them.</p>
               <div className="flex items-start gap-3">
                 <input
                   id="b-photo" name="photoConsent" type="checkbox" required ref={refs.photoConsent}
@@ -1319,6 +1348,7 @@ const Quote = () => {
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
               </div>
+              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               </>)}
 
               {step === 3 && (<>

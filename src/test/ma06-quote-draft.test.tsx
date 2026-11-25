@@ -118,7 +118,9 @@ describe("MA-06 quote draft restore", () => {
     expect(screen.getByRole("heading", { name: "Your request" })).toBeInTheDocument();
     // Terms is the only consent on step 3 and it is unchecked.
     fireEvent.click(screen.getByRole("button", { name: "Continue to Stripe — $0 today" }));
-    expect(screen.getByText("Please agree to the Terms of Service and Privacy Policy.")).toBeInTheDocument();
+    // Mobile fix (25.11.2026): shown inline under the checkbox AND in
+    // the alert above the submit button.
+    expect(screen.getAllByText("Please agree to the Terms of Service and Privacy Policy.")).toHaveLength(2);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -138,7 +140,9 @@ describe("MA-06 quote draft restore", () => {
     // after failing to focus it. Now the loop skips the unmounted ref
     // and focuses the photo checkbox instead.
     fireEvent.submit(document.getElementById("booking-request")!);
-    expect(screen.getByText("Please agree to photos for your private report.")).toBeInTheDocument();
+    // Mobile fix (25.11.2026): shown inline under the checkbox AND in
+    // the alert next to the button.
+    expect(screen.getAllByText("Please agree to photos for your private report.")).toHaveLength(2);
     expect(document.activeElement).toBe(document.getElementById("b-photo"));
     expect(fetchMock).not.toHaveBeenCalled();
   });

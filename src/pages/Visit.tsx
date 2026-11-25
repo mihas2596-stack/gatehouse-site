@@ -341,6 +341,12 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
           setIssueRoom("");
           setIssuePhoto("");
           setIssuePhotoNote("");
+          // Finding 6 (25.11.2026): the confirmation banner must show
+          // the real number of attached photos, not a possibly stale
+          // count from the submit response — re-read the report so the
+          // "N photo(s) attached" line comes from a fresh GET. A
+          // failed refetch keeps the submitted response (MB-16).
+          reload();
         }
         // S13: several cards on file, none confirmed for this booking —
         // the server refuses to guess. Lead to the existing confirm_card

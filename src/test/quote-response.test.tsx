@@ -53,5 +53,7 @@ it("brings a server-rejected date back onto the editable page", async () => {
   request(3, { ok: false, errors: { date: "Please choose a later date." } }, false);
   expect(await screen.findByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   expect(screen.getByLabelText("Preferred date *")).toHaveAttribute("aria-invalid", "true");
-  expect(screen.getByRole("alert", { name: "" })).toHaveTextContent("Please choose a later date.");
+  // Mobile fix (25.11.2026): the server error is shown inline under the
+  // date field AND in the alert next to the button.
+  expect(screen.getAllByText("Please choose a later date.")).toHaveLength(2);
 });
