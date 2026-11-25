@@ -195,7 +195,10 @@ describe("quote steps", () => {
     }
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByText("Choose how to arrange entry.")).toBeInTheDocument();
+    // Mobile fix (25.11.2026): the first error is shown twice — inline
+    // under the field AND in the alert next to the Review button, so a
+    // tap on a phone always shows what went wrong where the tap was.
+    expect(screen.getAllByText("Choose how to arrange entry.")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   });
 
@@ -225,7 +228,9 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByText("Enter your city.")).toBeInTheDocument();
+    // Mobile fix (25.11.2026): shown inline under the field AND next to
+    // the Review button.
+    expect(screen.getAllByText("Enter your city.")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   });
 
@@ -304,7 +309,9 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByRole("radio", { name: /I’ll be home/ }));
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
-    expect(screen.getByText("We currently serve Georgia only — please enter GA.")).toBeInTheDocument();
+    // Mobile fix (25.11.2026): shown inline under the field AND next to
+    // the Review button.
+    expect(screen.getAllByText("We currently serve Georgia only — please enter GA.")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   });
 });

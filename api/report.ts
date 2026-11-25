@@ -1029,6 +1029,20 @@ export default async function handler(req: Req, res: Res) {
       res.status(409).json({ requestId, ok: false, error: "already_paid" });
       return;
     }
+    // Finding 6 (25.11.2026): fresh count of the client's complaint
+    // photos for one visit. Null = the read failed — callers keep
+    // their previous value instead of reporting a wrong number.
+    const readIssuePhotoCount = async (visitId: string): Promise<number | null> => {
+      try {
+        const countRes = await dbSelectStrict<{ id: string }>(
+          "gh_photos",
+          `visit_id=eq.${visitId}&kind=eq.client&select=id&limit=10`,
+        );
+        return countRes.ok ? countRes.rows.length : null;
+      } catch {
+        return null;
+      }
+    };
     const storeIssuePhoto = async (visitId: string): Promise<void> => {
       if (!photoB64) return;
       try {
@@ -1043,7 +1057,23 @@ export default async function handler(req: Req, res: Res) {
               kind: "client",
               note: reason.slice(0, 300) || null,
             });
-            if (inserted && dbIssuePhotoCount !== null) dbIssuePhotoCount++;
+            if (inserted) {
+              // Finding 6: the confirmation page showed "No photos
+              // attached" while the photo WAS stored — the response
+              // carried the count snapshotted at request start (0),
+              // and the increment below only ran when that snapshot
+              // was a number. Re-read the count after the insert so
+              // the response always states the real number; the +1
+              // floor covers a stale re-read (one photo was just
+              // stored, so the count is at least the old value + 1),
+              // and a failed re-read falls back to the increment.
+              const fresh = await readIssuePhotoCount(visitId);
+              if (fresh !== null) {
+                dbIssuePhotoCount = Math.max(fresh, (dbIssuePhotoCount ?? 0) + 1);
+              } else if (dbIssuePhotoCount !== null) {
+                dbIssuePhotoCount++;
+              }
+            }
             await logEvent(visitId, payload.bid, "system",
               inserted ? "client_photo_stored" : "client_photo_store_failed", {});
           } else {
