@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
 import { pickCustomerByEmail, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
-import { isAllowedOrigin } from "./_origin.js";
+import { isAllowedOrigin, siteBaseFromOrigin } from "./_origin.js";
 
 type BookingPayload = {
   bid: string;
@@ -210,17 +210,19 @@ const corsHeaders = (origin: string | string[] | undefined): Record<string, stri
     Vary: "Origin",
   };
   const o = Array.isArray(origin) ? origin[0] : origin;
-  if (o && ALLOWED_ORIGINS.includes(o)) {
+  if (o && isAllowedOrigin(o, ALLOWED_ORIGINS)) {
     headers["Access-Control-Allow-Origin"] = o;
   }
   return headers;
 };
 
-const siteBase = (origin: string | string[] | undefined): string => {
-  const o = Array.isArray(origin) ? origin[0] : origin;
-  if (o && ALLOWED_ORIGINS.includes(o)) return o;
-  return "https://www.gatehousehomecleaning.com";
-};
+const siteBase = (origin: string | string[] | undefined): string =>
+  // N-01: the Stripe return URLs (success_url / cancel_url) must stay on
+  // the host the request came from. A preview origin is allowed by
+  // isAllowedOrigin, so a preview checkout returns to the preview
+  // /save-card instead of production, where the session cannot verify.
+  // On production the origin is the production origin: same URLs as before.
+  siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
 
 type StripeError = { error?: { message?: string; type?: string; code?: string } };
 

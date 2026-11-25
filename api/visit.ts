@@ -1,4 +1,5 @@
 import { clientVisitLink } from "./_booking_links.js";
+import { siteBaseFromOrigin } from "./_origin.js";
 import { emailDocument } from "./_email_copy.js";
 // /api/visit — the client's "Manage your visit" page backend.
 //
@@ -747,6 +748,9 @@ export default async function handler(req: Req, res: Res) {
     res.setHeader("Access-Control-Allow-Origin", o);
     res.setHeader("Vary", "Origin");
   }
+  // N-05: reply emails issued from this request link the cabinets on the
+  // request's own origin (preview keeps preview links).
+  const siteBase = siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
   if (req.method !== "GET" && req.method !== "POST") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
     return;
@@ -1057,8 +1061,8 @@ export default async function handler(req: Req, res: Res) {
           headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             from: "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>",
-            to, reply_to: "hello@gatehousehomecleaning.com", subject, text: toClient ? text : `${text}\n\nOpen visit: ${ownerPanelUrl(row?.id)}`,
-            html: emailDocument({ firstName: toClient ? (customer.name || "there").split(/\s+/)[0] : "Gatehouse", heading: subject.replace(/ — booking .+$/, ""), paragraphs: [text.replace(/^Hi [^,]+,\n\n/, "").replace(/\n\nGatehouse Home Cleaning\n?$/, "")], action: { url: toClient ? clientVisitLink(STRIPE_SECRET_KEY, { bid: payload.bid, email: customer.email || payload.email, name: customer.name }) : ownerPanelUrl(row?.id), label: toClient ? "View my visit" : "Open owner panel" } }),
+            to, reply_to: "hello@gatehousehomecleaning.com", subject, text: toClient ? text : `${text}\n\nOpen visit: ${ownerPanelUrl(row?.id, siteBase)}`,
+            html: emailDocument({ firstName: toClient ? (customer.name || "there").split(/\s+/)[0] : "Gatehouse", heading: subject.replace(/ — booking .+$/, ""), paragraphs: [text.replace(/^Hi [^,]+,\n\n/, "").replace(/\n\nGatehouse Home Cleaning\n?$/, "")], action: { url: toClient ? clientVisitLink(STRIPE_SECRET_KEY, { bid: payload.bid, email: customer.email || payload.email, name: customer.name }, "", siteBase) : ownerPanelUrl(row?.id, siteBase), label: toClient ? "View my visit" : "Open owner panel" } }),
           }),
           signal: AbortSignal.timeout(15000),
         });

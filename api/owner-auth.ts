@@ -25,7 +25,7 @@ import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { mintOwnerLoginToken, mintOwnerSessionToken, verifyOwnerLoginToken } from "./_owner_auth.js";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { notFoundHandler } from "./_not_found.js";
-import { isAllowedOrigin } from "./_origin.js";
+import { isAllowedOrigin, siteBaseFromOrigin } from "./_origin.js";
 
 type Req = {
   method?: string;
@@ -113,7 +113,9 @@ export default async function handler(req: Req, res: Res) {
   }
 
   const token = mintOwnerLoginToken(ADMIN_TOKEN, Math.floor(Date.now() / 1000));
-  const link = new URL(ownerPanelUrl(typeof body.visit === "string" ? body.visit : null));
+  // N-05: the owner login link stays on the request's host (preview
+  // login opens the preview panel, where the test visit lives).
+  const link = new URL(ownerPanelUrl(typeof body.visit === "string" ? body.visit : null, siteBaseFromOrigin(origin, ALLOWED_ORIGINS)));
   link.hash = new URLSearchParams({ ol: token }).toString();
 
   try {

@@ -13,6 +13,7 @@
 
 import { reportReplyAddress } from "./_report_reply.js";
 import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
+import { PRODUCTION_ORIGIN, siteBaseFromOrigin } from "./_origin.js";
 import {
   dbConfigured,
   dbSelect,
@@ -117,6 +118,15 @@ type PhotoRow = {
 
 const FROM_EMAIL = "Gatehouse Home Cleaning <info@gatehousehomecleaning.com>";
 const EDITABLE = new Set(["none", "draft", "returned"]);
+
+// N-05: same production allowlist as the other routes. This handler does
+// NOT gate on origin (it never did); the list only decides which request
+// origin issued cabinet links are built on.
+const ALLOWED_ORIGINS = [
+  "https://gatehousehomecleaning.com",
+  "https://www.gatehousehomecleaning.com",
+  "http://localhost:8080",
+];
 
 // M5 / LB-16: at most this many signed-but-UNREGISTERED cleaner
 // uploads may pile up for one visit. This is a bound on the orphan
@@ -811,6 +821,9 @@ function encryptBookingPayload(secret: string, payload: BookingPayload): string 
 async function publishReportToClient(
   visit: VisitRow,
   photos: PhotoRow[],
+  // N-05: host for the client report link. Defaults to production; the
+  // handler passes the request's siteBase.
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<{ status: "published"; email_sent: boolean; version: number; sent_at: string } | { status: "already_published" } | { status: "failed"; error: string; email_sent?: boolean }> {
   const STRIPE_SECRET_KEY = process.env["STRIPE_SECRET_KEY"];
   if (!STRIPE_SECRET_KEY) return { status: "failed", error: "stripe_not_configured" };
@@ -886,7 +899,7 @@ async function publishReportToClient(
       name: custName,
       ts: Math.floor(Date.now() / 1000),
     });
-    const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
+    const link = `${base}/visit?bt=${token}#report`;
     const deadline = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       weekday: "short", month: "short", day: "numeric",
@@ -982,14 +995,14 @@ async function publishReportToClient(
   return { status: "published", email_sent: emailSent, version, sent_at: sentAt };
 }
 
-async function sendOwnerEmail(visitId: string, subject: string, text: string): Promise<boolean> {
+async function sendOwnerEmail(visitId: string, subject: string, text: string, base: string = PRODUCTION_ORIGIN): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   if (!key) return false;
   try {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: FROM_EMAIL, to: [ownerNotificationEmail()], subject, text: `${text}\n\nOpen visit: ${ownerPanelUrl(visitId)}` }),
+      body: JSON.stringify({ from: FROM_EMAIL, to: [ownerNotificationEmail()], subject, text: `${text}\n\nOpen visit: ${ownerPanelUrl(visitId, base)}` }),
       signal: AbortSignal.timeout(15000),
     });
     return r.ok;
@@ -1000,6 +1013,11 @@ async function sendOwnerEmail(visitId: string, subject: string, text: string): P
 
 export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
+  // N-05: cabinet links in the report/owner emails are built on the
+  // request's own origin (preview keeps preview links). No origin gate
+  // is added here — this handler never had one. headers may be absent
+  // in direct (non-HTTP) calls; siteBaseFromOrigin treats that as prod.
+  const siteBase = siteBaseFromOrigin(req.headers?.["origin"], ALLOWED_ORIGINS);
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
   try {
@@ -1445,6 +1463,7 @@ export default async function handler(req: Req, res: Res) {
         const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
+          siteBase,
         );
         if (!emailed) {
           await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
@@ -1453,7 +1472,7 @@ export default async function handler(req: Req, res: Res) {
         }
         return json(200, { ok: true, published: false, held: true });
       }
-      const published = await publishReportToClient(visit, photos);
+      const published = await publishReportToClient(visit, photos, siteBase);
       if (published.status === "already_published") {
         // RA14: the owner published from the review queue while this
         // Finish was in flight. One publication exists — this call
@@ -1471,6 +1490,7 @@ export default async function handler(req: Req, res: Res) {
         const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but it is HELD for review: an issue is open on this visit.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\n\nOpen the owner view to resolve the issue and send the report.`,
+          siteBase,
         );
         if (!emailed) {
           await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
@@ -1491,6 +1511,7 @@ export default async function handler(req: Req, res: Res) {
         const emailed = await sendOwnerEmail(visit.id,
           `Report ready for review — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
           `The cleaner submitted the photo report, but automatic publishing failed (${published.error}). The report is waiting in the owner review queue — publish it from the owner panel.${emailMayHaveGoneOut ? " The report email may already have reached the client — re-sending from the panel reconciles the delivery record without sending a duplicate." : ""}\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}`,
+          siteBase,
         );
         if (!emailed) {
           await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {
@@ -1502,6 +1523,7 @@ export default async function handler(req: Req, res: Res) {
       const emailed = await sendOwnerEmail(visit.id,
         `Report published to client — ${visit.client_name ?? "client"}, ${visit.visit_date ?? ""}`,
         `The cleaner finished the visit and the photo report went straight to the client — no action needed.\n\nClient: ${visit.client_name ?? ""}\nDate: ${visit.visit_date ?? ""}\nPhotos: ${photos.length}\nCleaner note: ${checklist.problem_note ?? "—"}\nReport email to the client: ${published.email_sent ? "sent" : "FAILED — the 24h clock is blocked; re-send it from the owner panel."}\n\nOpen the owner view to see the report and its notification status.`,
+        siteBase,
       );
       if (!emailed) {
         await logEvent(visit.id, visit.booking_id, "system", "owner_email_failed", {

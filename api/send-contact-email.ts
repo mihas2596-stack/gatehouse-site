@@ -1,4 +1,4 @@
-import { isAllowedOrigin } from "./_origin.js";
+import { isAllowedOrigin, siteBaseFromOrigin } from "./_origin.js";
 import { normalizePhone } from "./_sms.js";
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
@@ -629,6 +629,10 @@ export default async function handler(req: Req, res: Res) {
     res.status(429).json({ ok: false, error: "rate_limited" });
     return;
   }
+  // N-05: the save-card / visit / owner links in the booking emails are
+  // built on the request's own origin (preview keeps preview links, so
+  // the test booking opens where it lives). Production is unchanged.
+  const siteBase = siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
 
   const requestId = Math.random().toString(36).slice(2);
   const json = (status: number, body: Record<string, unknown>) =>
@@ -1062,8 +1066,8 @@ export default async function handler(req: Req, res: Res) {
           return json(503, { ok: false, error: "booking_save_failed" });
         }
       }
-      saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
-      visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(bookingToken)}`;
+      saveCardUrl = `${siteBase}/save-card?bt=${encodeURIComponent(bookingToken)}`;
+      visitUrl = `${siteBase}/visit?bt=${encodeURIComponent(bookingToken)}`;
       log("booking", { bid: bookingId });
     }
 
@@ -1087,7 +1091,7 @@ export default async function handler(req: Req, res: Res) {
     // forwarded/leaked inbox message used to carry a 24h panel token.
     // The owner enters the panel with the "Send login link" button in
     // /owner itself (POST /api/owner-auth { action: "send" }).
-    const ownerUrl = ownerPanelUrl(visitRowId);
+    const ownerUrl = ownerPanelUrl(visitRowId, siteBase);
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background:${testScale ? "#FFF4E5" : "#F4F4F4"};border-left:6px solid ${testScale ? "#D4855A" : "#999"};padding:14px 18px;margin-bottom:18px;border-radius:6px;font-size:16px;font-weight:bold;color:${testScale ? "#8B4513" : "#444"};">
@@ -1275,8 +1279,8 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
             : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
         const action = needsCustomQuote ? undefined : {
           url: cardOnFile
-            ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
-            : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
+            ? visitUrl ?? `${siteBase}/visit`
+            : saveCardUrl ?? `${siteBase}/save-card`,
           label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
         };
         const heading = needsCustomQuote ? "Custom quote requested" : "Cleaning request received";

@@ -1,6 +1,8 @@
 import { dbSelectStrict, logEventStrict } from "./_db.js";
 import { emailArrivalWindow, emailDate, emailDocument } from "./_email_copy.js";
 
+import { PRODUCTION_ORIGIN } from "./_origin.js";
+
 // Single source of truth for the owner's notification mailbox (N22).
 // Every server email addressed to the owner goes through
 // ownerNotificationEmail() instead of a literal repeated in six files.
@@ -15,8 +17,11 @@ export function ownerNotificationEmail(): string {
 }
 
 // This is a locator only. The detail API authenticates every read.
-export function ownerPanelUrl(visitId?: string | null): string {
-  const url = new URL("https://www.gatehousehomecleaning.com/owner");
+// `base` is the request's own origin when the caller has one (a preview
+// deployment keeps the owner on the preview host, where the test visit
+// lives); without it the link points at production, as before.
+export function ownerPanelUrl(visitId?: string | null, base: string = PRODUCTION_ORIGIN): string {
+  const url = new URL(`${base}/owner`);
   if (visitId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visitId)) {
     url.searchParams.set("visit", visitId);
   }
@@ -42,7 +47,7 @@ export type OwnerRequestNotice = {
   isTest?: boolean | null;
 };
 
-export function ownerRequestEmailBody(n: OwnerRequestNotice): { subject: string; html: string; text: string } {
+export function ownerRequestEmailBody(n: OwnerRequestNotice, base: string = PRODUCTION_ORIGIN): { subject: string; html: string; text: string } {
   const heading = n.isTest ? "Test request — new cleaning request" : "New cleaning request";
   const details = [
     n.name && `Client: ${n.name}`,
@@ -55,7 +60,7 @@ export function ownerRequestEmailBody(n: OwnerRequestNotice): { subject: string;
     n.amountCents != null && `Visit price: $${(n.amountCents / 100).toFixed(2)}`,
     n.bookingId && `Booking ID: ${n.bookingId}`,
   ].filter(Boolean).join("\n");
-  const url = ownerPanelUrl(n.visitId);
+  const url = ownerPanelUrl(n.visitId, base);
   const text = `${heading}\n\n${details}\n\nOpen the request in the owner panel:\n${url}\n\nGatehouse Home Cleaning\nhello@gatehousehomecleaning.com\n`;
   const html = emailDocument({
     firstName: "Gatehouse",

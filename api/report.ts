@@ -24,6 +24,7 @@ import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCou
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom, latestIssueDecision, everWaivedDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
+import { siteBaseFromOrigin } from "./_origin.js";
 
 import { chargeVisit, reopenIssueAfterUnsettledCharge } from "./_payment_obligation.js";
 import { listCustomerCards } from "./card-status.js";
@@ -590,6 +591,9 @@ export default async function handler(req: Req, res: Res) {
     res.setHeader("Access-Control-Allow-Origin", o);
     res.setHeader("Vary", "Origin");
   }
+  // N-05: owner notification emails issued from this request link the
+  // owner panel on the request's own origin (preview keeps preview links).
+  const siteBase = siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
   if (req.method !== "GET" && req.method !== "POST") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
     return;
@@ -1115,7 +1119,7 @@ export default async function handler(req: Req, res: Res) {
                     `Booking: ${payload.bid}\nRoom: ${room}\nWhat they added: ${reason}\n` +
                     (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) +
                     `\nThe payment is complete — nothing was reversed automatically. ` +
-                    `Review and decide: offer a re-clean or a refund, and reply to the client.\n\nOpen visit: ${ownerPanelUrl(row?.id)}`,
+                    `Review and decide: offer a re-clean or a refund, and reply to the client.\n\nOpen visit: ${ownerPanelUrl(row?.id, siteBase)}`,
                   ...(photoB64
                     ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
                     : {}),
@@ -1223,7 +1227,7 @@ export default async function handler(req: Req, res: Res) {
                 `Booking: ${payload.bid}\nRoom: ${room}\nWhat they said: ${reason}\n` +
                 (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) +
                 `\nThe payment is complete — nothing was reversed automatically. ` +
-                `Review and decide: offer a re-clean or a refund, and reply to the client.\n\nOpen visit: ${ownerPanelUrl(row?.id)}`,
+                `Review and decide: offer a re-clean or a refund, and reply to the client.\n\nOpen visit: ${ownerPanelUrl(row?.id, siteBase)}`,
               ...(photoB64
                 ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
                 : {}),
@@ -1563,7 +1567,7 @@ export default async function handler(req: Req, res: Res) {
               `A client added to an already-open issue from the photo report. The charge stays PAUSED and will not resume on its own — the client approves again to pay after the fix.\n\n` +
               `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
               `Room: ${room || "(not specified)"}\nWhat they added: ${reason || "(no description)"}\n` +
-              (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) + `\nOpen visit: ${ownerPanelUrl(row?.id)}`,
+              (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) + `\nOpen visit: ${ownerPanelUrl(row?.id, siteBase)}`,
             ...(photoB64
               ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
               : {}),
@@ -1681,7 +1685,7 @@ export default async function handler(req: Req, res: Res) {
           `A client reported an issue from the photo report.${paymentInFlight ? " A payment was already in progress when the issue arrived, so it may still complete — the issue stays open either way; review it for a re-clean or a refund." : " The charge is PAUSED and will not resume on its own — the client approves again to pay after the fix."}\n\n` +
           `Booking: ${payload.bid}\nClient: ${customer.name} <${customer.email}>\n` +
           `Room: ${room || "(not specified)"}\nWhat they said: ${reason || "(no description)"}\n` +
-          (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) + `\nOpen visit: ${ownerPanelUrl(row?.id)}`,
+          (photoB64 ? `A photo from the client is attached.\n` : `No photo attached.\n`) + `\nOpen visit: ${ownerPanelUrl(row?.id, siteBase)}`,
         ...(photoB64
           ? { attachments: [{ filename: "client-issue-photo.jpg", content: photoB64 }] }
           : {}),

@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipher
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
 import { emailDate, emailDocument } from "./_email_copy.js";
 import { notifyOwnerCardReady } from "./_owner_email.js";
+import { PRODUCTION_ORIGIN, siteBaseFromOrigin } from "./_origin.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
@@ -441,6 +442,9 @@ async function maybeSendCardSavedEmail(
   customer: { id: string; metadata: Record<string, string>; email?: string; name?: string },
   payload: BookingPayload | null,
   bookingCtx?: { visitId: string | null; amountCents: number | null },
+  // N-05: host for the "View my visit" link. Defaults to production;
+  // the request-driven call sites pass the request's siteBase.
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<void> {
   const RESEND_API_KEY = process.env["RESEND_API_KEY"];
   if (!RESEND_API_KEY) return;
@@ -506,10 +510,10 @@ async function maybeSendCardSavedEmail(
     : fmtMoney(payload?.first ?? "");
   const service = ownRow?.service || payload?.service || "Standard cleaning";
   const date = ownRow?.visit_date || payload?.date || "";
-  let visitUrl = "https://www.gatehousehomecleaning.com/visit";
+  let visitUrl = `${base}/visit`;
   if (payload?.bid) {
     const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
-    visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
+    visitUrl = `${base}/visit?bt=${token}`;
   }
   const created = latestEvent(ownEvents, "visit_created")?.created_at || ownRow?.created_at;
   const deadline = confirmDeadlineLabel(created && !Number.isNaN(Date.parse(created)) ? new Date(created) : new Date());
@@ -598,6 +602,10 @@ export default async function handler(req: Req, res: Res) {
   }
   for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
 
+  // N-05: the "Card saved" email links the visit on the request's own
+  // origin (preview keeps preview links). Production is unchanged.
+  const siteBase = siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
+
   if (req.method === "POST") {
     // §3: the client explicitly confirms the saved card FOR THIS booking.
     // A matching email/card in Stripe is never enough on its own — this
@@ -682,7 +690,7 @@ export default async function handler(req: Req, res: Res) {
       maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, verified.payload, {
         visitId: row?.id ?? null,
         amountCents: row?.amount_cents ?? null,
-      }),
+      }, siteBase),
     ]);
     res.status(200).json({ ok: true, card_brand: card.brand, card_last4: card.last4 });
     return;
@@ -943,7 +951,7 @@ export default async function handler(req: Req, res: Res) {
           notifyOwnerCardReady(row).catch(logOwnerEmailFailure),
           maybeSendCardSavedEmail(STRIPE_SECRET_KEY, cust, tokenPayload, {
             visitId: row?.id ?? null, amountCents: row?.amount_cents ?? null,
-          }),
+          }, siteBase),
         ]);
       }
     } catch (error) {

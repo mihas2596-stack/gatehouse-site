@@ -34,7 +34,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
-import { isAllowedOrigin } from "./_origin.js";
+import { isAllowedOrigin, PRODUCTION_ORIGIN, siteBaseFromOrigin } from "./_origin.js";
 import { buildWorkRooms } from "./_work_scope.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
@@ -282,6 +282,10 @@ export async function sendShortClientEmail(opts: {
   buttonLabel: string;
   buttonAnchor?: string;
   buttonUrl?: string;
+  // N-05: host for the default visit link. Defaults to production (the
+  // old behavior); request-driven callers pass the request's siteBase so
+  // a preview booking's email links back to the preview host.
+  base?: string;
 }): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   const email = (opts.customer.email ?? "").trim();
@@ -293,7 +297,7 @@ export async function sendShortClientEmail(opts: {
     name: opts.customer.name ?? "",
     ts: Math.floor(Date.now() / 1000),
   });
-  const link = opts.buttonUrl ?? `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
+  const link = opts.buttonUrl ?? `${opts.base ?? PRODUCTION_ORIGIN}/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
   const bodyText = opts.lines.join("\n\n");
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -324,6 +328,7 @@ export async function sendPaymentFailedEmailOnce(
   customerId: string,
   bookingId: string,
   visitId: string | null,
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   if (!key || !dbConfigured()) return false;
@@ -349,6 +354,7 @@ export async function sendPaymentFailedEmailOnce(
     ],
     buttonLabel: "View my visit",
     buttonAnchor: "#report",
+    base,
   });
   if (ok) await logEvent(visitId, bookingId, "system", "payment_failed_email", {});
   return ok;
@@ -359,6 +365,7 @@ export async function sendReceiptEmailOnce(
   customerId: string | null,
   meta: Record<string, string>,
   bookingId: string,
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<boolean> {
   // P10: the sent flag is per-booking, never shared customer metadata —
   // another booking's receipt id must not suppress this booking's
@@ -438,12 +445,12 @@ export async function sendReceiptEmailOnce(
       if (!won) return false;
       // Winner continues below; the row id is remembered for the
       // final write so the placeholder is replaced precisely.
-      return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, row.id);
+      return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, row.id, base);
     }
   } else if (meta["gh_receipt_email_id"]) {
     return true;
   }
-  return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, null);
+  return await sendReceiptAfterClaim(secretKey, customerId, meta, bookingId, null, base);
 }
 
 async function sendReceiptAfterClaim(
@@ -452,6 +459,9 @@ async function sendReceiptAfterClaim(
   meta: Record<string, string>,
   bookingId: string,
   rowId: string | null,
+  // N-05: host for the report link. Defaults to production; the
+  // request-driven callers pass the request's siteBase.
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<boolean> {
   const key = process.env["RESEND_API_KEY"];
   const amountCents = parseInt(meta["gh_report_amount_cents"] ?? meta["gh_first_price_cents"] ?? "", 10);
@@ -475,7 +485,7 @@ async function sendReceiptAfterClaim(
     name: custName,
     ts: Math.floor(Date.now() / 1000),
   });
-  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
+  const reportLink = `${base}/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -537,6 +547,7 @@ export async function sendFeeReceiptEmailOnce(
   bookingId: string,
   piId: string,
   amountCents: number,
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<boolean> {
   if (!Number.isFinite(amountCents) || amountCents <= 0 || !piId) return false;
   const key = process.env["RESEND_API_KEY"];
@@ -569,7 +580,7 @@ export async function sendFeeReceiptEmailOnce(
     name: custName,
     ts: Math.floor(Date.now() / 1000),
   });
-  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
+  const reportLink = `${base}/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -649,18 +660,18 @@ type IssuedLink = { token: string; url: string; expires: string; issuance?: stri
 const cleanerSecret = (): string => cleanerLinkPrimarySecret();
 
 /** Mint a fresh v2 link (no DB write). Null when the server secret is missing. */
-function mintV2Link(visitId: string, visitDate: string | null): IssuedLink | null {
+function mintV2Link(visitId: string, visitDate: string | null, base: string = PRODUCTION_ORIGIN): IssuedLink | null {
   const secret = cleanerSecret();
   if (!secret) return null;
   const issuance = newIssuanceId();
   const token = mintCleanerLinkV2(secret, visitId, issuance);
-  return { token, url: cleanerLinkUrl(token), expires: cleanerLinkExpiry(visitDate), issuance };
+  return { token, url: cleanerLinkUrl(token, base), expires: cleanerLinkExpiry(visitDate), issuance };
 }
 
 /** Mint a legacy random link (no DB write). */
-function mintLegacyLink(visitDate: string | null): IssuedLink {
+function mintLegacyLink(visitDate: string | null, base: string = PRODUCTION_ORIGIN): IssuedLink {
   const token = newCleanerToken();
-  return { token, url: cleanerLinkUrl(token), expires: cleanerLinkExpiry(visitDate) };
+  return { token, url: cleanerLinkUrl(token, base), expires: cleanerLinkExpiry(visitDate) };
 }
 
 /** Single atomic write of a v2 issuance. False when the v2 columns are
@@ -706,16 +717,17 @@ async function rotateCleanerLinkForDate(
   newDate: string,
   currentExpires: string | null,
   reason: string,
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<LinkRotation> {
   const needByMs = Date.parse(`${newDate}T23:59:59Z`) + 2 * 24 * 3600 * 1000;
   const currentExpiresMs = currentExpires ? Date.parse(currentExpires) : NaN;
   if (Number.isFinite(needByMs) && Number.isFinite(currentExpiresMs) && currentExpiresMs >= needByMs) return { status: "not_needed" };
-  const v2 = mintV2Link(visitId, newDate);
+  const v2 = mintV2Link(visitId, newDate, base);
   if (v2 && (await writeV2Link(visitId, v2))) {
     await logEvent(visitId, bookingId, "owner", "cleaner_link_rotated", { reason, expires: v2.expires });
     return { status: "rotated", url: v2.url, expires: v2.expires, reusable: true };
   }
-  const leg = mintLegacyLink(newDate);
+  const leg = mintLegacyLink(newDate, base);
   const okLeg = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
     cleaner_token_hash: hashToken(leg.token),
     cleaner_token_expires: leg.expires,
@@ -751,6 +763,7 @@ async function recordReclean(
   cleanerName: string | null,
   currentLinkExpires: string | null,
   forceRotateLink = false,
+  base: string = PRODUCTION_ORIGIN,
 ): Promise<{ rowWritten: boolean; linkRotated: boolean }> {
   const rowWritten = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
     reclean_date: recleanDate,
@@ -770,11 +783,11 @@ async function recordReclean(
   // or when the current link would expire before the re-clean (H2).
   // A still-valid link for the same cleaner is left untouched.
   if (forceRotateLink || (Number.isFinite(needByMs) && (!Number.isFinite(currentExpiresMs) || currentExpiresMs < needByMs))) {
-    const v2 = mintV2Link(visitId, recleanDate);
+    const v2 = mintV2Link(visitId, recleanDate, base);
     if (v2 && (await writeV2Link(visitId, v2))) {
       linkRotated = true;
     } else {
-      const leg = mintLegacyLink(recleanDate);
+      const leg = mintLegacyLink(recleanDate, base);
       const okLeg = await dbUpdate("gh_visits", `id=eq.${visitId}`, {
         cleaner_token_hash: hashToken(leg.token),
         cleaner_token_expires: leg.expires,
@@ -801,7 +814,7 @@ async function recordReclean(
  * null when the row is not a live v2 link (legacy, missing secret,
  * hash mismatch, or expired — the caller maps null to the right error).
  */
-function recomputeV2Link(row: CleanerRow): { url: string; expires: string } | null {
+function recomputeV2Link(row: CleanerRow, base: string = PRODUCTION_ORIGIN): { url: string; expires: string } | null {
   if (row.cleaner_link_version !== "v2") return null;
   if (typeof row.cleaner_link_issuance !== "string" || !row.cleaner_link_issuance) return null;
   if (typeof row.cleaner_token_hash !== "string" || !row.cleaner_token_hash) return null;
@@ -812,7 +825,7 @@ function recomputeV2Link(row: CleanerRow): { url: string; expires: string } | nu
   for (const secret of cleanerLinkSecretCandidates()) {
     const token = mintCleanerLinkV2(secret, row.id, row.cleaner_link_issuance);
     if (tokenHashEquals(hashToken(token), row.cleaner_token_hash)) {
-      return { url: cleanerLinkUrl(token), expires: expires ?? "" };
+      return { url: cleanerLinkUrl(token, base), expires: expires ?? "" };
     }
   }
   return null;
@@ -1289,6 +1302,12 @@ export default async function handler(req: Req, res: Res) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }
+  // N-05: cabinet links (bt/ct) and every client/owner link issued from
+  // this request are built on the request's own origin. On production
+  // that is the production origin, so issued URLs are unchanged; on a
+  // preview deployment they stay on the preview host, where the visit
+  // actually lives.
+  const siteBase = siteBaseFromOrigin(origin, ALLOWED_ORIGINS);
   if (req.method !== "POST") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
     return;
@@ -1421,7 +1440,7 @@ export default async function handler(req: Req, res: Res) {
       const result = await latestBookingRowStrict(bookingId);
       if (!result.ok || !result.row) return json(503, { ok: false, error: "status_unavailable" });
       const visit = result.row;
-      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Your visit update — Gatehouse Home Cleaning", heading: visit.status === "cancelled" ? "Your visit is cancelled" : "Your visit update", lines: [visit.status === "cancelled" ? "This visit is cancelled. View your visit page for the cancellation details." : "Open your visit page for the latest confirmed status, date and payment details."], buttonLabel: "View my visit" });
+      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Your visit update — Gatehouse Home Cleaning", heading: visit.status === "cancelled" ? "Your visit is cancelled" : "Your visit update", lines: [visit.status === "cancelled" ? "This visit is cancelled. View your visit page for the cancellation details." : "Open your visit page for the latest confirmed status, date and payment details."], buttonLabel: "View my visit", base: siteBase });
       await logEvent(visit.id, bookingId, "owner", sent ? "notification_email_sent" : "notification_email_failed", { kind: "status_update" });
       return json(200, { ok: true, email_sent: sent });
     }
@@ -1470,7 +1489,7 @@ export default async function handler(req: Req, res: Res) {
           amountCents: visit.amount_cents ?? null,
           bookingId,
           isTest: visit.is_test ?? false,
-        });
+        }, siteBase);
         try {
           const resp = await fetch("https://api.resend.com/emails", {
             method: "POST",
@@ -1623,6 +1642,7 @@ export default async function handler(req: Req, res: Res) {
                 : "No fee — the visit was cancelled more than 48 hours before it.",
             ],
             buttonLabel: "View my visit",
+            base: siteBase,
           });
         }
       } catch { /* best-effort: the cancel itself already stands */ }
@@ -1880,7 +1900,7 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(null, bookingId, "owner", "client_link_issued");
       return json(200, {
         ok: true,
-        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
+        url: `${siteBase}/visit?bt=${encodeURIComponent(token)}`,
         no_stripe_customer: true,
       });
     }
@@ -2108,7 +2128,7 @@ export default async function handler(req: Req, res: Res) {
         // must know the cleaner link did not survive the move.
         const linkExpires = (row as unknown as CleanerRow).cleaner_token_expires ?? null;
         if (linkExpires) {
-          const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, linkExpires, "visit_rescheduled");
+          const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, linkExpires, "visit_rescheduled", siteBase);
           if (rotated.status === "failed") {
             linkRotationFailed = true;
             await logEvent(row.id, bookingId, "owner", "cleaner_link_rotation_failed", { reason: rotated.reason, date });
@@ -2141,7 +2161,7 @@ export default async function handler(req: Req, res: Res) {
             service: row?.service ?? "",
             cleaner: cleanerName,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${siteBase}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
@@ -2296,11 +2316,11 @@ export default async function handler(req: Req, res: Res) {
         // H2: mint from the NEW confirmed date, not the row snapshot
         // taken before the update — a link minted from the old date can
         // expire before a rescheduled visit.
-        const v2 = mintV2Link(row.id, date);
+        const v2 = mintV2Link(row.id, date, siteBase);
         if (v2 && (await writeV2Link(row.id, v2))) {
           linkOut = { url: v2.url, expires: v2.expires, reusable: true };
         } else {
-          const leg = mintLegacyLink(date);
+          const leg = mintLegacyLink(date, siteBase);
           const okLeg = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
             cleaner_token_hash: hashToken(leg.token),
             cleaner_token_expires: leg.expires,
@@ -2329,7 +2349,7 @@ export default async function handler(req: Req, res: Res) {
         // moved to a date the link does not cover, in which case rotate
         // it to the new date (the old URL dies; the panel shows the new
         // one). A still-valid link is left untouched.
-        const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, (row as unknown as CleanerRow).cleaner_token_expires ?? null, "visit_rescheduled");
+        const rotated = await rotateCleanerLinkForDate(row.id, bookingId, date, (row as unknown as CleanerRow).cleaner_token_expires ?? null, "visit_rescheduled", siteBase);
         if (rotated.status === "rotated") {
           linkOut = { url: rotated.url, expires: rotated.expires, reusable: rotated.reusable };
         } else if (rotated.status === "failed") {
@@ -2339,7 +2359,7 @@ export default async function handler(req: Req, res: Res) {
           linkRotationFailed = true;
           await logEvent(row.id, bookingId, "owner", "cleaner_link_rotation_failed", { reason: rotated.reason, date });
         } else {
-          const recomputed = recomputeV2Link(row as unknown as CleanerRow);
+          const recomputed = recomputeV2Link(row as unknown as CleanerRow, siteBase);
           if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
         }
       }
@@ -2372,7 +2392,7 @@ export default async function handler(req: Req, res: Res) {
             service: row.service ?? "",
             cleaner: name,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${siteBase}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null }).entry_method ?? null,
           });
         }
@@ -2428,7 +2448,7 @@ export default async function handler(req: Req, res: Res) {
             service: row?.service ?? "",
             cleaner: (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim(),
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${siteBase}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
@@ -2530,6 +2550,7 @@ export default async function handler(req: Req, res: Res) {
               "We'll reply within one business day.",
             ],
         buttonLabel: "View my visit",
+        base: siteBase,
       });
       log("dispute", { booking: bookingId, emailSent });
       if (!metaUpd.ok) {
@@ -2589,6 +2610,8 @@ export default async function handler(req: Req, res: Res) {
             rowWide.cleaner_id ?? null,
             row.cleaner_name ?? null,
             rowWide.cleaner_token_expires ?? null,
+            false,
+            siteBase,
           );
         }
       }
@@ -2620,7 +2643,7 @@ export default async function handler(req: Req, res: Res) {
       const clientEmail = (customer.email ?? row.client_email ?? "").trim();
       const clientName = (customer.name ?? row.client_name ?? "").trim();
       const reportLink = clientEmail
-        ? `https://www.gatehousehomecleaning.com/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+        ? `${siteBase}/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
             bid: bookingId, email: clientEmail, name: clientName, ts: Math.floor(Date.now() / 1000),
           }))}`
         : "";
@@ -2833,6 +2856,7 @@ export default async function handler(req: Req, res: Res) {
           recleanCleanerName,
           (row as unknown as { cleaner_token_expires?: string | null }).cleaner_token_expires ?? null,
           recleanCleanerChanged,
+          siteBase,
         );
       }
       const emailSent = await sendDecisionEmail(decision, decisionText);
@@ -2949,10 +2973,12 @@ export default async function handler(req: Req, res: Res) {
               STRIPE_SECRET_KEY, customer.id,
               { ...meta, gh_report_amount_cents: String(cents) },
               bookingId,
+              siteBase,
             ),
             sendPaymentFailedEmail: async (visitId) => {
               await sendPaymentFailedEmailOnce(
                 STRIPE_SECRET_KEY, customer.id, bookingId, visitId,
+                siteBase,
               );
             },
           },
@@ -3370,7 +3396,7 @@ export default async function handler(req: Req, res: Res) {
             name: custName,
             ts: Math.floor(Date.now() / 1000),
           });
-          const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
+          const link = `${siteBase}/visit?bt=${token}#report`;
           const deadline = new Intl.DateTimeFormat("en-US", {
             timeZone: "America/New_York",
             weekday: "short", month: "short", day: "numeric",
@@ -3658,7 +3684,7 @@ export default async function handler(req: Req, res: Res) {
                 text:
                   `Hi ${firstName},\n\nThanks for your request. The date you picked doesn't work on our side` +
                   (alts.length ? ` — here are the closest dates we can do: ${alts.join(", ")}.` : ".") +
-                  `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\nhttps://www.gatehousehomecleaning.com/visit?bt=${token}\n\n` +
+                  `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\n${siteBase}/visit?bt=${token}\n\n` +
                   `Your card stays on file, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
@@ -3795,11 +3821,11 @@ export default async function handler(req: Req, res: Res) {
         if (changed || firstAssignment) {
           // A different person (or the first assignment) revokes the
           // previous access: issue a fresh link and return it at once.
-          const v2 = mintV2Link(row.id, row.visit_date);
+          const v2 = mintV2Link(row.id, row.visit_date, siteBase);
           if (v2 && (await writeV2Link(row.id, v2))) {
             linkOut = { url: v2.url, expires: v2.expires, reusable: true };
           } else {
-            const leg = mintLegacyLink(row.visit_date);
+            const leg = mintLegacyLink(row.visit_date, siteBase);
             const okLeg = await dbUpdate("gh_visits", `id=eq.${row.id}`, {
               cleaner_token_hash: hashToken(leg.token),
               cleaner_token_expires: leg.expires,
@@ -3824,7 +3850,7 @@ export default async function handler(req: Req, res: Res) {
           // link is recomputed so the panel can show the result at once;
           // a legacy link cannot be re-shown (hash only) — the panel then
           // offers the explicit reusable upgrade instead.
-          const recomputed = recomputeV2Link(visitRow);
+          const recomputed = recomputeV2Link(visitRow, siteBase);
           if (recomputed) linkOut = { url: recomputed.url, expires: recomputed.expires, reusable: true };
         }
         // MB-11 (DA-38): a new/changed cleaner with no link is a
@@ -3858,6 +3884,7 @@ export default async function handler(req: Req, res: Res) {
             "Nothing else about your visit changes — same date, same price.",
           ],
           buttonLabel: "View my visit",
+          base: siteBase,
         });
       }
       log("set_cleaner", { booking: bookingId, cleanerEmailSent });
@@ -4156,6 +4183,7 @@ export default async function handler(req: Req, res: Res) {
           try {
             await sendFeeReceiptEmailOnce(
               STRIPE_SECRET_KEY, customer.id, bookingId, feeIntent.id, feeCents,
+              siteBase,
             );
           } catch { /* best-effort */ }
           return json(200, { ok: true, fee_cents: feeCents, payment_intent: feeIntent.id, adopted: true });
@@ -4243,6 +4271,7 @@ export default async function handler(req: Req, res: Res) {
           try {
             await sendFeeReceiptEmailOnce(
               STRIPE_SECRET_KEY, customer.id, bookingId, piId, feeCents,
+              siteBase,
             );
           } catch { /* best-effort */ }
           log("charge_fee", { booking: bookingId, feeCents });
@@ -4375,13 +4404,13 @@ export default async function handler(req: Req, res: Res) {
           reason: "no_dimensions_in_stripe_metadata",
         });
       }
-      const v2 = mintV2Link(visit.id, visit.visit_date);
+      const v2 = mintV2Link(visit.id, visit.visit_date, siteBase);
       if (v2 && (await writeV2Link(visit.id, v2))) {
         await logEvent(visit.id, bookingId, "owner", "cleaner_link_issued", { expires: v2.expires, version: "v2" });
         log("cleaner_link", { booking: bookingId, expires: v2.expires, version: "v2" });
         return json(200, { ok: true, url: v2.url, expires: v2.expires, reusable: true, ...(scopeProvisional ? { scope_provisional: true } : {}) });
       }
-      const leg = mintLegacyLink(visit.visit_date);
+      const leg = mintLegacyLink(visit.visit_date, siteBase);
       const okUpd = await dbUpdate("gh_visits", `id=eq.${visit.id}`, {
         cleaner_token_hash: hashToken(leg.token),
         cleaner_token_expires: leg.expires,
@@ -4417,7 +4446,7 @@ export default async function handler(req: Req, res: Res) {
       if (!cleanerSecret()) {
         return json(503, { ok: false, error: "reusable_unavailable" });
       }
-      const recomputed = recomputeV2Link(visit);
+      const recomputed = recomputeV2Link(visit, siteBase);
       if (!recomputed) {
         // Either the stored hash no longer matches the v2 derivation
         // (e.g. a legacy link overwrote it) or the link expired. An
@@ -4453,7 +4482,7 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(null, bookingId, "owner", "client_link_issued");
       return json(200, {
         ok: true,
-        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
+        url: `${siteBase}/visit?bt=${encodeURIComponent(token)}`,
       });
     }
 
@@ -4525,8 +4554,8 @@ export default async function handler(req: Req, res: Res) {
       });
       return json(200, {
         ok: true,
-        report_url: `https://www.gatehousehomecleaning.com/report?bt=${token}`,
-        visit_url: `https://www.gatehousehomecleaning.com/visit?bt=${token}`,
+        report_url: `${siteBase}/report?bt=${token}`,
+        visit_url: `${siteBase}/visit?bt=${token}`,
       });
     }
 
