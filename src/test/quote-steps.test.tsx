@@ -277,6 +277,11 @@ describe("quote steps", () => {
     // Step 1: one short line next to the price, before the visitor types
     // anything (16.11 item 5: the full payment block lives on step 3).
     expect(screen.getByText("See your price before saving a card.")).toBeInTheDocument();
+    // O-074: step 1 now also explains approve-then-pay in the homepage's
+    // own words — photo report first, approve to pay or report an issue,
+    // 24 hours to review. The full payment block still lives on step 3.
+    expect(screen.getByText(/See your photo report before payment\. Approve to pay, or report an issue\./)).toBeInTheDocument();
+    expect(screen.getByText(/You have 24 hours to review your report\./)).toBeInTheDocument();
     expect(screen.queryByText(/We.ll send a private photo report after your cleaning/)).not.toBeInTheDocument();
     // Step 3: the payment explanation lives in "When you pay" only —
     // the duplicate $0 box under Terms was removed (ChatGPT #5 / V1).

@@ -165,7 +165,7 @@ const Terms = () => {
 
         <h2 id="terms-7" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">7. Service Concerns</h2>
         <p className="mb-8">
-          Missed something on the checklist? Tap &quot;Report an issue&quot; on your report page, or email us with a photo, within 24 hours after your photo report is sent. Damage claims by email follow Section 10.2 (48 hours). We fix missed checklist items free within 72 hours after you report the issue.
+          Missed something on the checklist? Report it within 24 hours after your photo report is sent: tap &quot;Report an issue&quot; on your report page — that blocks the automatic charge — or email us with a photo. Damage claims by email follow Section 10.2 (48 hours). We fix missed checklist items free within 72 hours after you report the issue.
         </p>
 
         <h2 id="terms-8" className="font-heading text-2xl font-bold mb-4 scroll-mt-24">8. Client Responsibilities</h2>

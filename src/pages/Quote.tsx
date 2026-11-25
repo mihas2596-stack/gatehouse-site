@@ -1044,6 +1044,9 @@ const Quote = () => {
               {showPrice && (
                 <p className="mt-3 text-base leading-relaxed text-foreground">See your price before saving a card.</p>
               )}
+              {showPrice && (
+                <p className="mt-3 text-base leading-relaxed text-foreground">See your photo report before payment. Approve to pay, or report an issue. You have 24 hours to review your report.</p>
+              )}
               {showPrice && <p className="text-sm text-muted-foreground mt-2">Your price is locked in when you send your request.</p>}
               <p className="text-sm text-muted-foreground mt-1">Earliest visit: {fmtDate(minDate)}</p>
 

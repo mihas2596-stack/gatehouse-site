@@ -53,6 +53,15 @@ describe("MB-26 — Terms §7 points damage claims at §10.2 (48h)", () => {
   });
 });
 
+describe("O-079 — Terms §7 separates the 24-hour report window from the 72-hour free fix", () => {
+  it("§7 names both windows without merging them", () => {
+    render(<MemoryRouter><Terms /></MemoryRouter>);
+    expect(screen.getByText(/Report it within 24 hours after your photo report is sent/)).toBeInTheDocument();
+    expect(screen.getByText(/that blocks the automatic charge/)).toBeInTheDocument();
+    expect(screen.getByText(/We fix missed checklist items free within 72 hours after you report the issue/)).toBeInTheDocument();
+  });
+});
+
 describe("MB-28 — State accepts 'Georgia' and normalizes to GA", () => {
   it("typing Georgia stores GA and passes validation", () => {
     goToStep2();
