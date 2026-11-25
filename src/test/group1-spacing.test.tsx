@@ -7,7 +7,7 @@
 // "Home" line pluralises ("1 full bathroom", "2 bedrooms"), and the
 // entry-choice line no longer doubles the period from the label.
 import { StrictMode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HelmetProvider } from "react-helmet-async";
 import { MemoryRouter } from "react-router-dom";
@@ -19,7 +19,23 @@ import Quote from "@/pages/Quote";
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/lib/imageConvert", () => ({ convertToJpeg: async () => new Blob(["fixture"], { type: "image/jpeg" }) }));
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-21T00:00:00Z"));
+// The Cleaner page computes "today" with `new Date()` (Cleaner.tsx),
+// not Date.now() — mocking Date.now alone leaves the real date in
+// place, so the 25.11 fixture stops looking like a future visit and
+// the "you can send the report after the visit" note never renders.
+// Pin the whole Date clock to 21.11.2026 instead, re-applied before
+// every test (afterEach unstubs globals).
+const FIXED_NOW_MS = Date.parse("2026-11-21T00:00:00Z");
+const RealDate = Date;
+class FixedDate extends RealDate {
+  constructor(...args: unknown[]) {
+    super(...(args.length === 0 ? [FIXED_NOW_MS] : args) as [number]);
+  }
+  static now(): number {
+    return FIXED_NOW_MS;
+  }
+}
+beforeEach(() => { vi.stubGlobal("Date", FixedDate); });
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

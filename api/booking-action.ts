@@ -560,6 +560,16 @@ export async function sendFeeReceiptEmailOnce(
   }
   const firstName = custName.trim().split(/\s+/)[0] || "there";
   const dollars = (amountCents / 100).toFixed(2).replace(/\.00$/, "");
+  // O-004 (C19, same as the cleaning receipt): a reply to this receipt
+  // does not open a dispute — point the client at "Report an issue" on
+  // the report page instead. Same token minting as send_report in this file.
+  const reportToken = encryptBookingPayload(bookingLinkSecret(secretKey), {
+    bid: bookingId,
+    email: custEmail,
+    name: custName,
+    ts: Math.floor(Date.now() / 1000),
+  });
+  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -574,7 +584,7 @@ export async function sendFeeReceiptEmailOnce(
           `Amount paid: $${dollars}\nBooking: ${bookingId.slice(0, 8)}\n\n` +
           `This fee applies because the visit was cancelled within 48 hours, as agreed. ` +
           `It is separate from the cleaning itself — no cleaning charge was made for this booking.\n\n` +
-          `If anything looks wrong, email hello@gatehousehomecleaning.com and we'll review it.\n\n` +
+          `If anything about the visit isn't right, open your report page and tap "Report an issue" — we'll review it and reply within one business day: ${reportLink}\n\n` +
           `Gatehouse Home Cleaning\n`,
       }),
       signal: AbortSignal.timeout(15000),
