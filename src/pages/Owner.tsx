@@ -1195,6 +1195,25 @@ const Owner = () => {
     });
   };
 
+  // O-025: revoke the cleaner's access link without rotating it —
+  // the API (revoke_cleaner_link) clears the stored token/issuance,
+  // so the current link stops resolving at once. Destructive, so it
+  // asks through askConfirm like every other dangerous owner action.
+  // The panel keeps the last issued link in a session cache so a
+  // legacy link can still be copied — clear it, or Copy would keep
+  // serving the revoked URL after get_cleaner_link starts answering
+  // link_not_reusable. runAction reloads the visit, so the panel then
+  // shows "No access link yet" until a new one is created.
+  const revokeCleanerLink = async () => {
+    if (!selected) return;
+    if (!(await askConfirm("Revoke cleaner link", "This disables the cleaner's access link at once. The cleaner will no longer be able to open the job, photos or checklist. This cannot be undone — create a new link to restore access.", "Revoke link", true))) return;
+    const visitId = selected.id;
+    if (linkSessionRef.current?.visitId === visitId) linkSessionRef.current = null;
+    setViewLinkOpen(false);
+    setViewLinkUrl("");
+    void runAction("Revoke cleaner link", { action: "revoke_cleaner_link", booking_id: selected.booking_id });
+  };
+
   // Save the assigned cleaner's contact details. The name is read-only
   // here: assignments come from the directory by ID only, never from a
   // free-text name — sending the card's own name keeps the link and
@@ -2325,6 +2344,9 @@ const Owner = () => {
                         <div className="flex flex-wrap gap-2 mb-2">
                           <Button variant="hero" onClick={() => void copyCleanerLink()}>
                             Copy cleaner link (job + photos)
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => void revokeCleanerLink()}>
+                            Revoke link
                           </Button>
                         </div>
                         {/* C: one set of WhatsApp/SMS only — next to the

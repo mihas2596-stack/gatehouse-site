@@ -172,11 +172,11 @@ describe("MB-23 buildWorkRooms with explicit zero counts", () => {
 // ---------- LB-43: the photo policy lives in one module ----------
 
 describe("LB-43 photo policy constants", () => {
-  it("retention is 90 days, orphan age 24h, TTLs 1h (cleaner) / 24h (client)", () => {
+  it("retention is 90 days, orphan age 24h, TTLs 24h (cleaner) / 24h (client)", () => {
     expect(PHOTO_RETENTION_DAYS).toBe(90);
     expect(PHOTO_RETENTION_MS).toBe(90 * 24 * 3600 * 1000);
     expect(ORPHAN_MIN_AGE_MS).toBe(24 * 3600 * 1000);
-    expect(CLEANER_PHOTO_URL_TTL_SECONDS).toBe(3600);
+    expect(CLEANER_PHOTO_URL_TTL_SECONDS).toBe(24 * 3600);
     expect(CLIENT_PHOTO_URL_TTL_SECONDS).toBe(24 * 3600);
     expect(isCleanerPhotoKind("before")).toBe(true);
     expect(isCleanerPhotoKind("after")).toBe(true);
