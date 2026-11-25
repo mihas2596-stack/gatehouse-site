@@ -25,12 +25,17 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// --- Cleaner fixture: the Test MaxHigh visit (25.11, morning, Standard) ---
+// --- Cleaner fixture: the Test MaxHigh visit (02.12.2099, morning,
+// Standard) — the date is far in the future on purpose: the
+// future-visit notice renders only when the visit is after the REAL
+// calendar day (Cleaner.tsx computes "today" with new Date(), while
+// this file mocks only Date.now), so a 2026 fixture date went red
+// once the real calendar reached it. ---
 const SIX_ROOMS = ["Kitchen", "Bathroom", "Bedroom 1", "Bedroom 2", "Half bathroom", "Living room"];
 const cleanerView = {
   ok: true, confirmed: true, editable: true, report_status: "draft", owner_note: null,
   visit: {
-    service: "Standard", date: "2026-11-25", window: "morning", address: "1 Test Street",
+    service: "Standard", date: "2099-12-02", window: "morning", address: "1 Test Street",
     client_first_name: "Test MaxHigh", client_name: "Test MaxHigh", no_photo_zones: null,
     entry: { method: "home", note: "", secret: null },
   },
@@ -47,14 +52,14 @@ describe("group 1(b): cleaner page joins", () => {
     const { container } = render(
       <StrictMode><HelmetProvider><MemoryRouter initialEntries={["/cleaner?ct=test-cleaner-token"]}><Cleaner /></MemoryRouter></HelmetProvider></StrictMode>,
     );
-    expect(await screen.findByText("Wednesday, November 25 · 7–11 AM ET")).toBeInTheDocument();
+    expect(await screen.findByText("Wednesday, December 2 · 7–11 AM ET")).toBeInTheDocument();
     expect(screen.getByText("Standard · for Test MaxHigh")).toBeInTheDocument();
-    expect(screen.getByText("This visit is on Wednesday, November 25 — you can send the report after the visit.")).toBeInTheDocument();
+    expect(screen.getByText("This visit is on Wednesday, December 2 — you can send the report after the visit.")).toBeInTheDocument();
     // "Entry:" lives in a <span>, so match the <p> by its full text.
     expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Client will be home to let you in.")).toBeInTheDocument();
     expect(screen.getAllByText("Rooms ready: 0 of 6")).toHaveLength(2);
     const text = container.textContent ?? "";
-    expect(text).not.toMatch(/November 25·7/);
+    expect(text).not.toMatch(/December 2·7/);
     expect(text).not.toMatch(/Standard·/);
     expect(text).not.toMatch(/onWednesday/);
     expect(text).not.toMatch(/Rooms ready:0of6/);

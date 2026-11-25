@@ -25,10 +25,16 @@ export const isCleanerPhotoKind = (kind: string): boolean => kind === "before" |
 export const PHOTO_RETENTION_DAYS = 90;
 export const PHOTO_RETENTION_MS = PHOTO_RETENTION_DAYS * 24 * 3600 * 1000;
 
-/** Signed download URLs handed to the cleaner view last 1 hour: long
- * enough to load a report, short enough that a forwarded link stops
- * working the same day. Used by api/cleaner.ts. */
-export const CLEANER_PHOTO_URL_TTL_SECONDS = 3600;
+/** Signed download URLs handed to the cleaner view last 24 hours: a
+ * cleaning day runs long and the page stays open with the screen on,
+ * and the only re-sign is on return to the tab (visibilitychange) —
+ * a 1-hour TTL let the photos expire mid-visit. 24 hours covers the
+ * full visit day plus the report review, and matches the client TTL.
+ * A forwarded link still stops working the same day, and the cleaner
+ * link itself is bearer with a 14-day life, revocable by the owner
+ * (revoke_cleaner_link) — revoking it kills the entry point, not just
+ * the photo URLs. Used by api/cleaner.ts. */
+export const CLEANER_PHOTO_URL_TTL_SECONDS = 24 * 3600;
 
 /** Signed download URLs handed to the client report last 24 hours —
  * the same length as the review window, so the report a client opens
