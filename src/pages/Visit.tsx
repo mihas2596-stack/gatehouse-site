@@ -1201,7 +1201,7 @@ const Visit = () => {
                   <li>If anything about the arrival changes, we email you the same day.</li>
                 </ul>
                 <p className="text-sm text-muted-foreground mt-3">
-                  If entry fails, we re-check your instructions, contact you and wait before marking the visit missed.
+                  If entry fails, we re-check your instructions, contact you and wait before we count the visit as missed.
                   You can meet your cleaner in person — no code needed.
                 </p>
               </div>
