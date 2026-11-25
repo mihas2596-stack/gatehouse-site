@@ -41,11 +41,11 @@ describe("half bathrooms", () => {
     sessionStorage.removeItem("gh_quote_draft_v1");
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Half bathrooms"), { target: { value: "1" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Half bathrooms"), { target: { value: "2" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     // And the step-2 summary names the half baths without repricing.
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByText(/2 half bath/)).toBeInTheDocument();
