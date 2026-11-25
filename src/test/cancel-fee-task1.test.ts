@@ -198,6 +198,16 @@ describe("Task 1 (a): charge_fee uses this booking's card, never another booking
     // MB-02: the fee key is bound to (booking, amount, card), so a
     // replayed or mis-keyed create cannot charge the wrong card/amount.
     expect(piCalls[0].idem).toMatch(/^fee_bid-task1_2500_[0-9a-f]{12}$/);
+    // O-004: the fee receipt points the client at "Report an issue" on
+    // the report page (a reply to the receipt opens no dispute — inbound
+    // email is off), never at emailing hello@.
+    const feeReceipt = resendBodies
+      .map((b) => JSON.parse(b) as { text?: string; subject?: string })
+      .find((m) => m.subject?.includes("late-cancellation fee"));
+    expect(feeReceipt?.text).toBeDefined();
+    expect(feeReceipt?.text).toContain('tap "Report an issue"');
+    expect(feeReceipt?.text).toContain("/report?bt=");
+    expect(feeReceipt?.text).not.toContain("email hello@gatehousehomecleaning.com");
   });
 
   it("no card confirmed for this booking: no charge, a clear reason, nothing created", async () => {

@@ -79,7 +79,11 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(
 const token = () => signBooking(LINK_SECRET, {
   bid: BID, email: "client@example.com", name: "Casey Client",
 }).token;
-const reqWithToken = () => ({ method: "POST", headers: {}, body: { bt: token() } });
+// O-008: the attempt identity is the client-supplied request_id — the
+// same request_id is one attempt (same key, Stripe replays the session),
+// a fresh request_id is a fresh attempt (fresh key, fresh session).
+const RID = "11111111-2222-4333-8444-555555555555";
+const reqWithToken = (requestId: string = RID) => ({ method: "POST", headers: {}, body: { bt: token(), request_id: requestId } });
 
 describe("card setup preserves payment history", () => {
   it("does not rebind an unrelated same-email customer or mutate its payment history", async () => {
@@ -105,7 +109,7 @@ describe("card setup preserves payment history", () => {
     const request = reqWithToken();
     await handler(request as never, res() as never);
     await handler(request as never, res() as never);
-    await handler(reqWithToken() as never, res() as never);
+    await handler(reqWithToken("99999999-8888-4777-8666-555555555555") as never, res() as never);
     expect(sessionKeys[0]).toMatch(/^setup_/);
     expect(sessionKeys[1]).toBe(sessionKeys[0]);
     expect(sessionKeys[2]).not.toBe(sessionKeys[0]);

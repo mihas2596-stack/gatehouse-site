@@ -482,7 +482,16 @@ export default async function handler(req: Req, res: Res) {
     const base = siteBase(origin);
     // A reopened email may carry a newly issued token. Stripe requires all
     // parameters under one key to match, including the return URLs.
-    const sessionAttempt = createHash("sha256").update(JSON.stringify([base, bt, parsed.data.request_id ?? ""])).digest("hex");
+    // O-008: the idempotency key must never be determined by the booking
+    // alone. A client-supplied request_id (one fresh UUID per save-card
+    // attempt — SaveCard and ThankYou mint it per page mount) pins
+    // retries of the same attempt to the same Stripe session, while a
+    // repeat attempt carries a fresh request_id and gets a fresh session.
+    // When the client sends no request_id (old cached page, no
+    // crypto.randomUUID), mint a fresh server nonce per request so a
+    // repeat can never replay a stale — possibly expired — session.
+    const attemptNonce = parsed.data.request_id ?? randomUUID();
+    const sessionAttempt = createHash("sha256").update(JSON.stringify([base, bt, attemptNonce])).digest("hex");
     try {
       const session = await stripePost(STRIPE_SECRET_KEY, "/checkout/sessions", {
         mode: "setup",

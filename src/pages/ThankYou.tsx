@@ -99,6 +99,11 @@ const ThankYou = () => {
   // kept for EVERY state, so a revisit (no router state) still shows the
   // real service, price and requested date in states A and D too.
   const [statusBooking, setStatusBooking] = useState<CardStatusBooking | null>(null);
+  // O-008: one fresh UUID per page mount, sent as request_id so a repeat
+  // save-card attempt gets a fresh Stripe Checkout Session instead of
+  // replaying the (possibly expired) one for this booking. Retries of
+  // this same attempt reuse it, so Stripe replays the same session.
+  const [setupAttempt] = useState(() => globalThis.crypto?.randomUUID?.());
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(false);
   const slowTimer = useRef<number | null>(null);
@@ -195,7 +200,7 @@ const ThankYou = () => {
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bt }),
+        body: JSON.stringify({ bt, ...(setupAttempt ? { request_id: setupAttempt } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; url?: string };
       if (res.ok && data.ok && typeof data.url === "string") {
