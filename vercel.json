@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "npm install --prefix /tmp/gh-browser --no-audit --no-fund @sparticuz/chromium@158.0.0 && env -i PATH=\"$PATH\" HOME=\"$HOME\" CI=1 TZ=UTC ./node_modules/.bin/playwright test -c playwright.release-check.mts --reporter=list && npm run build",
   "crons": [
     {
       "path": "/api/auto-charge",
@@ -41,7 +41,9 @@
     }
   ],
   "functions": {
-    "api/visit.ts": { "maxDuration": 60 },
+    "api/visit.ts": {
+      "maxDuration": 60
+    },
     "api/send-contact-email.ts": {
       "maxDuration": 40
     },
