@@ -905,7 +905,7 @@ const Quote = () => {
 
               <div className="md:col-span-2">
                 <p id="service-label" className="block text-sm font-medium mb-2">Type of cleaning</p>
-                <div role="radiogroup" aria-labelledby="service-label" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div role="radiogroup" aria-labelledby="service-label" className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(min(100%,13rem),1fr))]">
                   {SERVICE_OPTIONS.map((t) => {
                     const Icon = t.key === "standard" ? Home : t.key === "deep" ? Search : Package;
                     return (
@@ -922,8 +922,8 @@ const Quote = () => {
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        <Icon className={`w-4 h-4 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
-                        {t.label}
+                        <Icon className={`w-4 h-4 shrink-0 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
+                        <span className="whitespace-nowrap">{t.label}</span>
                       </div>
                       <p className="text-sm font-normal text-muted-foreground mt-1">{t.tagline}</p>
                     </button>
@@ -1200,20 +1200,20 @@ const Quote = () => {
                   <p className="mt-1.5 text-sm text-muted-foreground">For updates about your visit.</p>
                 </div>
                 <h3 className="font-heading text-base font-bold mb-2 md:col-span-2">Your preferred visit</h3>
-                <div>
+                <div className="min-w-0">
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
                     id="b-date" name="date" type="date" lang="en-US" min={minDate} ref={refs.date}
                     required maxLength={10} pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
                     value={booking.date} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.date} aria-describedby={bookingErrors.date ? "b-date-error" : undefined}
-                    className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="block w-full min-w-0 max-w-full box-border px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.date && <p id="b-date-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.date}</p>}
                   {validServiceDate(booking.date) && booking.date >= minDate && !bookingErrors.date && (
                     <p className="mt-1.5 text-sm text-muted-foreground">Selected date: {fmtDate(booking.date)}</p>
                   )}
-                  <p className="mt-1.5 text-sm text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">Choose a date at least 3 days ahead. We’ll confirm availability within one business day.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label htmlFor="b-time" className="block text-sm font-medium mb-1.5">Preferred arrival window</label>
