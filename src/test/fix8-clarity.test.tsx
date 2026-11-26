@@ -132,7 +132,9 @@ describe("fix8 — clarity: no jargon in client-facing copy", () => {
   it("quote step 2 summary has no scope wording", () => {
     goToStep2();
     assertNoJargon();
-    expect(screen.getByText("Price so far:")).toBeInTheDocument();
+    // O-050: step 2 shows "Your price:" twice — the brief recap at the
+    // top and the detailed breakdown above the Review button.
+    expect(screen.getAllByText("Your price:")).toHaveLength(2);
   });
 });
 

@@ -33,18 +33,18 @@ describe("booking price confirmation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to price" }));
     expect(screen.getByLabelText("ZIP code (service area check)")).toHaveValue("30024");
     expect(screen.getByLabelText("Bedrooms")).toHaveValue("4");
-    expect(screen.getByText("First visit (Standard): $239")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $239")).toBeInTheDocument();
     sessionStorage.removeItem("gh_quote_draft_v1");
   });
 
   it("uses the selected service instead of cleaning history", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30518" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /^One-time$/ }));
-    expect(screen.getByText("One-time cleaning: $219")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $219")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /^Deep A detailed/ }));
-    expect(screen.getByText("One-time cleaning: $329")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $329")).toBeInTheDocument();
     expect(screen.queryByText(/Future visits/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe("booking price confirmation", () => {
     // Extras start collapsed.
     fireEvent.click(screen.getByRole("button", { name: /Add extras \(optional\) — None selected/ }));
     fireEvent.click(screen.getByLabelText(/Inside oven/));
-    expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $224")).toBeInTheDocument();
     expect(screen.getByText("Future visits (Standard): $224 every other week")).toBeInTheDocument();
     // No founding language anywhere on the page.
     expect(screen.queryByText(/founding/i)).not.toBeInTheDocument();
@@ -80,7 +80,7 @@ describe("booking price confirmation", () => {
       expect(screen.getByText(/Test booking: prices on this page are reduced for a payment test/)).toBeInTheDocument();
     });
     // Regular $189 recurring M at 1/100 = $1.89, capped at the $1.50 test ceiling.
-    expect(screen.getByText("First visit (Standard): $1.50")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.50")).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 

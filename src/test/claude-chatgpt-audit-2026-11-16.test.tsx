@@ -62,7 +62,7 @@ describe("quote: test-price cap notice (ChatGPT #1)", () => {
     openQuote();
     // Defaults are 3br/2ba recurring: $189 -> $1.89, capped to $1.50.
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("First visit (Standard): $1.50")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.50")).toBeInTheDocument();
     expect(screen.getByText("Test price cap applied. Selected extras are included in the total shown.")).toBeInTheDocument();
   });
 
@@ -73,13 +73,13 @@ describe("quote: test-price cap notice (ChatGPT #1)", () => {
     fireEvent.click(screen.getByRole("radio", { name: "One-time" }));
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     // $149 -> $1.49: under the cap, so no notice.
-    expect(screen.getByText("One-time cleaning: $1.49")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.49")).toBeInTheDocument();
     expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
     expandAddons();
     fireEvent.click(screen.getByLabelText(/Inside oven/));
     // $149 + $35 = $184 -> $1.84, capped to $1.50: the add-on line still
     // shows +$0.35, and the notice explains why the total stays $1.50.
-    expect(screen.getByText("One-time cleaning: $1.50")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.50")).toBeInTheDocument();
     expect(screen.getByText("Test price cap applied. Selected extras are included in the total shown.")).toBeInTheDocument();
   });
 
@@ -112,10 +112,10 @@ describe("quote: cap notice stays off on ordinary prices", () => {
   it("adds the add-on at its real price and shows no cap notice", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     expandAddons();
     fireEvent.click(screen.getByLabelText(/Inside oven/));
-    expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $224")).toBeInTheDocument();
     expect(screen.queryByText(/Test price cap applied/)).not.toBeInTheDocument();
   });
 });
@@ -126,7 +126,7 @@ describe("quote: price summary under the ZIP (ChatGPT #3)", () => {
   it("shows the per-visit total and $0 due today right under the ZIP", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("$1.50 per visit, every other week · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.50 per visit, every other week · $0 due today")).toBeInTheDocument();
   });
 
   it("shows the one-time total for a one-time clean, and updates when rooms change", () => {
@@ -135,16 +135,16 @@ describe("quote: price summary under the ZIP (ChatGPT #3)", () => {
     fireEvent.change(screen.getByLabelText("Full bathrooms"), { target: { value: "1" } });
     fireEvent.click(screen.getByRole("radio", { name: "One-time" }));
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("One-time: $1.49 · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.49 (one-time) · $0 due today")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "2" } });
-    expect(screen.getByText("One-time: $1.49 · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $1.49 (one-time) · $0 due today")).toBeInTheDocument();
   });
 
   it("shows no summary for an unsupported ZIP, and the custom-quote hint for a 6-bedroom home", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "99999" } });
     expect(screen.queryByText(/per visit, every other week · \$0 due today/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/one-time · \$0 due today/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(one-time\) · \$0 due today/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.change(screen.getByLabelText("Bedrooms"), { target: { value: "6" } });
     expect(screen.getByText(/Custom quote for larger homes/)).toBeInTheDocument();
@@ -359,21 +359,21 @@ describe("V5: frequency is explicit and Services preselection flows into the tot
     render(<MemoryRouter initialEntries={["/quote?service=deep"]}><Quote /></MemoryRouter>);
     expect(screen.getByRole("radio", { name: /Deep/ })).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("$329 one-time · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $329 (one-time) · $0 due today")).toBeInTheDocument();
   });
 
   it("a one-time clean from Services shows the one-time total under the ZIP", () => {
     render(<MemoryRouter initialEntries={["/quote?service=standard&frequency=onetime"]}><Quote /></MemoryRouter>);
     expect(screen.getByRole("radio", { name: "One-time" })).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("One-time: $219 · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $219 (one-time) · $0 due today")).toBeInTheDocument();
   });
 
   it("a recurring clean from Services shows the per-visit total with its frequency", () => {
     render(<MemoryRouter initialEntries={["/quote?service=recurring"]}><Quote /></MemoryRouter>);
     expect(screen.getByRole("radio", { name: "Every other week" })).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("$189 per visit, every other week · $0 due today")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189 per visit, every other week · $0 due today")).toBeInTheDocument();
   });
 });
 

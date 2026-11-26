@@ -481,11 +481,11 @@ const Quote = () => {
   const zipPriceSummary = service === "standard" && breakdown
     ? isRecurring
       ? breakdown.first_total === breakdown.recurring_total
-        ? `${fmt$(breakdown.first_total)} per visit, every other week`
-        : `First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
-      : `One-time: ${fmt$(breakdown.first_total)}`
+        ? `Your price: ${fmt$(breakdown.first_total)} per visit, every other week`
+        : `Your price: First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+      : `Your price: ${fmt$(breakdown.first_total)} (one-time)`
     : oneTimeTotal !== null
-      ? `${fmt$(oneTimeTotal)} one-time`
+      ? `Your price: ${fmt$(oneTimeTotal)} (one-time)`
       : "";
   const canSubmit = canProceed && !isSubmitting;
   // Full address for the booking: street, unit, city, state, ZIP.
@@ -566,10 +566,10 @@ const Quote = () => {
         isLargeHome
           ? "Custom quote requested — home has 6+ bedrooms or 6+ full bathrooms, no table price"
           : isRecurring && breakdown
-            ? `First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
+            ? `Your price: First visit ${fmt$(breakdown.first_total)}, then ${fmt$(breakdown.recurring_total)} per visit, every other week`
           : breakdown
-            ? `Total ${fmt$(breakdown.first_total)} (one visit)`
-            : `Price ${fmt$(mainPrice)} per visit`,
+            ? `Your price: ${fmt$(breakdown.first_total)} (one visit)`
+            : `Your price: ${fmt$(mainPrice)} per visit`,
         addonList ? `Add-ons (${isRecurring ? "every visit" : "this visit"}): ${addonList}` : "",
       ].filter(Boolean).join(" · ");
       // Idempotency: one request_id per booking attempt, kept in
@@ -690,11 +690,11 @@ const Quote = () => {
         service === "standard" && breakdown
           ? isRecurring
             ? effFirst === effRecurring
-              ? `${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
-              : `First visit ${fmt$(effFirst ?? breakdown.first_total)}, then ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
-            : `One-time: ${fmt$(effFirst ?? breakdown.first_total)}`
+              ? `Your price: ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
+              : `Your price: First visit ${fmt$(effFirst ?? breakdown.first_total)}, then ${fmt$(effRecurring ?? breakdown.recurring_total)} per visit, every other week`
+            : `Your price: ${fmt$(effFirst ?? breakdown.first_total)} (one-time)`
           : effFirst !== null
-            ? `${fmt$(effFirst)} one-time`
+            ? `Your price: ${fmt$(effFirst)} (one-time)`
             : "";
       navigate("/thank-you", {
         state: {
@@ -898,8 +898,10 @@ const Quote = () => {
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        <Icon className={`w-4 h-4 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
-                        {t.label}
+                        <Icon className={`w-4 h-4 shrink-0 ${service === t.key ? "text-primary" : "text-muted-foreground"}`} />
+                        {/* O-075: the "Move-in / Move-out" label must stay on one
+                            line — the spaces around "/" let it wrap mid-label. */}
+                        <span className="whitespace-nowrap">{t.label}</span>
                       </div>
                       <p className="text-sm font-normal text-muted-foreground mt-1">{t.tagline}</p>
                     </button>
@@ -1009,12 +1011,12 @@ const Quote = () => {
                 <p className="text-base text-foreground">Enter your ZIP code to see your price.</p>
               ) : (
                 <>
-                  <p className="mb-2 text-[1.125rem] font-semibold text-foreground">Your cleaning cost</p>
+                  <p className="mb-2 text-[1.125rem] font-semibold text-foreground">Your price</p>
                   {service !== "standard" ? (
                     // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
                       <p className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                        One-time cleaning: {fmt$(oneTimeTotal ?? 0)}
+                        Your price: {fmt$(oneTimeTotal ?? 0)}
                       </p>
                       <p className="text-sm text-muted-foreground mt-2">
                         {SERVICE_LABEL_CALC[service]}. Inside oven, fridge and cabinets are included — never charged twice.
@@ -1030,7 +1032,7 @@ const Quote = () => {
                       {isRecurring ? (
                         <>
                           <p className="font-heading text-[1.75rem] font-bold leading-tight text-primary sm:text-[2rem]">
-                            First visit (Standard): {fmt$(breakdown.first_total)}
+                            Your price: {fmt$(breakdown.first_total)}
                           </p>
                           <p className="mt-2 text-[1.125rem] font-semibold leading-relaxed text-foreground sm:text-[1.25rem]">
                             Future visits (Standard): {fmt$(breakdown.recurring_total)} every other week
@@ -1038,7 +1040,7 @@ const Quote = () => {
                         </>
                       ) : (
                         <p className="font-heading text-3xl sm:text-4xl font-bold text-primary">
-                          One-time cleaning: {fmt$(breakdown.first_total)}
+                          Your price: {fmt$(breakdown.first_total)}
                         </p>
                       )}
                       {priceBlockAddons && (
@@ -1087,7 +1089,7 @@ const Quote = () => {
                 <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
-                <p><strong>Price so far:</strong> {priceSummaryText}</p>
+                <p><strong>Your price:</strong> {priceSummaryText}</p>
                 <p className="text-muted-foreground mt-1">{`${bedrooms} ${bedrooms === 1 ? "bed" : "beds"}, ${fullBaths} full bath${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? `, ${halfBaths} half bath${halfBaths === 1 ? "" : "s"}` : ""} · ZIP ${zip || "—"}`}</p>
                 <Link to="/whats-included" className="inline-flex min-h-[44px] items-center text-primary underline">See the full room-by-room list</Link>
               </div>
@@ -1105,7 +1107,7 @@ const Quote = () => {
                     <dd className="text-[1.625rem] font-bold leading-tight text-sage-foreground">$0</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Cleaning price</dt>
+                    <dt className="text-muted-foreground">Your price</dt>
                     <dd className="text-[1.25rem] font-semibold leading-tight">{reviewPrice}</dd>
                     <dd className="mt-1">{`${SERVICE_LABEL_CALC[service]} · ${service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}`}</dd>
                     {capNote}
@@ -1321,9 +1323,8 @@ const Quote = () => {
                 <p><strong>Your price:</strong></p>
                 {service === "standard" && breakdown ? (
                   <>
-                    <p className="mt-1">First visit: {fmt$(breakdown.first_total)}</p>
+                    <p className="mt-1">{fmt$(breakdown.first_total)}{isRecurring ? " — first visit" : " — one-time visit"}</p>
                     {isRecurring && <p className="mt-1">Then: {fmt$(breakdown.recurring_total)} per visit, every other week</p>}
-                    {!isRecurring && <p className="mt-1">One-time visit</p>}
                   </>
                 ) : (
                   <p className="mt-1">{priceSummaryText}</p>

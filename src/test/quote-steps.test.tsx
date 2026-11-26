@@ -69,20 +69,20 @@ describe("quote steps", () => {
     expect((screen.getByLabelText(/Inside cabinets/) as HTMLInputElement).checked).toBe(false);
     expect((screen.getByLabelText(/Pets/) as HTMLInputElement).checked).toBe(false);
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Inside oven/));
-    expect(screen.getByText("First visit (Standard): $224")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $224")).toBeInTheDocument();
   });
 
   it("step 1 prices Standard immediately after an eligible ZIP", () => {
     openQuote();
     expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
     expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
-    expect(screen.queryByText("Your cleaning cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("Your price")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("Your cleaning cost")).toBeInTheDocument();
+    expect(screen.getByText("Your price")).toBeInTheDocument();
     expect(screen.queryByText(/professionally cleaned in the last/i)).not.toBeInTheDocument();
-    expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
+    expect(screen.getByText("Your price: $189")).toBeInTheDocument();
     expect(screen.getByText("Future visits (Standard): $189 every other week")).toBeInTheDocument();
     expect(screen.getByText("Due today: $0")).toBeInTheDocument();
     // The room-by-room link lives on step 2 now, not in the step-1 flow.
