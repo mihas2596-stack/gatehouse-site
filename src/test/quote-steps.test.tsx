@@ -172,8 +172,8 @@ describe("quote steps", () => {
     openQuote();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
-    expect(screen.getByText("How will your cleaner get in? *")).toBeInTheDocument();
-    expect(screen.getByText("Choose an option. No keys or entry codes needed now.")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "How will your cleaner get in?" })).toHaveAttribute("aria-required", "true");
+    expect(screen.getByText("Choose one option to continue. No keys or entry codes needed now.")).toBeInTheDocument();
     for (const name of [/I’ll be home/, /Someone will meet/, /I’ll arrange access/, /Decide later/]) {
       expect((screen.getByRole("radio", { name }) as HTMLInputElement).checked).toBe(false);
     }
@@ -196,6 +196,7 @@ describe("quote steps", () => {
     fireEvent.click(screen.getByLabelText(/I agree to photos of the cleaned rooms/));
     fireEvent.click(screen.getByRole("button", { name: "Review my request" }));
     expect(screen.getByText("Choose how to arrange entry.")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "How will your cleaner get in?" })).toHaveAccessibleDescription("Choose how to arrange entry.");
     expect(screen.getByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   });
 
