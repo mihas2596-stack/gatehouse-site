@@ -1033,7 +1033,7 @@ const Quote = () => {
                 <p className="text-base text-foreground">Enter your ZIP code to see your price.</p>
               ) : (
                 <>
-                  <p className="mb-2 text-[1.125rem] font-semibold text-foreground">Your cleaning cost</p>
+                  <p className="mb-2 text-[1.125rem] font-semibold text-foreground">Your price</p>
                   {service !== "standard" ? (
                     // Deep and move-in/out: one total, oven/fridge/cabinets included.
                     <>
@@ -1111,7 +1111,7 @@ const Quote = () => {
                 <h2 id="quote-step-2-heading" tabIndex={-1} className="font-heading text-2xl font-bold mb-2 scroll-mt-24 outline-none">Your visit</h2>
               <p className="text-sm text-muted-foreground mb-2">Fields marked * are required.</p>
               <div className="mb-6 rounded-lg border border-border bg-background p-4 text-sm">
-                <p><strong>Price so far:</strong> {priceSummaryText}</p>
+                <p><strong>Your price:</strong> {priceSummaryText}</p>
                 <p className="text-muted-foreground mt-1">{`${bedrooms} ${bedrooms === 1 ? "bed" : "beds"}, ${fullBaths} full bath${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? `, ${halfBaths} half bath${halfBaths === 1 ? "" : "s"}` : ""} · ZIP ${zip || "—"}`}</p>
                 <Link to="/whats-included" className="inline-flex min-h-[44px] items-center text-primary underline">See the full room-by-room list</Link>
               </div>
@@ -1129,7 +1129,7 @@ const Quote = () => {
                     <dd className="text-[1.625rem] font-bold leading-tight text-sage-foreground">$0</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Cleaning price</dt>
+                    <dt className="text-muted-foreground">Your price</dt>
                     <dd className="text-[1.25rem] font-semibold leading-tight">{reviewPrice}</dd>
                     <dd className="mt-1">{`${SERVICE_LABEL_CALC[service]} · ${service === "standard" ? FREQUENCY_LABEL[frequency] : "One-time"}`}</dd>
                     {capNote}

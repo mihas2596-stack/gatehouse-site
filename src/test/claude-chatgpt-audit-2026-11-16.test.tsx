@@ -403,11 +403,11 @@ describe("secondary pages: WhatsIncluded intro + add-ons note, About coordinatio
     expect(screen.getByRole("heading", { name: "Not included" })).toBeInTheDocument();
   });
 
-  it("About puts the coordination promise next to the portrait, above Why Every Other Week", () => {
+  it("About puts the coordination promise next to the portrait, above Why every other week", () => {
     render(<MemoryRouter><About /></MemoryRouter>);
     expect(screen.getByText(/I coordinate your visit/)).toBeInTheDocument();
     expect(document.body.innerHTML.indexOf("I coordinate your visit")).toBeLessThan(
-      document.body.innerHTML.indexOf("Why Every Other Week")
+      document.body.innerHTML.indexOf("Why every other week")
     );
   });
 });
