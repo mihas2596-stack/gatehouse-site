@@ -277,6 +277,7 @@ const Quote = () => {
   // pressed with a missing or invalid ZIP.
   const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [step2ValidationAttempted, setStep2ValidationAttempted] = useState(false);
   const [smsConsent, setSmsConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
@@ -436,7 +437,7 @@ const Quote = () => {
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date"];
-      setSubmitError(Object.values(errs)[0] || "");
+      setStep2ValidationAttempted(true);
       const field = order.find((f) => errs[f] && refs[f].current);
       const target = field ? refs[field].current
         : errs.entryMethod ? document.getElementById("entry-home")
@@ -446,6 +447,7 @@ const Quote = () => {
       target?.focus();
       return;
     }
+    setStep2ValidationAttempted(false);
     setSubmitError("");
     setStep(3);
     // Audit fix (§10): gh_quote_review was declared but never fired,
@@ -1327,7 +1329,7 @@ const Quote = () => {
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
               </div>
-              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
+              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{step2ValidationAttempted ? Object.values(bookingErrors).find(Boolean) || "" : ""}</div>
               </>)}
 
               {step === 3 && (<>
