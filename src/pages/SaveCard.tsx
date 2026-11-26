@@ -129,7 +129,7 @@ export default function SaveCard() {
           <AlertTriangle className="mx-auto mb-6 h-12 w-12" aria-hidden="true" />
           {status === "failed" ? <>
             <h1 className="font-heading text-3xl font-bold">Card not saved</h1>
-            <p className="my-6">You can try again on Stripe. Saving a card costs $0 today.</p>
+            <p className="my-6">You can try again on Stripe. Saving a card is free.</p>
             <Button variant="hero" size="lg" onClick={() => {
               setEntry(hasCard);
               setStatus("ready");
