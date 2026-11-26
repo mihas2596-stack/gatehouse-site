@@ -1143,7 +1143,7 @@ const Quote = () => {
                 <details className="mt-2">
                   <summary className="min-h-[44px] cursor-pointer py-2 text-base font-semibold text-primary">View all details</summary>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 break-words">
-                    <dt className="font-semibold">Address</dt><dd className="min-w-0">{fullAddress || "—"}</dd>
+                    <dt className="font-semibold">Address</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{fullAddress || "—"}</dd>
                     <dt className="font-semibold">Home</dt><dd>{`${bedrooms} ${bedrooms === 1 ? "bedroom" : "bedrooms"} · ${fullBaths} full bathroom${fullBaths === 1 ? "" : "s"}${halfBaths > 0 ? ` · ${halfBaths} half bathroom${halfBaths === 1 ? "" : "s"}` : ""}`}</dd>
                     <dt className="font-semibold">Contact</dt><dd className="min-w-0 [overflow-wrap:anywhere]">{`${booking.name} · ${booking.email} · ${booking.phone}`}</dd>
                     <dt className="font-semibold">Entry</dt><dd>{entrySummaryLabel(entryMethod || null, entryDetail || null)}</dd>
@@ -1203,13 +1203,16 @@ const Quote = () => {
                 <div>
                   <label htmlFor="b-date" className="block text-sm font-medium mb-1.5">Preferred date *</label>
                   <input
-                    id="b-date" name="date" type="date" min={minDate} ref={refs.date}
+                    id="b-date" name="date" type="date" lang="en-US" min={minDate} ref={refs.date}
                     required maxLength={10} pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
                     value={booking.date} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.date} aria-describedby={bookingErrors.date ? "b-date-error" : undefined}
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.date && <p id="b-date-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.date}</p>}
+                  {validServiceDate(booking.date) && booking.date >= minDate && !bookingErrors.date && (
+                    <p className="mt-1.5 text-sm text-muted-foreground">Selected date: {fmtDate(booking.date)}</p>
+                  )}
                   <p className="mt-1.5 text-sm text-muted-foreground">We book at least 3 days ahead — we&apos;ll confirm availability within one business day.</p>
                 </div>
                 <div className="md:col-span-2">
