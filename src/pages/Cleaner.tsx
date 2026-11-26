@@ -504,7 +504,7 @@ const Cleaner = () => {
     } catch {
       // G5 (cleaner half): busy always resets; re-read state before any
       // retry so a repeat cannot create a second action.
-      setSubmitError("Couldn't reach the server — the report may or may not have been sent. Reloading before you retry.");
+      setSubmitError("Couldn't reach the server — we don't know whether the report was sent. We're reloading the latest saved state; check it before sending the report again.");
       await load();
     } finally {
       setBusy(false);
