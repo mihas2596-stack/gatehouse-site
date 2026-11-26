@@ -277,6 +277,7 @@ const Quote = () => {
   // pressed with a missing or invalid ZIP.
   const [step1ZipError, setStep1ZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [step2ValidationAttempted, setStep2ValidationAttempted] = useState(false);
   const [smsConsent, setSmsConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLock = useRef(false);
@@ -427,21 +428,32 @@ const Quote = () => {
     }
     setStep(2);
   };
-  const goToStep3 = () => {
+  const visitDetailErrors = () => {
     // Step-2 validation: visit fields + the choices that live on step 2
     // (entry method, photo consent). Terms stay on step 3.
     const errs = { ...validateBooking(false), ...entryErrors() };
     if (!booking.photoConsent) errs.photoConsent = "Please agree to photos for your private report.";
+    return errs;
+  };
+
+  const goToStep3 = () => {
+    const errs = visitDetailErrors();
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
-      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
-      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
-      if (errs.photoConsent) { refs.photoConsent.current?.focus(); return; }
+      setStep2ValidationAttempted(true);
+      const field = order.find((f) => errs[f] && refs[f].current);
+      const target = field ? refs[field].current
+        : errs.entryMethod ? document.getElementById("entry-home")
+        : errs.entryDetail ? document.getElementById("entry-detail-door_code")
+        : errs.photoConsent ? refs.photoConsent.current : null;
+      target?.scrollIntoView?.({ block: "center" });
+      target?.focus();
       return;
     }
+    setStep2ValidationAttempted(false);
+    setSubmitError("");
     setStep(3);
     // Audit fix (§10): gh_quote_review was declared but never fired,
     // so "reached review" was unmeasurable. Fired once per entry here
@@ -741,6 +753,8 @@ const Quote = () => {
       Test price cap applied. Selected extras are included in the total shown.
     </p>
   ) : null;
+
+  const reviewError = step === 2 && step2ValidationAttempted ? Object.values(visitDetailErrors())[0] : undefined;
 
   return (
     <div className="page-shell readable-flow">
@@ -1322,6 +1336,7 @@ const Quote = () => {
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
               </div>
+              {reviewError && <p role="status" className="mt-4 text-sm text-destructive">Before you review your request: {reviewError}</p>}
               </>)}
 
               {step === 3 && (<>
