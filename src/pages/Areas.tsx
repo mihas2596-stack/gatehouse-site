@@ -38,7 +38,7 @@ const faqs = [
   },
   {
     q: "How far in advance do I need to book in my area?",
-    a: "Request at least 3 days ahead. We confirm your cleaner and arrival window by email. For recurring visits, arrange the next date with Gatehouse.",
+    a: "Request at least 3 days ahead. We confirm your cleaner and arrival window by email. For recurring visits, we’ll arrange the next date with you.",
   },
   {
     q: "Do you cover Atlanta proper or only the northern suburbs?",

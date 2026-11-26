@@ -23,6 +23,20 @@ const fillStep2 = () => {
 };
 
 describe("quote steps", () => {
+  it("shows the selected date in US English after correcting a rejected date", () => {
+    openQuote();
+    fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to visit details" }));
+    const date = screen.getByLabelText("Preferred date *");
+    fireEvent.change(date, { target: { value: "2000-12-02" } });
+    fireEvent.blur(date);
+    expect(date).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(date, { target: { value: "2099-12-02" } });
+    expect(screen.getByText("Selected date: December 2, 2099")).toBeVisible();
+    fireEvent.change(date, { target: { value: "" } });
+    expect(screen.queryByText(/^Selected date:/)).not.toBeInTheDocument();
+  });
+
   it("shows only the active step, keeps answers on back, and uses the exact step buttons", () => {
     openQuote();
     expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
@@ -78,9 +92,9 @@ describe("quote steps", () => {
     openQuote();
     expect(screen.getByRole("heading", { name: "See your cleaning price" })).toBeInTheDocument();
     expect(screen.getByText("No email or card needed to see your price.")).toBeInTheDocument();
-    expect(screen.queryByText("Your cleaning cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("Your price")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("ZIP code (service area check)"), { target: { value: "30024" } });
-    expect(screen.getByText("Your cleaning cost")).toBeInTheDocument();
+    expect(screen.getByText("Your price")).toBeInTheDocument();
     expect(screen.queryByText(/professionally cleaned in the last/i)).not.toBeInTheDocument();
     expect(screen.getByText("First visit (Standard): $189")).toBeInTheDocument();
     expect(screen.getByText("Future visits (Standard): $189 every other week")).toBeInTheDocument();
