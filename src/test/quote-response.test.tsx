@@ -53,5 +53,6 @@ it("brings a server-rejected date back onto the editable page", async () => {
   request(3, { ok: false, errors: { date: "Please choose a later date." } }, false);
   expect(await screen.findByRole("heading", { name: "Your visit" })).toBeInTheDocument();
   expect(screen.getByLabelText("Preferred date *")).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByLabelText("Preferred date *")).toHaveFocus();
   expect(screen.getByRole("alert", { name: "" })).toHaveTextContent("Please choose a later date.");
 });
