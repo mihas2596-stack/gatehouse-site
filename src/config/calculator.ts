@@ -171,6 +171,7 @@ export const testCapApplied = (rawTotal: number): boolean =>
  * Extended again by owner order 2026-11-12 by 5 days: ends 2026-11-18T20:59:59Z (23:59 Minsk).
  * Extended again by owner order 2026-11-15 to Friday: ends 2026-11-20T20:59:59Z (23:59 Minsk).
  * Extended again by owner order 2026-11-20 by 5 days: ends 2026-11-25T20:59:59Z (23:59 Minsk).
+ * The scheduled post-expiry rebuild removes the test notice from prerendered HTML.
  * Values and existing pinned booking amounts are unchanged.
  */
 export const GLOBAL_TEST_CUT_UNTIL_MS = Date.parse("2026-11-25T20:59:59Z");

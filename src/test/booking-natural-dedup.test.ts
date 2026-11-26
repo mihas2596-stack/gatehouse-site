@@ -316,7 +316,7 @@ describe("duplicate answer reports the saved email outcome (P1-4)", () => {
     rows.push({
       id: "row-legacy", booking_id: "bid-legacy", client_name: "Dedup Test",
       client_email: "client@example.com", visit_date: "2099-12-01", service: "Standard",
-      address: "1 Example Street", window: null, amount_cents: 150,
+      address: "1 Example Street", window: null, amount_cents: 18900,
       status: "requested", created_at: new Date().toISOString(), visit_no: 1,
     });
     const second = await submit({ ...baseBody, request_id: "99999999-8888-4777-8666-555555555555" });
