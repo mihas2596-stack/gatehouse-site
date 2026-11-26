@@ -324,6 +324,7 @@ const Quote = () => {
     interiorWindows > 0 && `${interiorWindows} window${interiorWindows > 1 ? "s" : ""}`,
   ].filter(Boolean).join(", ");
   const firstStepRender = useRef(true);
+  const rejectedVisitField = useRef<string | null>(null);
   // Land at the top of the new step with focus on its heading. The
   // old code scrolled BEFORE React re-rendered (smooth scroll plus
   // Safari scroll anchoring left the user at the bottom of the new
@@ -331,6 +332,16 @@ const Quote = () => {
   // transition, including Back/Edit buttons that only setStep.
   useEffect(() => {
     if (firstStepRender.current) { firstStepRender.current = false; return; }
+    if (step === 2 && rejectedVisitField.current) {
+      const form = document.getElementById("booking-request") as HTMLFormElement | null;
+      const field = form?.elements.namedItem(rejectedVisitField.current);
+      rejectedVisitField.current = null;
+      if (field instanceof HTMLInputElement) {
+        field.scrollIntoView?.({ block: "center" });
+        field.focus();
+        return;
+      }
+    }
     const heading = document.getElementById(`quote-step-${step}-heading`);
     heading?.scrollIntoView?.({ behavior: "auto", block: "start" });
     heading?.focus();
@@ -524,7 +535,14 @@ const Quote = () => {
       // next to the inline error shown for this attempt.
       setSubmitError("");
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date", "termsConsent", "photoConsent"];
-      for (const f of order) if (errs[f] && refs[f].current) { refs[f].current.focus(); return; }
+      for (const field of order) {
+        const input = refs[field].current;
+        if (errs[field] && input) {
+          input.scrollIntoView?.({ block: "center" });
+          input.focus();
+          return;
+        }
+      }
       const entryHome = errs.entryMethod ? document.getElementById("entry-home") : null;
       if (entryHome) { entryHome.focus(); return; }
       const entryDoorCode = errs.entryDetail ? document.getElementById("entry-detail-door_code") : null;
@@ -658,8 +676,14 @@ const Quote = () => {
           }
           setBookingErrors((p) => ({ ...p, ...fieldErrs }));
           setSubmitError([...Object.values(fieldErrs), ...other].join(" ") || "Please review your details and try again.");
-          if (Object.keys(fieldErrs).some((key) => key !== "termsConsent")) setStep(2);
-          else if (fieldErrs.termsConsent) refs.termsConsent.current?.focus();
+          const visitField = Object.keys(fieldErrs).find((key) => key !== "termsConsent");
+          if (visitField) {
+            rejectedVisitField.current = visitField;
+            setStep(2);
+          } else if (fieldErrs.termsConsent) {
+            refs.termsConsent.current?.scrollIntoView?.({ block: "center" });
+            refs.termsConsent.current?.focus();
+          }
           return;
         }
         throw new Error("Booking request failed");
@@ -1341,7 +1365,6 @@ const Quote = () => {
 
               {step === 3 && (<>
               <div hidden aria-hidden="true"><label htmlFor="b-website">Leave this empty</label><input id="b-website" name="website" tabIndex={-1} autoComplete="off" value={booking.website} onChange={handleBookingChange} /></div>
-              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               {isLargeHome ? <p className="mt-4 text-base">We’ll email your custom price. You can review it before saving a card or confirming a visit.</p> : <PaymentSummary compact />}
               <p className="mt-4 text-base leading-relaxed">Cancel free at least 48 hours before your visit. Later cancellations cost $25.</p>
               <div className="mt-4 flex items-start gap-3">
@@ -1373,6 +1396,7 @@ const Quote = () => {
                       : isLargeHome ? "Request my custom quote" : "Continue to Stripe — $0 today"}
                 </Button>
               </div>
+              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               </>)}
             </form>
           </div>
