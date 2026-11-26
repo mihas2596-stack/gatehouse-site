@@ -436,12 +436,17 @@ const Quote = () => {
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
       const order: Array<keyof typeof refs> = ["name", "email", "phone", "address", "city", "state", "date"];
-      for (const f of order) if (errs[f]) { refs[f].current?.focus(); return; }
-      if (errs.entryMethod) { document.getElementById("entry-home")?.focus(); return; }
-      if (errs.entryDetail) { document.getElementById("entry-detail-door_code")?.focus(); return; }
-      if (errs.photoConsent) { refs.photoConsent.current?.focus(); return; }
+      setSubmitError(Object.values(errs)[0] || "");
+      const field = order.find((f) => errs[f] && refs[f].current);
+      const target = field ? refs[field].current
+        : errs.entryMethod ? document.getElementById("entry-home")
+        : errs.entryDetail ? document.getElementById("entry-detail-door_code")
+        : errs.photoConsent ? refs.photoConsent.current : null;
+      target?.scrollIntoView?.({ block: "center" });
+      target?.focus();
       return;
     }
+    setSubmitError("");
     setStep(3);
     // Audit fix (§10): gh_quote_review was declared but never fired,
     // so "reached review" was unmeasurable. Fired once per entry here
@@ -1322,6 +1327,7 @@ const Quote = () => {
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
               </div>
+              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{submitError}</div>
               </>)}
 
               {step === 3 && (<>
