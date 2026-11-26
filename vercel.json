@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TZ=UTC CI=1 npm test -- --maxWorkers=2 && npm run build && npm run check:html && ./node_modules/.bin/tsc -p tsconfig.app.json --noEmit",
   "crons": [
     {
       "path": "/api/auto-charge",
@@ -41,7 +41,9 @@
     }
   ],
   "functions": {
-    "api/visit.ts": { "maxDuration": 60 },
+    "api/visit.ts": {
+      "maxDuration": 60
+    },
     "api/send-contact-email.ts": {
       "maxDuration": 40
     },
