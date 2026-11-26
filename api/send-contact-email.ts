@@ -726,7 +726,7 @@ export default async function handler(req: Req, res: Res) {
     let testScale = false;
     // Owner order 2026-10-24: a GLOBAL 48-hour test-price window. While
     // active, every booking prices at TEST_PRICE_SCALE with no token
-    // needed; the window auto-expires 2026-11-20 20:59 UTC. Token sessions
+    // needed; the window auto-expires 2026-11-25 20:59:59 UTC. Token sessions
     // (testScale) work the same way on top of it.
     const cutScale = globalTestCutActive();
     let serverRecurring: string | undefined;

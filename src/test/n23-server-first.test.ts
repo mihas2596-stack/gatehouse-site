@@ -8,8 +8,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import handler from "../../api/send-contact-email";
 
-vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-30T00:00:00Z"));
-
 const origin = "https://www.gatehousehomecleaning.com";
 function response() {
   return {
@@ -52,6 +50,8 @@ const base = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  // Keep these historical test-window scenarios independent of wall-clock time.
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-30T00:00:00Z"));
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_x");
   vi.stubEnv("ADMIN_TOKEN", "adm-secret");
   vi.stubEnv("RESEND_API_KEY", "re_test");
