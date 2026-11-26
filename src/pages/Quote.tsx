@@ -1285,9 +1285,11 @@ const Quote = () => {
                   </details>
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-border bg-background p-4">
-                  <p id="entry-label" className="block text-sm font-medium mb-1">How will your cleaner get in? *</p>
-                  <p className="text-sm text-muted-foreground mb-3">Choose an option. No keys or entry codes needed now.</p>
-                  <div role="radiogroup" aria-labelledby="entry-label" className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <p id="entry-label" className="block text-sm font-medium mb-1">How will your cleaner get in?</p>
+                  <p className="text-sm text-muted-foreground mb-3">Choose one option to continue. No keys or entry codes needed now.</p>
+                  <div role="radiogroup" aria-labelledby="entry-label" aria-required="true"
+                        aria-invalid={!!bookingErrors.entryMethod} aria-describedby={bookingErrors.entryMethod ? "entry-label-error" : undefined}
+                        className="aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive rounded-lg grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {ENTRY_METHODS.map((m) => (
                       <label key={m} className={`flex min-h-[64px] cursor-pointer items-center gap-3 rounded-xl border p-4 text-base ${entryMethod === m ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card"}`}>
                         <input id={`entry-${m}`} type="radio" name="entryMethod" value={m} checked={entryMethod === m} onChange={() => { setEntryMethod(m); if (m !== "arrange_before") setEntryDetail(""); setBookingErrors((p) => ({ ...p, entryMethod: "", entryDetail: "" })); }} className="h-5 w-5" />
@@ -1298,11 +1300,13 @@ const Quote = () => {
                   {entryMethod === "decide_later" && (
                     <p className="mt-3 text-sm text-foreground">We’ll email you to arrange entry before your visit.</p>
                   )}
-                  {bookingErrors.entryMethod && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
+                  {bookingErrors.entryMethod && <p id="entry-label-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryMethod}</p>}
                   {entryMethod === "arrange_before" && (
                     <div className="mt-3">
                       <p id="entry-detail-label" className="block text-sm font-medium mb-1">How will you arrange entry?</p>
-                      <div role="radiogroup" aria-labelledby="entry-detail-label" className="flex flex-col gap-1">
+                      <div role="radiogroup" aria-labelledby="entry-detail-label" aria-required="true"
+                        aria-invalid={!!bookingErrors.entryDetail} aria-describedby={bookingErrors.entryDetail ? "entry-detail-label-error" : undefined}
+                        className="aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive rounded-lg flex flex-col gap-1">
                         {ENTRY_DETAILS.map((d) => (
                           <label key={d} className="flex min-h-[44px] items-center gap-2 py-1 text-sm">
                             <input id={`entry-detail-${d}`} type="radio" name="entryDetail" value={d} checked={entryDetail === d} onChange={() => { setEntryDetail(d); setBookingErrors((p) => ({ ...p, entryDetail: "" })); }} className="h-5 w-5" />
@@ -1310,16 +1314,16 @@ const Quote = () => {
                           </label>
                         ))}
                       </div>
-                      {bookingErrors.entryDetail && <p role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryDetail}</p>}
+                      {bookingErrors.entryDetail && <p id="entry-detail-label-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.entryDetail}</p>}
                       <p className="mt-2 text-sm text-muted-foreground">No entry codes are needed now. You can add private entry details after your visit is confirmed.</p>
                     </div>
                   )}
                   <details className="mt-4">
                     <summary className="min-h-[44px] cursor-pointer font-semibold">Add parking or building notes (optional)</summary>
-                    <label htmlFor="b-entry-notes" className="block text-sm font-medium mb-1.5">Parking or building notes (optional)</label>
+                    <label htmlFor="b-entry-notes" className="sr-only">Parking or building notes (optional)</label>
                     <input
                       id="b-entry-notes" type="text" value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} maxLength={500}
-                      placeholder="e.g. Park in the driveway, gate intercom at the front"
+                      placeholder="e.g. Park in the driveway"
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                     <p className="mt-1 text-sm text-muted-foreground">For parking and directions only. Add codes privately after confirmation.</p>
