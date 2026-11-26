@@ -50,13 +50,11 @@ const About = () => {
                 I coordinate your visit. We’ll email you to confirm your date, arrival window, and who’s coming.
               </p>
               <h2 className="font-heading text-2xl md:text-[34px] font-bold mb-6">
-                Why Every Other Week
+                Why every other week
               </h2>
-              <div className="space-y-4 text-foreground/80 leading-relaxed">
-                <p>
-                  A home cleaned every other week never builds up weeks of grime, so each visit is shorter and costs less than a one-time clean.
-                </p>
-              </div>
+              <p className="text-foreground/80 leading-relaxed">
+                A home cleaned every other week never builds up weeks of grime, so each visit is shorter and costs less than a one-time clean.
+              </p>
             </div>
           </div>
 

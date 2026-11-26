@@ -13,7 +13,7 @@ type ServiceCard = {
 
 const mainService: ServiceCard = {
   icon: CalendarClock,
-  title: "Every Other Week",
+  title: "Every other week",
   link: "/quote?service=recurring",
   desc: "Regular upkeep, arranged with you every other week. We confirm each visit’s date, arrival window and cleaner.",
 };
