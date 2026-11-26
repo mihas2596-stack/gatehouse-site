@@ -26,6 +26,7 @@ type Cust = { id: string; email: string; name: string; pm: string; metadata: Rec
 
 let rows: Row[];
 let evts: Evt[];
+let photos: Row[];
 let customers: Cust[];
 let piCalls: Array<{ booking: string; version: string; amount: string; id: string; ok: boolean; idemKey?: string; pm?: string }>;
 let resendSubjects: string[];
@@ -36,6 +37,11 @@ let piCreateParkedOnce: boolean;
 let blockReconcile: Promise<void> | null;
 let reconcileReached: boolean;
 let reconcileParkedOnce: boolean;
+// Finding 6 (25.11.2026): fail the FIRST complaint-photo count read
+// once, to prove the issue response still states the attached photo
+// after the post-insert re-read.
+let failPhotoCountReadOnce: boolean;
+let photoCountReadFailed: boolean;
 
 function res(code: number, body: unknown) {
   return { ok: code >= 200 && code < 300, status: code, json: async () => body, text: async () => JSON.stringify(body) };
@@ -159,11 +165,26 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
   }
 
   if (host.includes("supabase")) {
+    // Signed-upload flow for a client photo (storagePut, as in ma04):
+    // the sign POST returns a URL, the PUT to it succeeds.
+    if (u.pathname.includes("/object/upload/sign/")) {
+      if (method === "POST") return res(200, { url: "/object/upload/sign/x" });
+      return res(200, {});
+    }
     const table = u.pathname.split("/").pop() ?? "";
     if (method === "GET") {
       if (table === "gh_visits") return res(200, applyFilters(rows, u));
       if (table === "gh_events") return res(200, applyFilters(evts, u));
-      if (table === "gh_photos") return res(200, []);
+      if (table === "gh_photos") {
+        // Finding 6: the complaint-photo count read can fail while the
+        // insert still lands — the first kind=eq.client read fails
+        // once when the flag is set, later reads see the stored photo.
+        if (failPhotoCountReadOnce && !photoCountReadFailed && u.searchParams.get("kind") === "eq.client") {
+          photoCountReadFailed = true;
+          return res(500, { message: "db down" });
+        }
+        return res(200, applyFilters(photos, u));
+      }
       return res(200, []);
     }
     if (method === "POST") {
@@ -174,6 +195,7 @@ async function fetchMock(url: string, init?: { method?: string; body?: unknown; 
         evts.push(inserted);
         return res(201, [inserted]);
       }
+      if (table === "gh_photos") photos.push(body);
       return res(201, [body]);
     }
     if (method === "PATCH") {
@@ -241,8 +263,9 @@ beforeEach(() => {
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "sb_test");
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  rows = []; evts = []; customers = [];
+  rows = []; evts = []; photos = []; customers = [];
   piCalls = []; resendSubjects = []; evSeq = 0;
+  failPhotoCountReadOnce = false; photoCountReadFailed = false;
   blockPiCreate = null; piCreateReached = false; piCreateParkedOnce = false;
   blockReconcile = null; reconcileReached = false; reconcileParkedOnce = false;
   vi.stubGlobal("fetch", vi.fn(fetchMock));
@@ -495,5 +518,39 @@ describe("RA07 issue vs charge barrier", () => {
     const approve = await approveP;
     expect(approve.code).toBe(200);
     expect(rows[0]["status"]).toBe("paid");
+  });
+
+  it("Finding 6: pre-payment issue with a photo — the response states 1 photo attached", async () => {
+    sentWorld();
+    const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]).toString("base64");
+    const issue = await call(reportHandler, {
+      method: "POST", headers: {},
+      body: { bt, action: "issue", room: "Kitchen", reason: "The stovetop was not wiped", photo: `data:image/jpeg;base64,${jpeg}` },
+    });
+    expect(issue.code).toBe(200);
+    // The confirmation page renders this number: it must be the real
+    // count, not the 0 snapshotted before the photo was stored.
+    expect(issue.body["issue_photo_count"]).toBe(1);
+    expect(photos).toHaveLength(1);
+    expect(photos[0]["kind"]).toBe("client");
+    // A fresh GET agrees with the submit response.
+    const view = await call(reportHandler, { method: "GET", headers: {}, query: { bt } });
+    expect(view.body["issue_photo_count"]).toBe(1);
+  });
+
+  it("Finding 6: when the count snapshot read fails, the response still states the attached photo", async () => {
+    sentWorld();
+    failPhotoCountReadOnce = true;
+    const bt = signBooking("link-secret", { bid: BID, email: EMAIL, name: "Casey Client" }).token;
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]).toString("base64");
+    const issue = await call(reportHandler, {
+      method: "POST", headers: {},
+      body: { bt, action: "issue", room: "Kitchen", reason: "The stovetop was not wiped", photo: `data:image/jpeg;base64,${jpeg}` },
+    });
+    expect(issue.code).toBe(200);
+    // Old code: the snapshot was null, the increment never ran, the
+    // response carried null and the page showed no attachment line.
+    expect(issue.body["issue_photo_count"]).toBe(1);
   });
 });

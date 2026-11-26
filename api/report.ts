@@ -583,6 +583,14 @@ function money(centsRaw: string | undefined): string | null {
 const q = (v: string | string[] | undefined): string =>
   Array.isArray(v) ? v[0] ?? "" : v ?? "";
 
+async function readIssuePhotoCount(visitId: string): Promise<number | null> {
+  const result = await dbSelectStrict<{ id: string }>(
+    "gh_photos",
+    `visit_id=eq.${encodeURIComponent(visitId)}&kind=eq.client&select=id&limit=10`,
+  );
+  return result.ok ? result.rows.length : null;
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   const o = Array.isArray(origin) ? origin[0] : origin;
@@ -821,11 +829,7 @@ export default async function handler(req: Req, res: Res) {
               // Cabinets audit (fix 1): count the client's own
               // complaint photos for this visit (kind "client").
               try {
-                const issuePhotosRes = await dbSelectStrict<{ id: string }>(
-                  "gh_photos",
-                  `visit_id=eq.${vid}&kind=eq.client&select=id&limit=10`,
-                );
-                if (issuePhotosRes.ok) dbIssuePhotoCount = issuePhotosRes.rows.length;
+                dbIssuePhotoCount = await readIssuePhotoCount(vid);
               } catch {
                 dbIssuePhotoCount = null;
               }
@@ -1043,7 +1047,14 @@ export default async function handler(req: Req, res: Res) {
               kind: "client",
               note: reason.slice(0, 300) || null,
             });
-            if (inserted && dbIssuePhotoCount !== null) dbIssuePhotoCount++;
+            if (inserted) {
+              if (dbIssuePhotoCount === null) {
+                const count = await readIssuePhotoCount(visitId);
+                dbIssuePhotoCount = count !== null && count > 0 ? count : null;
+              } else {
+                dbIssuePhotoCount++;
+              }
+            }
             await logEvent(visitId, payload.bid, "system",
               inserted ? "client_photo_stored" : "client_photo_store_failed", {});
           } else {
