@@ -1305,7 +1305,10 @@ const Visit = () => {
                 {entrySaved && <p className="mt-3 text-sm text-sage-foreground" role="status">Saved.</p>}
                 {data.entry?.has_secret && <p className="mt-3 text-sm text-foreground">Entry details are saved for this visit.</p>}
                 <p className="mt-3 text-sm text-muted-foreground">
-                  Entry details are encrypted and shown only to your assigned cleaner for this visit. Access ends when the visit is finished or cancelled, and entry details are deleted after the visit (visit date + 2 days at the latest). If your cleaner changes, the previous cleaner loses access and you will be asked to add details again. Removing the arrangement deletes it; editing only the note never deletes saved entry details.
+                  Entry details are encrypted and shown only to your assigned cleaner for this visit.
+                </p>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Access ends when the visit is finished or cancelled, and entry details are deleted after the visit (visit date + 2 days at the latest). If your cleaner changes, the previous cleaner loses access and you will be asked to add details again. Removing the arrangement deletes it; editing only the note never deletes saved entry details.
                 </p>
               </div>
             )}
@@ -1355,7 +1358,7 @@ const Visit = () => {
 
                         {!isPreview && data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
               <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-3">Dates that work for us</h2>
+                <h2 className="font-heading text-lg font-bold mb-3">Pick one of these dates instead</h2>
                 <div className="flex flex-wrap gap-2">
                   {data.alt_dates.map((d) => (
                     <Button key={d} variant="hero" disabled={busy} onClick={() => void post({ action: "accept_alt_date", date: d })}>
