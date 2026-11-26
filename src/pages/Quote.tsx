@@ -428,11 +428,16 @@ const Quote = () => {
     }
     setStep(2);
   };
-  const goToStep3 = () => {
+  const visitDetailErrors = () => {
     // Step-2 validation: visit fields + the choices that live on step 2
     // (entry method, photo consent). Terms stay on step 3.
     const errs = { ...validateBooking(false), ...entryErrors() };
     if (!booking.photoConsent) errs.photoConsent = "Please agree to photos for your private report.";
+    return errs;
+  };
+
+  const goToStep3 = () => {
+    const errs = visitDetailErrors();
     setBookingErrors(errs);
     if (Object.keys(errs).length) {
       trackFunnel("gh_form_error", { form_type: "quote", error_stage: "validation" });
@@ -748,6 +753,8 @@ const Quote = () => {
       Test price cap applied. Selected extras are included in the total shown.
     </p>
   ) : null;
+
+  const reviewError = step === 2 && step2ValidationAttempted ? Object.values(visitDetailErrors())[0] : undefined;
 
   return (
     <div className="page-shell readable-flow">
@@ -1329,7 +1336,7 @@ const Quote = () => {
                 <Button variant="outline" type="button" className="min-h-[44px]" onClick={() => setStep(1)}>Back to price</Button>
                 <Button variant="hero" type="button" className="min-h-[48px] flex-1" onClick={goToStep3}>Review my request</Button>
               </div>
-              <div role="alert" className="mt-4 text-sm text-destructive empty:hidden">{step2ValidationAttempted ? Object.values(bookingErrors).find(Boolean) || "" : ""}</div>
+              {reviewError && <p role="status" className="mt-4 text-sm text-destructive">Before you review your request: {reviewError}</p>}
               </>)}
 
               {step === 3 && (<>
