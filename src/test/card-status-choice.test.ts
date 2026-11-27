@@ -95,6 +95,35 @@ describe("saved-card choice (item 6)", () => {
     expect(res.headers["Cache-Control"]).toBe("no-store");
   });
 
+  it.each([
+    [{ exp_month: 12, exp_year: 2028 }, { exp_month: 12, exp_year: 2028 }],
+    [{ exp_month: 12 }, { exp_year: 2028 }],
+  ])("withholds the choice when the visible details match (%j, %j)", async (firstExpiry, secondExpiry) => {
+    stripePmList = [
+      { id: "pm_1", card: { brand: "visa", last4: "4242", ...firstExpiry } },
+      { id: "pm_2", card: { brand: "visa", last4: "4242", ...secondExpiry } },
+    ];
+    const res = response();
+    await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
+    expect(res.code).toBe(200);
+    expect(res.body.booking).toMatchObject({ has_card: "1", card_state: "card_confirmation_required" });
+    expect(res.body.booking).not.toHaveProperty("cards");
+  });
+
+  it("offers both cards when the expiration dates distinguish them", async () => {
+    stripePmList = [
+      { id: "pm_1", card: { brand: "visa", last4: "4242", exp_month: 3, exp_year: 2028 } },
+      { id: "pm_2", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
+    ];
+    const res = response();
+    await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
+    expect(res.code).toBe(200);
+    expect(res.body.booking).toMatchObject({ cards: [
+      { id: "pm_1", exp_month: 3 },
+      { id: "pm_2", exp_month: 12 },
+    ] });
+  });
+
   it("GET with one card identifies it directly, no list needed", async () => {
     stripePmList = [{ id: "pm_1", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } }];
     const res = response();

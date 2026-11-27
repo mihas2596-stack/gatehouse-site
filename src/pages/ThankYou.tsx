@@ -442,6 +442,7 @@ const ThankYou = () => {
     const last4 = card.booking?.card_last4 ?? "";
     const cardIdentified = Boolean(brand && last4);
     const cardOptions = card.booking?.cards ?? [];
+    const canChooseCard = cardIdentified || cardOptions.length > 0;
     return shell(
       <>
         <div className="text-center">
@@ -490,7 +491,7 @@ const ThankYou = () => {
             Something went wrong opening the secure card page. Your request is saved — please try again.
           </p>
         )}
-        {(cardIdentified || cardOptions.length > 0) && (
+        {canChooseCard && (
           <Button variant="hero" size="xl" className="w-full mb-3" onClick={confirmCard} disabled={confirming || !bt || (!cardIdentified && !selectedCard)}>
             {confirming ? (
               <>
@@ -510,9 +511,7 @@ const ThankYou = () => {
               <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
               Opening Stripe…
             </>
-          ) : (
-            "Add a different card"
-          )}
+          ) : canChooseCard ? "Add a different card" : "Add a card"}
         </Button>
         <p className="mt-6 text-center text-sm text-muted-foreground">
           Questions? Email <a href="mailto:hello@gatehousehomecleaning.com" className="font-semibold text-primary underline">hello@gatehousehomecleaning.com</a>.

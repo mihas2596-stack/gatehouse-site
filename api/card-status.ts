@@ -795,7 +795,7 @@ export default async function handler(req: Req, res: Res) {
               if (boundCust) {
                 try {
                   const options = await listCustomerCards(revisitKey, boundCust.id);
-                  booking.cards = options
+                  const cards = options
                     .map((c) => ({
                       id: c.id,
                       brand: String(c.card?.brand ?? ""),
@@ -804,6 +804,12 @@ export default async function handler(req: Req, res: Res) {
                       ...(typeof c.card?.exp_year === "number" ? { exp_year: c.card.exp_year } : {}),
                     }))
                     .filter((c) => c.brand !== "" && c.last4 !== "");
+                  const visibleLabels = new Set(cards.map(({ brand, last4, exp_month, exp_year }) => {
+                    const expiry = exp_month !== undefined && exp_year !== undefined ? `${exp_month}/${exp_year}` : "";
+                    return `${brand.toLowerCase()} ${last4} ${expiry}`;
+                  }));
+                  // Matching labels send the customer through the existing Add a card flow.
+                  if (visibleLabels.size === cards.length) booking.cards = cards;
                 } catch { /* no list — the UI falls back to "add a card" */ }
               }
             } else if (card) {
