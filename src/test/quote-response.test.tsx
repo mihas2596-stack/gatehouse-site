@@ -34,19 +34,27 @@ function request(beds: number, response: object, ok = true) {
 }
 
 it("completes an unpriced request without fetching a payment status or restoring an unrelated visit", async () => {
+  const events: Record<string, unknown>[] = [];
+  vi.stubGlobal("Termly", { getConsentState: () => ({ analytics: true }) });
+  vi.stubGlobal("dataLayer", events);
   sessionStorage.setItem("gh_last_bt", "older-booking");
   const fetchMock = request(6, { ok: true, needs_custom_quote: true, bt: "custom-quote" });
   expect(await screen.findByRole("heading", { name: "Custom quote requested" })).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(events.filter(event => event.event === "gh_lead_submit")).toHaveLength(1);
   expect(screen.queryByRole("button", { name: /Stripe/ })).toBeNull();
 });
 
 it("gives the owner contact when an earlier duplicate confirmation could not be sent", async () => {
+  const events: Record<string, unknown>[] = [];
+  vi.stubGlobal("Termly", { getConsentState: () => ({ analytics: true }) });
+  vi.stubGlobal("dataLayer", events);
   sessionStorage.setItem("gh_last_bt", "older-booking");
   const fetchMock = request(3, { ok: true, duplicate: true, customerEmailSent: false });
   expect(await screen.findByRole("heading", { name: "We already have your request" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Email Gatehouse" })).toHaveAttribute("href", "mailto:hello@gatehousehomecleaning.com");
   expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(events).not.toContainEqual(expect.objectContaining({ event: "gh_lead_submit" }));
 });
 
 it("brings a server-rejected date back onto the editable page", async () => {

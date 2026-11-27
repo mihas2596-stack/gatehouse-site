@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { validServiceDate } from "@/config/service-area";
+import { fmtDateUS } from "@/lib/formatDate";
 
 // V4: one shared report body for /visit (embedded section) and /report
 // (standalone page). The CONTENT never changes with state — only the
@@ -14,6 +16,22 @@ import { createPortal } from "react-dom";
 // has a 44px Close button, closes on Escape or backdrop tap, locks
 // body scroll while open, and returns focus to the thumbnail that
 // opened it.
+
+export type ApprovalDateBlock = { date: string; reclean: boolean };
+
+export function ApprovalDateNotice({ date, reclean }: { date?: string | null; reclean?: boolean }) {
+  const dateLabel = date && validServiceDate(date) ? fmtDateUS(date) : null;
+  const message = reclean
+    ? `You can approve the report after your re-clean${dateLabel ? ` on ${dateLabel}` : ""}.`
+    : dateLabel
+      ? `This visit is on ${dateLabel} — you can approve the report after the visit.`
+      : "You can approve the report after your visit.";
+  return (
+    <p className="mb-3 rounded-lg border border-border bg-muted p-3 text-sm font-medium" role="status">
+      {message}
+    </p>
+  );
+}
 
 export type ReportPhotoItem = {
   url: string;
