@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
 import { pickCustomerByEmail, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
-import { isAllowedOrigin } from "./_origin.js";
+import { isPreviewOrigin } from "./_origin.js";
 
 type BookingPayload = {
   bid: string;
@@ -168,11 +168,20 @@ function clientIp(headers: Record<string, string | string[] | undefined>): strin
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
-const ALLOWED_ORIGINS = [
-  "https://gatehousehomecleaning.com",
+const PRODUCTION_AND_LOCAL_ORIGINS = [
   "https://www.gatehousehomecleaning.com",
+  "https://gatehousehomecleaning.com",
   "http://localhost:8080",
 ];
+
+function checkoutOrigins(): string[] {
+  if (process.env.VERCEL_ENV !== "preview") return PRODUCTION_AND_LOCAL_ORIGINS;
+  // Checkout returns a booking link. Use only the preview hosts assigned
+  // by Vercel to this deployment, including the current branch alias.
+  return [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL]
+    .map((host) => `https://${host ?? ""}`)
+    .filter(isPreviewOrigin);
+}
 
 // Minimal structural types so the function compiles without @vercel/node.
 type Req = {
@@ -202,25 +211,6 @@ const SessionRequestSchema = z.object({
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const corsHeaders = (origin: string | string[] | undefined): Record<string, string> => {
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    Vary: "Origin",
-  };
-  const o = Array.isArray(origin) ? origin[0] : origin;
-  if (o && ALLOWED_ORIGINS.includes(o)) {
-    headers["Access-Control-Allow-Origin"] = o;
-  }
-  return headers;
-};
-
-const siteBase = (origin: string | string[] | undefined): string => {
-  const o = Array.isArray(origin) ? origin[0] : origin;
-  if (o && ALLOWED_ORIGINS.includes(o)) return o;
-  return "https://www.gatehousehomecleaning.com";
-};
 
 type StripeError = { error?: { message?: string; type?: string; code?: string } };
 
@@ -282,13 +272,17 @@ const toCents = (raw: string | undefined): number | null => {
 };
 
 export default async function handler(req: Req, res: Res) {
-  const origin = req.headers["origin"];
-  if (origin && !isAllowedOrigin(origin, ALLOWED_ORIGINS)) {
+  const originHeader = req.headers["origin"];
+  const origin = typeof originHeader === "string" ? originHeader : "";
+  const allowedOrigins = checkoutOrigins();
+  if (originHeader && !allowedOrigins.includes(origin)) {
     res.status(403).json({ ok: false, error: "origin_not_allowed" });
     return;
   }
-  const headers = corsHeaders(origin);
-  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Vary", "Origin");
+  if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -302,6 +296,8 @@ export default async function handler(req: Req, res: Res) {
   const requestId = Math.random().toString(36).slice(2);
   const json = (status: number, body: Record<string, unknown>) =>
     res.status(status).json({ requestId, ...body });
+  const base = origin || allowedOrigins[0];
+  if (!base) return json(503, { ok: false, error: "checkout_preview_unavailable" });
   const log = (step: string, info?: unknown) =>
     console.log(JSON.stringify({ requestId, step, info }));
   const logErr = (step: string, err: unknown) =>
@@ -479,7 +475,6 @@ export default async function handler(req: Req, res: Res) {
     // The session is bound to the booking via client_reference_id + metadata.
     // success_url carries the Stripe session id so /save-card verifies it
     // server-side (never trusts ?saved=1 alone).
-    const base = siteBase(origin);
     // A reopened email may carry a newly issued token. Stripe requires all
     // parameters under one key to match, including the return URLs.
     // O-008: the idempotency key must never be determined by the booking
