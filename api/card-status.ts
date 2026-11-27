@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipher
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
 import { emailDate, emailDocument } from "./_email_copy.js";
 import { notifyOwnerCardReady } from "./_owner_email.js";
-import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
+import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
 import { isVisitDateDeclined } from "./_visit_date.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
@@ -280,7 +280,11 @@ async function stripePost(
 // whole list instead. As a backstop, the booking's confirmed card is
 // fetched directly by id when it is not on any page — it is never
 // silently dropped.
-type StripeCardRow = { id: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } };
+type StripeCardRow = {
+  id: string;
+  allow_redisplay?: string | null;
+  card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number };
+};
 // 16.11 (item 6): a displayable saved-card option for an explicit
 // client choice. Only masked data leaves the server (brand, last4,
 // expiry); the id is the selection value — the POST re-verifies
@@ -367,13 +371,19 @@ async function reconcileCard(
   return { id: pmId, brand: String(pm.card?.brand ?? ""), last4: String(pm.card?.last4 ?? "") };
 }
 
-async function ownedCard(secretKey: string, customerId: string, paymentMethod: string): Promise<CardDetails | null> {
+async function ownedCard(
+  secretKey: string,
+  customerId: string,
+  paymentMethod: string,
+  options?: { requireRedisplay: boolean },
+): Promise<CardDetails | null> {
   const result = await stripeGet(secretKey, `/payment_methods/${encodeURIComponent(paymentMethod)}`);
   if (result.status === 404) return null;
   if (!result.ok) throw new Error("stripe_unavailable");
   const pm = result.data;
   const owner = typeof pm["customer"] === "string" ? pm["customer"] : (pm["customer"] as { id?: string } | null)?.id;
   if (owner !== customerId) return null;
+  if (options?.requireRedisplay && pm["allow_redisplay"] !== "always") return null;
   const card = pm["card"] as { brand?: string; last4?: string } | undefined;
   if (!card) return null;
   return { id: paymentMethod, brand: String(card.brand ?? ""), last4: String(card.last4 ?? "") };
@@ -592,6 +602,10 @@ async function bookingCardCustomer(key: string, bookingId: string, email: string
   return await findCustomerByBooking(key, bookingId) ?? await findCustomerByEmail(key, email, bookingId);
 }
 
+function isBookingCardCustomer(customer: StripeCustomerLite, bookingId: string, pinnedId?: string | null): boolean {
+  return pinnedId === customer.id || customer.metadata?.["gh_booking_id"] === bookingId;
+}
+
 export default async function handler(req: Req, res: Res) {
   const origin = req.headers["origin"];
   const headers: Record<string, string> = { Vary: "Origin" };
@@ -658,7 +672,11 @@ export default async function handler(req: Req, res: Res) {
         res.status(400).json({ ok: false, error: "invalid_card" });
         return;
       }
-      const owned = await ownedCard(STRIPE_SECRET_KEY, cust.id, selectedPmId);
+      if (!isBookingCardCustomer(cust, bid, row?.stripe_customer_id)) {
+        res.status(409).json({ ok: false, error: "card_unavailable" });
+        return;
+      }
+      const owned = await ownedCard(STRIPE_SECRET_KEY, cust.id, selectedPmId, { requireRedisplay: true });
       if (!owned) {
         res.status(409).json({ ok: false, error: "card_unavailable" });
         return;
@@ -769,7 +787,7 @@ export default async function handler(req: Req, res: Res) {
           }
           const confirmEv = latestEvent(events, "visit_confirmed");
           const cust = await bookingCardCustomer(revisitKey, bookingId, p.email, row?.stripe_customer_id);
-          const boundCust = cust?.metadata.gh_booking_id === bookingId || (cust && row?.stripe_customer_id === cust.id) ? cust : null;
+          const boundCust = cust && isBookingCardCustomer(cust, bookingId, row?.stripe_customer_id) ? cust : null;
           const declined = row
             ? !row.report_sent_at && row.status !== "paid" && row.status !== "refunded"
               && isVisitDateDeclined(latestEvent(events, "date_proposed"), confirmEv)
@@ -798,6 +816,7 @@ export default async function handler(req: Req, res: Res) {
                 try {
                   const options = await listCustomerCards(revisitKey, boundCust.id);
                   const cards = options
+                    .filter((c) => c.allow_redisplay === "always")
                     .map((c) => ({
                       id: c.id,
                       brand: String(c.card?.brand ?? ""),
