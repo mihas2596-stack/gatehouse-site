@@ -1,9 +1,10 @@
 // TASK 1 (fix6): the client report page renders the owner's decision
 // states from the spec — reviewing, payment requested, re-clean, waived.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Report from "@/pages/Report";
+import Visit from "@/pages/Visit";
 
 vi.mock("@/components/SEO", () => ({ default: () => null }));
 
@@ -32,6 +33,15 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (String(url).startsWith("/api/report?")) {
       return { ok: true, json: async () => current };
+    }
+    if (String(url).startsWith("/api/visit?")) {
+      return { ok: true, json: async () => ({
+        ok: true,
+        state: "issue_open",
+        has_card: true,
+        card_confirmed: true,
+        booking: { confirmed_date: "2026-11-08" },
+      }) };
     }
     throw new Error(`Unexpected request: ${url}`);
   }));
@@ -78,6 +88,38 @@ describe("report page issue states", () => {
     expect(screen.getByText(/Our response:/)).toBeInTheDocument();
     expect(screen.getByText(/“We'll come back Tuesday to re-clean the kitchen.”/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve & Pay $149" })).not.toBeInTheDocument();
+  });
+
+  it.each(["/visit", "/report"])("hides payment approval in %s before a scheduled re-clean", async (path) => {
+    current = {
+      ...base(),
+      booking: { date: "2026-11-08" },
+      reclean_date: "2099-01-15",
+      approval_date_block: { date: "2099-01-15", reclean: true },
+      issue_decision: { decision: "reclean", resolution: "We'll re-clean the kitchen." },
+    };
+    render(<MemoryRouter initialEntries={[`${path}?bt=test-booking`]}>{path === "/visit" ? <Visit /> : <Report />}</MemoryRouter>);
+    await screen.findByText(/Re-clean agreed for/);
+    expect(screen.queryByRole("button", { name: /resolve issue & pay/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/You can approve the report after your re-clean/)).toBeVisible();
+  });
+
+  it("refreshes the payment instructions when the server rejects an approval from a stale report", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: "report_too_early",
+        approval_date_block: { date: "2099-01-15", reclean: true },
+      }),
+    } as Response));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => base() } as Response);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve issue & pay $149" }));
+    expect(await screen.findByText(/You can approve the report after your re-clean/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resolve issue & pay $149" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add more details" })).toBeVisible();
   });
 
   it("waived: no charge, no Approve button", async () => {

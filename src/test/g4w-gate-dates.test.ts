@@ -309,10 +309,16 @@ describe("report Approve date gate (handler)", () => {
   it("a scheduled future re-clean blocks Approve even when the visit is past", async () => {
     rows[0]["reclean_status"] = "scheduled";
     rows[0]["reclean_date"] = FUTURE;
+    const bt = signBooking("link-secret", { bid: RBID, email: EMAIL, name: "Casey Client" }).token;
+    const view = cleanResponse();
+    await reportHandler({ method: "GET", headers: {}, query: { bt } }, view as never);
+    expect(view.code).toBe(200);
+    expect(view.body["approval_date_block"]).toEqual({ date: FUTURE, reclean: true });
     const r = await approve(PAST);
     expect(r.code).toBe(409);
     expect(r.body["error"]).toBe("report_too_early");
     expect(r.body["reclean"]).toBe(true);
+    expect(r.body["approval_date_block"]).toEqual(view.body["approval_date_block"]);
     expect(piCalls).toBe(0);
   });
 

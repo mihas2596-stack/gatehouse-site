@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, Camera, AlertTriangle, Loader2, RefreshCw, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
-import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { ApprovalDateNotice, ReportContent, ZoomablePhoto, type ApprovalDateBlock } from "@/components/ReportContent";
 import { IssueForm } from "@/components/IssueForm";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { fmtDateUS } from "@/lib/formatDate";
@@ -47,6 +47,7 @@ type ReportData = {
   report_sent_at?: string | null;
   publication_id?: string | null;
   deadline?: string | null;
+  approval_date_block?: ApprovalDateBlock | null;
   delivery_failed?: boolean;
   charge_timer_blocked?: boolean;
   charge_timer_block_reason?: string | null;
@@ -298,10 +299,13 @@ const Report = () => {
       } else if (j && j.error === "payment_requires_action") {
         if (j.state && j.state !== "invalid_link") setData(j);
         setActionError("Your card needs extra verification to complete this payment — please try again, or email hello@gatehousehomecleaning.com and we'll help you pay. No charge was made.");
-      // N26: the expired-window 409s carry no `state` (no view spread),
-      // so they must be handled before the state gate below — otherwise
-      // the client only gets the generic error. The form stays open so
-      // the client can copy their text into the email.
+      // Date and window errors carry no report state. Keep the loaded report.
+      } else if (j?.error === "report_too_early") {
+        if (j.approval_date_block) {
+          setData((current) => current ? { ...current, approval_date_block: j.approval_date_block } : current);
+        } else {
+          setActionError("You can approve the report after your scheduled visit.");
+        }
       } else if (j && j.error === "issue_window_expired") {
         setActionError("The 24-hour window for reporting an issue on this report has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
       } else if (j && j.error === "claim_window_expired") {
@@ -395,12 +399,10 @@ const Report = () => {
       ? "One photo could not be loaded — the rest of the report is complete."
       : `${unavailableCount} photos could not be loaded — the rest of the report is complete.`
     : null;
-  // B (payment-date gate): the visit has not happened yet — a report
-  // that exists for a future date cannot be approved or paid. "Today"
-  // is the Atlanta calendar date (America/New_York), compared as
-  // YYYY-MM-DD strings, mirroring the server gate in api/report.ts.
-  // The server enforces the same gate, so this is display, not security.
-  const isFutureVisit = (() => {
+  // Use the API's date block for re-cleans as well as the original visit.
+  const approvalDateBlock = data?.approval_date_block;
+  const futureApprovalDate = approvalDateBlock?.date ?? booking.date;
+  const isFutureVisit = Boolean(approvalDateBlock) || (() => {
     const d = booking.date;
     if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -655,11 +657,7 @@ const Report = () => {
               {/* B: the visit has not happened yet — no Approve for a
                   future visit. The server rejects an early Approve;
                   this explains why the button is gone. */}
-              {isFutureVisit && (
-                <p className="mb-4 rounded-lg border border-border bg-muted p-3 text-sm font-medium text-center" role="status">
-                  This visit is on {booking.date ? fmtDateUS(booking.date) : "a future date"} — you can approve the report after the visit.
-                </p>
-              )}
+              {isFutureVisit && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 {!isPreview && !isFutureVisit && (
                 <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
@@ -693,7 +691,7 @@ const Report = () => {
             <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
               <p className="text-sm text-foreground">
                 {isFutureVisit ? (
-                  <>If everything looks good, you&apos;ll be able to approve after {booking.date ? fmtDateUS(booking.date) : "the visit"}
+                  <>If everything looks good, approve after {approvalDateBlock?.reclean ? "your re-clean" : "your visit"}
                   {data.amount ? <> — your card is then charged {data.amount}</> : null}.</>
                 ) : (
                   <>If everything looks good, approve above
@@ -787,16 +785,17 @@ const Report = () => {
                 </p>
               )}
               <p className="text-base text-foreground mb-6">
-                {data.issue_decision?.decision === "payment_requested"
+                {isFutureVisit || data.issue_decision?.decision === "payment_requested"
                   ? "Nothing will be charged until you approve — the automatic charge stays paused for this visit."
                   : "Nothing will be charged while your issue is open — the automatic charge is paused for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
               </p>
-              {!isPreview && (
+              {isFutureVisit && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
+              {!isPreview && !isFutureVisit && (
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
               </Button>
               )}
-              {!isPreview && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>}
+              {!isPreview && !isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>}
             </div>
             <div className="mt-8 text-center">
               {followupMsg && (
@@ -872,15 +871,18 @@ const Report = () => {
             )}
             {!isPreview && (
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              {!isFutureVisit && (
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Processing payment…" : data.amount ? `Try charging ${data.amount} again` : "Try the charge again"}
               </Button>
+              )}
               <Button variant="outline" size="lg" asChild>
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`}>Update or confirm your card</Link>
               </Button>
             </div>
             )}
-            {!isPreview && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
+            {isFutureVisit && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
+            {!isPreview && !isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card.</p>}
           </div>
         )}
 
@@ -901,14 +903,15 @@ const Report = () => {
                 <Link to={`/save-card?bt=${encodeURIComponent(bt)}`} className="underline font-semibold">Choose a card for this visit</Link>
               </p>
             )}
-            {!isPreview && (
+            {isFutureVisit && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
+            {!isPreview && !isFutureVisit && (
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
                 {busy ? "Checking payment…" : data.amount ? `Try charging ${data.amount} again` : "Try again"}
               </Button>
             </div>
             )}
-            {!isPreview && (
+            {!isPreview && !isFutureVisit && (
             <p className="mt-3 text-sm text-muted-foreground text-center">
               Trying again first checks the payment status — you won&apos;t be charged twice. If this keeps
               happening, email hello@gatehousehomecleaning.com.

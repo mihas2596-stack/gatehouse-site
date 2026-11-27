@@ -175,6 +175,17 @@ function journalRecleanDateFromEvents(events: BookingEvent[]): string {
   }
   return dValid || rValid;
 }
+
+function approvalDateBlock(row: BookingRow | null, events: BookingEvent[], meta: Record<string, string>) {
+  const scheduledReclean = row?.reclean_status === "scheduled" && typeof row.reclean_date === "string"
+    ? row.reclean_date
+    : "";
+  const recleanDate = scheduledReclean || journalRecleanDateFromEvents(events);
+  const confirmedDate = evStr(latestEvent(events, "visit_confirmed"), "date") || meta["gh_confirmed_date"] || "";
+  const date = effectiveGateDate(recleanDate, confirmedDate, row?.visit_date);
+  return isFutureVisitDate(date) ? { date, reclean: Boolean(recleanDate) } : null;
+}
+
 async function findCustomerByEmail(
   secretKey: string,
   email: string,
@@ -893,6 +904,7 @@ export default async function handler(req: Req, res: Res) {
         // "waived", never an Approve button.
         state: everWaivedDecision(events) ? "waived" as ReportState : deriveState(meta),
         booking,
+        approval_date_block: approvalDateBlock(row, events, meta),
         // The cleaner who did the visit — /visit names them, /report
         // must too, so the two pages of one report agree.
         cleaner_name: row?.cleaner_name ?? meta["gh_cleaner_name"] ?? null,
@@ -1243,20 +1255,16 @@ export default async function handler(req: Req, res: Res) {
       // the scheduled visit date). A client must not be able to
       // approve — and pay — the old report before the re-clean the
       // cleaner cannot yet submit.
-      const rowRecleanScheduled =
-        row?.reclean_status === "scheduled" &&
-        typeof row?.reclean_date === "string" &&
-        !!row.reclean_date;
-      const recleanDate = rowRecleanScheduled
-        ? (row.reclean_date as string)
-        : journalRecleanDateFromEvents(events);
-      const confirmedDate =
-        evStr(latestEvent(events, "visit_confirmed"), "date") ||
-        meta["gh_confirmed_date"] ||
-        "";
-      const gateDate = effectiveGateDate(recleanDate, confirmedDate, row?.visit_date ?? null);
-      if (isFutureVisitDate(gateDate)) {
-        res.status(409).json({ requestId, ok: false, error: "report_too_early", visit_date: gateDate, ...(recleanDate ? { reclean: true } : {}) });
+      const dateBlock = approvalDateBlock(row, events, meta);
+      if (dateBlock) {
+        res.status(409).json({
+          requestId,
+          ok: false,
+          error: "report_too_early",
+          visit_date: dateBlock.date,
+          ...(dateBlock.reclean ? { reclean: true } : {}),
+          approval_date_block: dateBlock,
+        });
         return;
       }
       // P06: only a CURRENT published report can be approved and paid.

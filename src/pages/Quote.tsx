@@ -696,7 +696,9 @@ const Quote = () => {
         if (draftKey) sessionStorage.removeItem(draftKey);
       } catch { /* Storage may be disabled. */ }
       requestRef.current = null;
-      trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" }, payload.request_id);
+      if (!data.duplicate) {
+        trackFunnel("gh_lead_submit", { form_type: "quote", service_type: service, frequency: isRecurring ? "every2weeks" : "onetime" }, payload.request_id);
+      }
       // Recap shown on /thank-you: price, date, arrival window, current
       // status and response time. Never a "confirmed" promise — the date is
       // a request until Gatehouse confirms availability by email.

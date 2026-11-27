@@ -6,7 +6,7 @@ import { CheckCircle, CalendarClock, AlertTriangle, Loader2, RefreshCw, User } f
 import { Button } from "@/components/ui/button";
 import SEO from "@/components/SEO";
 import JourneySteps from "@/components/JourneySteps";
-import { ReportContent, ZoomablePhoto } from "@/components/ReportContent";
+import { ApprovalDateNotice, ReportContent, ZoomablePhoto, type ApprovalDateBlock } from "@/components/ReportContent";
 import { IssueForm } from "@/components/IssueForm";
 import { convertToJpeg } from "@/lib/imageConvert";
 import { fmtDateUS } from "@/lib/formatDate";
@@ -115,6 +115,7 @@ type ReportData = {
   checklist?: ReportChecklist | null;
   amount?: string | null;
   deadline?: string | null;
+  approval_date_block?: ApprovalDateBlock | null;
   publication_id?: string | null;
   delivery_failed?: boolean;
   charge_timer_blocked?: boolean;
@@ -323,11 +324,14 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         }
         j = await postReport();
       }
-      // N26 (mirrored from /report): the expired-window 409s carry no
-      // `state`, so they must be handled before the state gate below —
-      // otherwise the client only gets the generic error. The form
-      // stays open so the client can copy their text into the email.
-      if (j && j.error === "issue_window_expired") {
+      // Date and window errors carry no report state. Keep the loaded report.
+      if (j?.error === "report_too_early") {
+        if (j.approval_date_block) {
+          setRep((current) => current ? { ...current, approval_date_block: j.approval_date_block } : current);
+        } else {
+          setErr("You can approve the report after your scheduled visit.");
+        }
+      } else if (j && j.error === "issue_window_expired") {
         setErr("The 24-hour window for reporting an issue on this report has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
       } else if (j && j.error === "claim_window_expired") {
         setErr("The window for reporting an issue after this visit has passed — please email us at hello@gatehousehomecleaning.com and we'll look into it.");
@@ -420,12 +424,9 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
   // for preview tokens; the buttons hide here too.
   const isPreview = rep?.preview === true;
   const canAct = !isPreview && (rep.state === "awaiting" || rep.state === "payment_issue" || rep.state === "payment_unknown");
-  // B (payment-date gate): the visit has not happened yet — a report
-  // that exists for a future date cannot be approved or paid. "Today"
-  // is the Atlanta calendar date (America/New_York), compared as
-  // YYYY-MM-DD strings, mirroring the server gate in api/report.ts.
-  // The server enforces the same gate, so this is display, not security.
-  const isFutureVisit = (() => {
+  const approvalDateBlock = rep.approval_date_block;
+  const futureApprovalDate = approvalDateBlock?.date ?? visitDate;
+  const isFutureVisit = Boolean(approvalDateBlock) || (() => {
     const d = visitDate;
     if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -606,13 +607,16 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             <p className="mb-2">Re-clean agreed for <strong>{fmtDateUS(rep.reclean_date || rep.resolution?.reclean_date || "")}</strong>{rep.reclean_cleaner_name ? <> — {rep.reclean_cleaner_name}</> : null}.</p>
           ) : null}
           <p className="mb-3">Nothing will be charged until you approve — the automatic charge stays blocked for this visit.</p>
-          {/* B: no Approve for a future visit (see the note above). */}
-          {!isFutureVisit && (
-          <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
-            {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
-          </Button>
+          {isFutureVisit ? (
+            <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />
+          ) : (
+            <>
+              <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+                {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
+              </Button>
+              <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
+            </>
           )}
-          <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
         </div>
       )}
       {rep.state === "approved" && (
@@ -694,11 +698,7 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
       {/* B: the visit has not happened yet — a report that exists for a
           future date cannot be approved or paid. The server rejects an
           early Approve; this explains why the button is gone. */}
-      {isFutureVisit && canAct && (
-        <p className="mb-3 rounded-lg border border-border bg-muted p-3 text-sm font-medium" role="status">
-          This visit is on {visitDate ? fmtDateUS(visitDate) : "a future date"} — you can approve the report after the visit.
-        </p>
-      )}
+      {isFutureVisit && canAct && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
       {canAct && rep.state === "awaiting" && (
         <div className="flex flex-wrap gap-2">
           {/* B: the Approve button is gone for a future visit (see the
