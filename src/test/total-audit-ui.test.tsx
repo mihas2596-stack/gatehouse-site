@@ -59,3 +59,40 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     expect(screen.queryByRole("button", { name: /Check again|Retry status/i })).not.toBeNull();
   });
 });
+
+describe("visit cancelled during card setup", () => {
+  const cancelledResponse = {
+    ok: false,
+    status: 409,
+    json: async () => ({
+      ok: false, error: "visit_cancelled", status: "failed",
+      booking: { ...card, visit_state: "requested" },
+    }),
+  };
+
+  it("shows the cancellation if the visit was cancelled during the Stripe return", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(cancelledResponse));
+    render(<MemoryRouter initialEntries={["/save-card?bt=audit-token&saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "This visit is cancelled" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "View my visit" })).toHaveAttribute("href", "/visit?bt=audit-token");
+    expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { path: "/save-card", Page: SaveCard, booking: card, button: "Use Visa ending in ••••4242 for this booking" },
+    { path: "/thank-you", Page: ThankYou, booking: card, button: "Use this card for this booking" },
+    { path: "/save-card", Page: SaveCard, booking: { first: "184" }, button: "Add card" },
+    { path: "/thank-you", Page: ThankYou, booking: { first: "184" }, button: "Continue to Stripe — $0 today" },
+  ])("shows the cancellation when $button is clicked at $path", async ({ path, Page, booking, button }) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, booking }) })
+      .mockResolvedValueOnce(cancelledResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={[path + "?bt=audit-token"]}><Page /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: button }));
+    expect(await screen.findByRole("heading", { name: "This visit is cancelled" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "View my visit" })).toHaveAttribute("href", "/visit?bt=audit-token");
+    expect(screen.queryByRole("button", { name: button })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

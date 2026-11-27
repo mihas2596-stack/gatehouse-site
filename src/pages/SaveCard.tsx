@@ -17,7 +17,7 @@ type BookingSummary = {
   visit_state?: string; auto_charge_blocked?: string; confirm_by?: string;
   cards?: SavedCardOption[];
 };
-type Status = "loading" | "ready" | "saved" | "pending" | "failed" | "unknown";
+type Status = "loading" | "ready" | "saved" | "pending" | "failed" | "unknown" | "cancelled";
 
 const fmtMoney = (v?: string): string => {
   const n = v ? parseFloat(v.replace(/[^0-9.]/g, "")) : NaN;
@@ -49,6 +49,10 @@ export default function SaveCard() {
     try {
       const response = await fetch(`/api/card-status?${new URLSearchParams({ ...(bt ? { bt } : {}), ...(sessionId ? { session_id: sessionId } : {}) })}`);
       const data = await response.json();
+      if (response.status === 409 && data?.error === "visit_cancelled") {
+        setStatus("cancelled");
+        return;
+      }
       if (response.ok === false || data.ok === false || (bt && !data.booking)) throw new Error("unknown");
       setBooking(data.booking ?? null);
       if (returning) {
@@ -65,6 +69,10 @@ export default function SaveCard() {
     try {
       const r = await fetch("/api/card-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bt, action: "confirm_card", ...(selectedCard ? { payment_method_id: selectedCard } : {}) }) });
       const data = await r.json();
+      if (r.status === 409 && data?.error === "visit_cancelled") {
+        setStatus("cancelled");
+        return;
+      }
       if (r.ok === false || !data.ok) {
         // The chosen card disappeared between the list and the
         // confirm (deleted, or moved): re-read the list and say so.
@@ -93,11 +101,16 @@ export default function SaveCard() {
     try {
       const r = await fetch("/api/create-checkout-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bt ? { bt, request_id: setupAttempt } : { name: name.trim(), email: email.trim() }) });
       const data = await r.json();
+      if (r.status === 409 && data?.error === "visit_cancelled") {
+        setStatus("cancelled");
+        setBusy(false);
+        return;
+      }
       if (!r.ok || !data.ok || typeof data.url !== "string") throw new Error("checkout");
       window.location.href = data.url;
     } catch { setError("We couldn't open Stripe's secure page. Your request is saved — please try again."); setBusy(false); }
   };
-  const cancelled = booking?.visit_state === "cancelled";
+  const cancelled = status === "cancelled" || booking?.visit_state === "cancelled";
   const hasCard = booking?.has_card === "1";
   const chosen = booking?.card_confirmed === "1" || status === "saved";
   const confirmed = booking?.booking_confirmed === "1";
