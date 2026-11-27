@@ -42,20 +42,21 @@ function response() {
   };
 }
 
-let stripePmList: Array<{ id: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } }>;
+let stripePmList: Array<{ id: string; allow_redisplay?: string | null; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } }>;
+let customerBookingId: string;
 
 function installFetch() {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const ok = (data: unknown, status = 200) => ({ ok: status < 400, status, json: async () => data }) as Response;
     if (url.includes("/customers/search")) {
-      return ok({ data: [{ id: "cus_1", email: "client@example.com", name: "Casey Client", metadata: { gh_booking_id: BID, gh_state: "awaiting_card" } }] });
+      return ok({ data: [{ id: "cus_1", email: "client@example.com", name: "Casey Client", metadata: { gh_booking_id: customerBookingId, gh_state: "awaiting_card" } }] });
     }
     if (url.includes("/customers/cus_1/payment_methods")) return ok({ data: stripePmList });
     const single = /\/payment_methods\/(pm_[A-Za-z0-9]+)/.exec(url);
     if (single) {
       const found = stripePmList.find((p) => p.id === single[1]);
       if (!found) return ok({ error: { message: "not found" } }, 404);
-      return ok({ id: found.id, customer: "cus_1", card: found.card });
+      return ok({ id: found.id, customer: "cus_1", card: found.card, allow_redisplay: found.allow_redisplay });
     }
     if (url.includes("/customers/cus_1")) return ok({});
     if (url.includes("api.resend.com")) return ok({ id: "em_1" });
@@ -66,9 +67,10 @@ function installFetch() {
 beforeEach(() => {
   vi.stubEnv("STRIPE_SECRET_KEY", SECRET);
   vi.stubEnv("RESEND_API_KEY", "test-key");
+  customerBookingId = BID;
   stripePmList = [
-    { id: "pm_1", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
-    { id: "pm_2", card: { brand: "mastercard", last4: "5555", exp_month: 3, exp_year: 2027 } },
+    { id: "pm_1", allow_redisplay: "always", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
+    { id: "pm_2", allow_redisplay: "always", card: { brand: "mastercard", last4: "5555", exp_month: 3, exp_year: 2027 } },
   ];
   installFetch();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -100,8 +102,8 @@ describe("saved-card choice (item 6)", () => {
     [{ exp_month: 12 }, { exp_year: 2028 }],
   ])("withholds the choice when the visible details match (%j, %j)", async (firstExpiry, secondExpiry) => {
     stripePmList = [
-      { id: "pm_1", card: { brand: "visa", last4: "4242", ...firstExpiry } },
-      { id: "pm_2", card: { brand: "visa", last4: "4242", ...secondExpiry } },
+      { id: "pm_1", allow_redisplay: "always", card: { brand: "visa", last4: "4242", ...firstExpiry } },
+      { id: "pm_2", allow_redisplay: "always", card: { brand: "visa", last4: "4242", ...secondExpiry } },
     ];
     const res = response();
     await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
@@ -112,8 +114,8 @@ describe("saved-card choice (item 6)", () => {
 
   it("offers both cards when the expiration dates distinguish them", async () => {
     stripePmList = [
-      { id: "pm_1", card: { brand: "visa", last4: "4242", exp_month: 3, exp_year: 2028 } },
-      { id: "pm_2", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
+      { id: "pm_1", allow_redisplay: "always", card: { brand: "visa", last4: "4242", exp_month: 3, exp_year: 2028 } },
+      { id: "pm_2", allow_redisplay: "always", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2028 } },
     ];
     const res = response();
     await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
@@ -132,6 +134,18 @@ describe("saved-card choice (item 6)", () => {
     expect(booking.card_brand).toBe("visa");
     expect(booking.card_last4).toBe("4242");
     expect(booking.cards).toBeUndefined();
+  });
+
+  it("offers only cards Stripe allows to be shown in a new checkout", async () => {
+    stripePmList[1].allow_redisplay = "limited";
+    stripePmList.push(
+      { id: "pm_3", allow_redisplay: "unspecified", card: { brand: "visa", last4: "0003" } },
+      { id: "pm_4", card: { brand: "visa", last4: "0004" } },
+    );
+    const res = response();
+    await handler({ method: "GET", headers: {}, query: { bt: mintToken() } }, res);
+    expect(res.code).toBe(200);
+    expect(res.body.booking).toMatchObject({ cards: [{ id: "pm_1" }] });
   });
 
   it("POST confirms the chosen card and reports its brand/last4", async () => {
@@ -154,6 +168,28 @@ describe("saved-card choice (item 6)", () => {
     );
     expect(res.code).toBe(409);
     expect(res.body["error"]).toBe("card_unavailable");
+  });
+
+  it("POST refuses a card if permission to redisplay changed after loading the list", async () => {
+    stripePmList[1].allow_redisplay = "limited";
+    const res = response();
+    await handler(
+      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", payment_method_id: "pm_2" } },
+      res,
+    );
+    expect(res.code).toBe(409);
+    expect(res.body.error).toBe("card_unavailable");
+  });
+
+  it("POST requires a booking-linked Customer for a saved-card list selection", async () => {
+    customerBookingId = "another-booking";
+    const res = response();
+    await handler(
+      { method: "POST", headers: {}, query: {}, body: { bt: mintToken(), action: "confirm_card", payment_method_id: "pm_2" } },
+      res,
+    );
+    expect(res.code).toBe(409);
+    expect(res.body.error).toBe("card_unavailable");
   });
 
   it("POST without a choice refuses a blind confirm when several cards exist", async () => {
