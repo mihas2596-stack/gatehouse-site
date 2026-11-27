@@ -120,7 +120,7 @@ test("an interrupted photo upload retries the selected file; Finish publishes on
   expect(putAttempts).toBe(2);
   expect(putSize).toBeGreaterThan(0);
   await finish.click();
-  await expect(page.getByText(/report may or may not have been sent/i)).toBeVisible();
+  await expect(page.getByText(/we don't know whether the report was sent/i)).toBeVisible();
   await expect(page.getByText(/Report published/)).toHaveCount(0);
   await finish.dblclick();
   await expect(page.getByText(/Report published/)).toBeVisible();

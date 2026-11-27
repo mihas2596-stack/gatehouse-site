@@ -1234,7 +1234,7 @@ const Quote = () => {
                   <textarea
                     id="b-notes" name="notes" rows={3}
                     value={booking.notes} onChange={handleBookingChange}
-                    placeholder="Pets, focus areas, rooms to skip…"
+                    placeholder="Pets, rooms to skip…"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                   />
                   <p className="mt-1.5 text-sm text-muted-foreground">Please don&apos;t put door codes or key details here — you&apos;ll add them privately on your confirmed visit page.</p>
@@ -1246,7 +1246,7 @@ const Quote = () => {
                     id="b-address" name="address" type="text" ref={refs.address} required autoComplete="street-address" maxLength={200}
                     value={booking.address} onChange={handleBookingChange} onBlur={handleBookingBlur}
                     aria-invalid={!!bookingErrors.address} aria-describedby={bookingErrors.address ? "b-address-error" : undefined}
-                    placeholder="Street number and street name"
+                    placeholder="Street and number"
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background min-h-[44px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   {bookingErrors.address && <p id="b-address-error" role="alert" className="mt-1 text-sm text-destructive">{bookingErrors.address}</p>}
@@ -1332,7 +1332,7 @@ const Quote = () => {
 
               </div>
               <h3 className="font-heading text-base font-bold mb-2">Your private photo report</h3>
-              <p className="text-sm text-foreground mb-3">See the results after cleaning. Photos are never published without your separate written permission.</p>
+              <p className="text-sm text-foreground mb-3">After cleaning, you’ll receive a private photo report.</p>
               <p className="text-sm text-foreground mb-3">You can mark rooms to skip in photos on your visit page before the visit.</p>
               <div className="flex items-start gap-3">
                 <input

@@ -17,6 +17,10 @@ for (const width of [320, 390, 768, 1440]) {
 
 test("mobile quote is submitted once, survives reload and follows setup to verified confirmation", async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  // Keep the booking path independent of live consent and analytics services.
+  await page.route(/^https?:\/\//, route =>
+    new URL(route.request().url()).origin === baseURL ? route.fallback() : route.abort()
+  );
   const city = "Sugar Hill";
   const token = "fixture-visit";
   let submitted = 0;
@@ -36,7 +40,7 @@ test("mobile quote is submitted once, survives reload and follows setup to verif
   });
   await page.route("**/api/create-checkout-session", async route => {
     checkout++;
-    expect(route.request().postDataJSON()).toEqual({ bt: token });
+    expect(route.request().postDataJSON()).toEqual({ bt: token, request_id: expect.stringMatching(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i) });
     await route.fulfill({ json: { ok: true, url: baseURL + "/save-card?bt=" + token + "&saved=1&session_id=fixture" } });
   });
   await page.goto("/");
@@ -52,6 +56,13 @@ test("mobile quote is submitted once, survives reload and follows setup to verif
   for (const [label, value] of [["Email *", "client@example.com"], ["Phone *", "7705550100"], ["Street address *", "123 Example St"], ["City *", city], ["Preferred date *", "2099-12-01"]]) {
     await page.getByLabel(label, { exact: true }).fill(value);
   }
+  await expect(page.getByText("Selected date: December 1, 2099")).toBeVisible();
+  const dateFits = await page.getByLabel("Preferred date *").evaluate(el => {
+    const field = el.getBoundingClientRect();
+    const parent = el.parentElement!.getBoundingClientRect();
+    return field.left >= parent.left - 1 && field.right <= Math.min(parent.right, window.innerWidth) + 1;
+  });
+  expect(dateFits).toBe(true);
   await page.getByRole("radio", { name: /I’ll be home/ }).check();
   await page.getByLabel(/I agree to photos/).check();
   await page.getByRole("button", { name: "Review my request" }).click();

@@ -34,6 +34,7 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, verified: false, status: "failed", booking: null }) }));
     render(<MemoryRouter initialEntries={["/save-card?saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);
     const retry = await screen.findByRole("button", { name: "Try card entry again" });
+    expect(screen.getByText(/Saving a card is free/)).toBeVisible();
     fireEvent.click(retry);
     expect(screen.getByRole("button", { name: "Add card" })).toBeInTheDocument();
   });

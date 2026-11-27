@@ -20,7 +20,7 @@
 // re-checks happen server-side at charge time anyway.
 
 import { createHmac, timingSafeEqual, createDecipheriv, createHash } from "crypto";
-import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
+import { dbConfigured, dbSelectStrict, dbInsert, dbUpdate, dbUpdateCount, logEvent, logEventStrict, storageSignDownload, storagePut } from "./_db.js";
 import { sendReceiptEmailOnce, sendPaymentFailedEmailOnce } from "./booking-action.js";
 import { clientApprovedEvent, issueStateFrom, latestIssueDecision, everWaivedDecision } from "./_payment_basis.js";
 import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
@@ -1088,28 +1088,19 @@ export default async function handler(req: Req, res: Res) {
         // reached anyone.
         let followupRecorded = false;
         if (reason.trim() || photoB64) {
-          if (!dbConfigured()) {
+          if (!row) {
             followupRecorded = true;
           } else {
-            const vrows = await dbSelect<{ id: string }>(
-              "gh_visits",
-              `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
-            );
-            const vid = vrows[0]?.id;
-            if (!vid) {
-              followupRecorded = true;
-            } else {
-              // Re-assert the row flags: an earlier attempt may have
-              // written the Stripe flag and the journal event but failed
-              // the flag update, and a follow-up must not leave the
-              // issue invisible in the owner queue / photo retention.
-              const flagged = await dbUpdateCount("gh_visits", `id=eq.${vid}`, { issue_open: true, issue_ever: true });
-              if (flagged !== 1) logErr("postpay_issue", `follow-up flag re-assert updated=${flagged}`);
-              followupRecorded = await logEventStrict(vid, payload.bid, "client", "issue_followup", {
-                reason: reason.slice(0, 200), room: room.slice(0, 60),
-              });
-              if (followupRecorded) await storeIssuePhoto(vid);
+            const flagged = await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
+            if (flagged !== 1) {
+              logErr("postpay_issue", `follow-up flag re-assert updated=${flagged}`);
+              res.status(502).json({ requestId, ok: false, error: "db_error" });
+              return;
             }
+            followupRecorded = await logEventStrict(row.id, payload.bid, "client", "issue_followup", {
+              reason: reason.slice(0, 200), room: room.slice(0, 60),
+            });
+            if (followupRecorded) await storeIssuePhoto(row.id);
           }
           if (followupRecorded && RESEND_PP) {
             const followupFirstName = (customer.name || "").trim().split(/\s+/)[0] || "there";
@@ -1192,33 +1183,23 @@ export default async function handler(req: Req, res: Res) {
         return;
       }
       meta["gh_postpay_issue"] = "1";
-      if (dbConfigured()) {
-        const vrows = await dbSelect<{ id: string }>(
-          "gh_visits",
-          `booking_id=eq.${encodeURIComponent(payload.bid)}&order=visit_no.desc&limit=1`,
-        );
-        if (vrows[0]) {
-          await logEvent(vrows[0].id, payload.bid, "client", "postpay_issue", {
-            room: room.slice(0, 60), reason: reason.slice(0, 200),
-          });
-          // MA-04/MA-05: the row flags are what the owner queue, the
-          // charge gates and both photo-retention filters read — the
-          // Stripe flag and the journal event alone leave the complaint
-          // invisible in triage and its photos unprotected. Same
-          // verified write as the pre-payment path: a failed flag
-          // update is a 502, never a silent 200 — the client retries
-          // and the retry lands in the follow-up branch above, which
-          // re-asserts the flags. (No gh_issue_open in Stripe
-          // metadata: the visit is paid, nothing is "paused" — the
-          // existing test pins this.)
-          const flagged = await dbUpdateCount("gh_visits", `id=eq.${vrows[0].id}`, { issue_open: true, issue_ever: true });
-          if (flagged !== 1) {
-            logErr("postpay_issue", `issue flags not set (updated=${flagged}) — complaint recorded in journal only`);
-            res.status(502).json({ requestId, ok: false, error: "db_error" });
-            return;
-          }
-          await storeIssuePhoto(vrows[0].id);
+      if (row) {
+        const recorded = await logEventStrict(row.id, payload.bid, "client", "postpay_issue", {
+          room: room.slice(0, 60), reason: reason.slice(0, 200),
+        });
+        if (!recorded) {
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
         }
+        // The owner queue and photo retention both depend on the visit flags.
+        // A retry after this write fails repairs them in the follow-up branch.
+        const flagged = await dbUpdateCount("gh_visits", `id=eq.${row.id}`, { issue_open: true, issue_ever: true });
+        if (flagged !== 1) {
+          logErr("postpay_issue", `issue flags not set (updated=${flagged}) — complaint recorded in journal only`);
+          res.status(502).json({ requestId, ok: false, error: "db_error" });
+          return;
+        }
+        await storeIssuePhoto(row.id);
       }
       if (RESEND_PP) {
         try {
