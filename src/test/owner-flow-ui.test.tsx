@@ -35,6 +35,43 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const open = () => render(<HelmetProvider><Owner /></HelmetProvider>);
 
 describe("owner login and visit switching", () => {
+  it.each(["email service rejection", "network interruption"])(
+    "opens token sign-in when email fails due to %s", async (failure) => {
+      const normal = vi.mocked(fetch).getMockImplementation()!;
+      const authorization: string[] = [];
+      vi.mocked(fetch).mockImplementation(async (url, init) => {
+        if (url === "/api/owner-auth") {
+          if (failure === "network interruption") throw new TypeError("offline");
+          return { ok: false, status: 500, json: async () => ({ ok: false, error: "email_failed" }) } as Response;
+        }
+        if (String(url).startsWith("/api/owner?view=list")) {
+          authorization.push(new Headers(init?.headers).get("Authorization") ?? "");
+        }
+        return normal(url, init);
+      });
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Send login link to my email" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t send the sign-in link");
+      const token = screen.getByLabelText("Admin token");
+      fireEvent.change(token, { target: { value: "fixture-admin-token" } });
+      fireEvent.click(screen.getByRole("button", { name: "Open with admin token" }));
+      expect(await screen.findByRole("button", { name: "All visits (2)" })).toBeInTheDocument();
+      expect(authorization).toEqual(["Bearer fixture-admin-token"]);
+    },
+  );
+
+  it("keeps token sign-in available during a pending email request", async () => {
+    let finishEmailRequest!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { finishEmailRequest = resolve; }));
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Send login link to my email" }));
+    expect(screen.getByRole("button", { name: "Sending sign-in link…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Use admin token instead" })).toBeEnabled();
+    await act(async () => finishEmailRequest({ ok: true, json: async () => ({ ok: true }) } as Response));
+    expect(screen.getByRole("status")).toHaveTextContent("Check the owner inbox");
+    expect(screen.getByRole("button", { name: "Send login link to my email" })).toBeEnabled();
+  });
+
   it("returns an expired session to email login without requiring a storage reset", async () => {
     sessionStorage.setItem("gh_owner_session", "expired-session");
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401, json: async () => ({ ok: false, error: "unauthorized" }) } as Response);
