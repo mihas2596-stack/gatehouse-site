@@ -34,7 +34,7 @@ import {
 } from "./_db.js";
 import { isOwnerAuth } from "./_owner_auth.js";
 import { photoBlocked } from "./_photo_policy.js";
-import { isAllowedOrigin } from "./_origin.js";
+import { gatehouseSiteOrigin, isAllowedOrigin } from "./_origin.js";
 import { buildWorkRooms } from "./_work_scope.js";
 import { loadClientPhone, normalizeClientPhone } from "./_client_contact.js";
 import { emailDate, emailArrivalWindow, emailDocument, reportEmail } from "./_email_copy.js";
@@ -293,7 +293,7 @@ export async function sendShortClientEmail(opts: {
     name: opts.customer.name ?? "",
     ts: Math.floor(Date.now() / 1000),
   });
-  const link = opts.buttonUrl ?? `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
+  const link = opts.buttonUrl ?? `${gatehouseSiteOrigin()}/visit?bt=${visitToken}${opts.buttonAnchor ?? ""}`;
   const bodyText = opts.lines.join("\n\n");
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -475,7 +475,7 @@ async function sendReceiptAfterClaim(
     name: custName,
     ts: Math.floor(Date.now() / 1000),
   });
-  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
+  const reportLink = `${gatehouseSiteOrigin()}/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -569,7 +569,7 @@ export async function sendFeeReceiptEmailOnce(
     name: custName,
     ts: Math.floor(Date.now() / 1000),
   });
-  const reportLink = `https://www.gatehousehomecleaning.com/report?bt=${reportToken}`;
+  const reportLink = `${gatehouseSiteOrigin()}/report?bt=${reportToken}`;
   try {
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -1403,7 +1403,7 @@ export default async function handler(req: Req, res: Res) {
       if (!journal.ok) return json(503, { ok: false, error: "status_unavailable" });
       const prior = journal.events.find((event) => event.event === "next_visit_invitation_sent");
       if (prior && Date.now() - Date.parse(prior.created_at) < 24 * 3600 * 1000) return json(200, { ok: true, email_sent: true, already_sent: true });
-      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Ready for your next clean? — Gatehouse Home Cleaning", heading: "Arrange your next visit", lines: ["Review your current price and request a date that works for you. We confirm each date, arrival window and cleaner by email.", "Sending a request does not charge your card. You review the current price, card choice and terms before the next visit is confirmed."], buttonLabel: "See price & request my next visit", buttonUrl: "https://www.gatehousehomecleaning.com/quote?service=standard&frequency=every2weeks" });
+      const sent = await sendShortClientEmail({ secretKey: STRIPE_SECRET_KEY, bookingId, customer: { email: visit.client_email ?? "", name: visit.client_name ?? "" }, subject: "Ready for your next clean? — Gatehouse Home Cleaning", heading: "Arrange your next visit", lines: ["Review your current price and request a date that works for you. We confirm each date, arrival window and cleaner by email.", "Sending a request does not charge your card. You review the current price, card choice and terms before the next visit is confirmed."], buttonLabel: "See price & request my next visit", buttonUrl: `${gatehouseSiteOrigin()}/quote?service=standard&frequency=every2weeks` });
       if (sent) await logEvent(visit.id, bookingId, "owner", "next_visit_invitation_sent");
       else await logEvent(visit.id, bookingId, "owner", "notification_email_failed", { kind: "next_visit_invitation" });
       return json(200, { ok: true, email_sent: sent });
@@ -1880,7 +1880,7 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(null, bookingId, "owner", "client_link_issued");
       return json(200, {
         ok: true,
-        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
+        url: `${gatehouseSiteOrigin()}/visit?bt=${encodeURIComponent(token)}`,
         no_stripe_customer: true,
       });
     }
@@ -2141,7 +2141,7 @@ export default async function handler(req: Req, res: Res) {
             service: row?.service ?? "",
             cleaner: cleanerName,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${gatehouseSiteOrigin()}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
@@ -2372,7 +2372,7 @@ export default async function handler(req: Req, res: Res) {
             service: row.service ?? "",
             cleaner: name,
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${gatehouseSiteOrigin()}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null }).entry_method ?? null,
           });
         }
@@ -2428,7 +2428,7 @@ export default async function handler(req: Req, res: Res) {
             service: row?.service ?? "",
             cleaner: (row?.cleaner_name ?? meta["gh_cleaner_name"] ?? "").trim(),
             cents: Number.isFinite(cents) && cents > 0 ? cents : null,
-            visitLink: `https://www.gatehousehomecleaning.com/visit?bt=${visitToken}`,
+            visitLink: `${gatehouseSiteOrigin()}/visit?bt=${visitToken}`,
             entryMethod: (row as unknown as { entry_method?: string | null } | null)?.entry_method ?? null,
           });
         }
@@ -2620,7 +2620,7 @@ export default async function handler(req: Req, res: Res) {
       const clientEmail = (customer.email ?? row.client_email ?? "").trim();
       const clientName = (customer.name ?? row.client_name ?? "").trim();
       const reportLink = clientEmail
-        ? `https://www.gatehousehomecleaning.com/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
+        ? `${gatehouseSiteOrigin()}/report?bt=${encodeURIComponent(encryptBookingPayload(bookingLinkSecret(STRIPE_SECRET_KEY), {
             bid: bookingId, email: clientEmail, name: clientName, ts: Math.floor(Date.now() / 1000),
           }))}`
         : "";
@@ -3370,7 +3370,7 @@ export default async function handler(req: Req, res: Res) {
             name: custName,
             ts: Math.floor(Date.now() / 1000),
           });
-          const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
+          const link = `${gatehouseSiteOrigin()}/visit?bt=${token}#report`;
           const deadline = new Intl.DateTimeFormat("en-US", {
             timeZone: "America/New_York",
             weekday: "short", month: "short", day: "numeric",
@@ -3658,7 +3658,7 @@ export default async function handler(req: Req, res: Res) {
                 text:
                   `Hi ${firstName},\n\nThanks for your request. The date you picked doesn't work on our side` +
                   (alts.length ? ` — here are the closest dates we can do: ${alts.join(", ")}.` : ".") +
-                  `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\nhttps://www.gatehousehomecleaning.com/visit?bt=${token}\n\n` +
+                  `\n\nPick one of these, suggest another date, or cancel the request — all from your visit page (nothing to fill in again):\n\n${gatehouseSiteOrigin()}/visit?bt=${token}\n\n` +
                   `Your card stays on file, and nothing is charged. If none of the dates work and you cancel, there is no fee for cancelling now.\n\nGatehouse Home Cleaning\n`,
               }),
               signal: AbortSignal.timeout(15000),
@@ -4453,7 +4453,7 @@ export default async function handler(req: Req, res: Res) {
       await logEvent(null, bookingId, "owner", "client_link_issued");
       return json(200, {
         ok: true,
-        url: `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(token)}`,
+        url: `${gatehouseSiteOrigin()}/visit?bt=${encodeURIComponent(token)}`,
       });
     }
 
@@ -4525,8 +4525,8 @@ export default async function handler(req: Req, res: Res) {
       });
       return json(200, {
         ok: true,
-        report_url: `https://www.gatehousehomecleaning.com/report?bt=${token}`,
-        visit_url: `https://www.gatehousehomecleaning.com/visit?bt=${token}`,
+        report_url: `${gatehouseSiteOrigin()}/report?bt=${token}`,
+        visit_url: `${gatehouseSiteOrigin()}/visit?bt=${token}`,
       });
     }
 

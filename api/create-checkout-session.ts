@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelectStrict, dbUpdateCount } from "./_db.js";
 import { pickCustomerByEmail, resolveCustomerByRowId, type StripeCustomerLite } from "./_stripe_customer.js";
-import { isPreviewOrigin } from "./_origin.js";
+import { configuredPreviewOrigins, PRODUCTION_SITE_ORIGIN } from "./_origin.js";
 
 type BookingPayload = {
   bid: string;
@@ -169,7 +169,7 @@ function clientIp(headers: Record<string, string | string[] | undefined>): strin
 const STRIPE_API = "https://api.stripe.com/v1";
 
 const PRODUCTION_AND_LOCAL_ORIGINS = [
-  "https://www.gatehousehomecleaning.com",
+  PRODUCTION_SITE_ORIGIN,
   "https://gatehousehomecleaning.com",
   "http://localhost:8080",
 ];
@@ -178,9 +178,7 @@ function checkoutOrigins(): string[] {
   if (process.env.VERCEL_ENV !== "preview") return PRODUCTION_AND_LOCAL_ORIGINS;
   // Checkout returns a booking link. Use only the preview hosts assigned
   // by Vercel to this deployment, including the current branch alias.
-  return [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL]
-    .map((host) => `https://${host ?? ""}`)
-    .filter(isPreviewOrigin);
+  return configuredPreviewOrigins();
 }
 
 // Minimal structural types so the function compiles without @vercel/node.

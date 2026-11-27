@@ -1,4 +1,4 @@
-import { isAllowedOrigin } from "./_origin.js";
+import { gatehouseSiteOrigin, isAllowedOrigin } from "./_origin.js";
 import { normalizePhone } from "./_sms.js";
 import { z } from "zod";
 import { buildWorkRooms } from "./_work_scope.js";
@@ -708,6 +708,7 @@ export default async function handler(req: Req, res: Res) {
     } = parsed.data;
 
     const isQuote = parsed.data.source === "quote";
+    const siteOrigin = gatehouseSiteOrigin();
 
     // Server-issued booking identity (quote bookings only). The HMAC-signed
     // token binds this booking to the card-saving step (/save-card?bt=...)
@@ -1062,8 +1063,8 @@ export default async function handler(req: Req, res: Res) {
           return json(503, { ok: false, error: "booking_save_failed" });
         }
       }
-      saveCardUrl = `https://www.gatehousehomecleaning.com/save-card?bt=${encodeURIComponent(bookingToken)}`;
-      visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${encodeURIComponent(bookingToken)}`;
+      saveCardUrl = `${siteOrigin}/save-card?bt=${encodeURIComponent(bookingToken)}`;
+      visitUrl = `${siteOrigin}/visit?bt=${encodeURIComponent(bookingToken)}`;
       log("booking", { bid: bookingId });
     }
 
@@ -1275,8 +1276,8 @@ ${isQuote && scope_review ? row("Scope review", `YES — ${escapeHtml(scope_reas
             : "Price: we'll confirm the exact price together with your visit confirmation — nothing is charged until after your cleaning."}`;
         const action = needsCustomQuote ? undefined : {
           url: cardOnFile
-            ? visitUrl ?? "https://www.gatehousehomecleaning.com/visit"
-            : saveCardUrl ?? "https://www.gatehousehomecleaning.com/save-card",
+            ? visitUrl ?? `${siteOrigin}/visit`
+            : saveCardUrl ?? `${siteOrigin}/save-card`,
           label: cardOnFile ? "Choose my card — $0 today" : "Save my card — $0 today",
         };
         const heading = needsCustomQuote ? "Custom quote requested" : "Cleaning request received";

@@ -139,9 +139,9 @@ describe("owner notification for a new quote", () => {
     }));
   };
 
-  const submitQuote = async (body: Record<string, unknown>) => {
+  const submitQuote = async (body: Record<string, unknown>, origin = ORIGIN) => {
     const r = res();
-    await sendContactEmail({ method: "POST", headers: { origin: ORIGIN }, body } as never, r as never);
+    await sendContactEmail({ method: "POST", headers: { origin }, body } as never, r as never);
     return r;
   };
 
@@ -263,6 +263,23 @@ describe("owner notification for a new quote", () => {
     expect(resendCalls).toHaveLength(1);
     expect(resendCalls[0].html).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
     expect(resendCalls[0].text).toContain(`${OWNER_URL}?visit=${VISIT_ID}`);
+  });
+
+  it("keeps the first customer and owner emails on the preview branch", async () => {
+    const preview = "gatehouse-site-git-qa-team.vercel.app";
+    const origin = `https://${preview}`;
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_BRANCH_URL", preview);
+    vi.stubEnv("VERCEL_URL", "gatehouse-site-deployment-team.vercel.app");
+    const email = "preview@example.com";
+    const r = await submitQuote(quoteBody({ email }), origin);
+    expect(r.code).toBe(200);
+    const owner = resendCalls.find((message) => message.to.includes(OWNER_EMAIL));
+    const client = resendCalls.find((message) => message.to.includes(email));
+    expect(owner?.html).toContain(`href="${origin}/owner?visit=${VISIT_ID}"`);
+    expect(owner?.text).toContain(`${origin}/owner?visit=${VISIT_ID}`);
+    expect(client?.html).toContain(`href="${origin}/save-card?bt=`);
+    expect(client?.text).toContain(`${origin}/save-card?bt=`);
   });
 
   it("does not send a second owner email when the same request is retried", async () => {

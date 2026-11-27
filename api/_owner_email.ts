@@ -1,5 +1,6 @@
 import { dbSelectStrict, logEventStrict } from "./_db.js";
 import { emailArrivalWindow, emailDate, emailDocument } from "./_email_copy.js";
+import { gatehouseSiteOrigin } from "./_origin.js";
 
 // Single source of truth for the owner's notification mailbox (N22).
 // Every server email addressed to the owner goes through
@@ -16,7 +17,7 @@ export function ownerNotificationEmail(): string {
 
 // This is a locator only. The detail API authenticates every read.
 export function ownerPanelUrl(visitId?: string | null): string {
-  const url = new URL("https://www.gatehousehomecleaning.com/owner");
+  const url = new URL("/owner", gatehouseSiteOrigin());
   if (visitId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visitId)) {
     url.searchParams.set("visit", visitId);
   }

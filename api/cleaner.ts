@@ -1,3 +1,4 @@
+import { gatehouseSiteOrigin } from "./_origin.js";
 // Cleaner cabinet API — one token-scoped visit per link.
 //   GET  /api/cleaner?ct=...            → visit view (scope, checklist, photos)
 //   POST /api/cleaner {ct, action}     → checklist | photo_sign | photo_register
@@ -886,7 +887,7 @@ async function publishReportToClient(
       name: custName,
       ts: Math.floor(Date.now() / 1000),
     });
-    const link = `https://www.gatehousehomecleaning.com/visit?bt=${token}#report`;
+    const link = `${gatehouseSiteOrigin()}/visit?bt=${token}#report`;
     const deadline = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       weekday: "short", month: "short", day: "numeric",

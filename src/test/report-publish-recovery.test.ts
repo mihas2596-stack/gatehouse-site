@@ -244,6 +244,28 @@ const clientReportEmails = () => resendSubjects.filter((s) => s === "Your cleani
 const reportSentEvents = () => evts.filter((e) => e.event === "report_sent");
 
 describe("report publish recovery (Task 3 / H3)", () => {
+  it.each(["cleaner", "owner"])("keeps the report from the %s on the preview branch", async (sender) => {
+    const host = "gatehouse-site-git-qa-team.vercel.app";
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_BRANCH_URL", host);
+    const ct = confirmedWorld();
+    if (sender === "owner") {
+      rows[0]["report_status"] = "submitted";
+      rows[0]["checklist"] = checklist();
+      await BA({ action: "send_report", booking_id: BID, photos: PHOTOS });
+    } else {
+      await CL({ ct, action: "submit", checklist: checklist() });
+    }
+    const sent = vi.mocked(fetch).mock.calls
+      .filter(([url]) => String(url) === "https://api.resend.com/emails")
+      .map(([, init]) => JSON.parse(String(init?.body)))
+      .find((message) => message.subject === "Your cleaning report is ready");
+    expect(sent?.html).toContain(`href="https://${host}/visit?bt=`);
+    expect(sent?.text).toContain(`https://${host}/visit?bt=`);
+    expect(sent?.html).toContain("#report");
+    expect(sent?.text).toContain("#report");
+  });
+
   it("cleaner publish loses the tracking write: owner re-send repairs by the saved Resend id, one email total", async () => {
     const ct = confirmedWorld();
     failTrackingOnce = true;
