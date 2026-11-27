@@ -304,13 +304,13 @@ describe("V3: hero sample link and demo actions (visual report)", () => {
     openHome();
     const link = screen.getByRole("link", { name: "See a sample photo report" });
     expect(link).toHaveAttribute("href", "#sample-report");
-    expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See what’s included" })).toBeInTheDocument();
     expect(screen.queryByText("SAMPLE — DEMO ONLY")).not.toBeInTheDocument();
   });
 
   it("the first sample card shows both demo actions without expanding all rooms, marked as demo", () => {
     openHome();
-    fireEvent.click(screen.getByRole("button", { name: "View sample report" }));
+    fireEvent.click(screen.getByRole("link", { name: "See a sample photo report" }));
     expect(screen.getByText("SAMPLE — DEMO ONLY")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Approve \(demo\)/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Report an issue \(demo\)/ })).toBeInTheDocument();

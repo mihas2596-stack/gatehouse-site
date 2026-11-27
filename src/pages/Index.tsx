@@ -30,7 +30,13 @@ const howItWorks = [
 
 const Index = () => {
   const [sampleOpen, setSampleOpen] = useState(false);
-  const sampleToggleRef = useRef<HTMLButtonElement>(null);
+  const sampleLinkRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    const syncSampleLink = () => setSampleOpen(window.location.hash === "#sample-report");
+    syncSampleLink();
+    window.addEventListener("hashchange", syncSampleLink);
+    return () => window.removeEventListener("hashchange", syncSampleLink);
+  }, []);
   // Tell the floating action to stand down while the sample is open:
   // its checklist otherwise scrolls underneath the pill.
   useEffect(() => {
@@ -39,13 +45,10 @@ const Index = () => {
   }, [sampleOpen]);
   const closeSample = () => {
     setSampleOpen(false);
-    sampleToggleRef.current?.focus();
-  };
-  // One click from the hero opens the sample directly (audit 17.11):
-  // the anchor still scrolls to #sample-report, and the showcase now
-  // renders below it instead of waiting for a second click.
-  const openSample = () => {
-    setSampleOpen(true);
+    if (window.location.hash === "#sample-report") {
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+    }
+    sampleLinkRef.current?.focus();
   };
   return (
   <div className="bg-background">
@@ -87,7 +90,7 @@ const Index = () => {
               <Link to="/quote" data-main-cta>See My Price</Link>
             </Button>
             <p className="mt-3 text-base text-muted-foreground">No email or card needed to see your price.</p>
-            <a href="#sample-report" onClick={openSample} className="mt-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">See a sample photo report</a>
+            <a ref={sampleLinkRef} href="#sample-report" aria-expanded={sampleOpen} aria-controls="home-sample-report" onClick={() => setSampleOpen(true)} className="mt-2 inline-flex min-h-[44px] items-center font-semibold text-primary underline">See a sample photo report</a>
           </div>
           <figure>
             <img
@@ -132,33 +135,30 @@ const Index = () => {
               You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window.
             </p>
           </section>
-          {/* Sample report — one entry point, after When you pay. */}
           <div id="sample-report" className="mt-9 scroll-mt-24 sm:mt-10">
-            <Button
-              ref={sampleToggleRef}
-              variant="outline"
-              size="sm"
-              className="min-h-[48px] rounded-full px-5 text-[1.125rem]"
-              aria-expanded={sampleOpen}
-              aria-controls="home-sample-report"
-              onClick={() => setSampleOpen((v) => !v)}
-            >
-              {sampleOpen ? "Hide sample report" : "View sample report"}
-            </Button>
-            <Link to="/whats-included" className="ml-4 inline-flex min-h-[48px] items-center font-semibold text-primary underline">
-              See what&rsquo;s included
-            </Link>
-          </div>
-          {sampleOpen && (
-            <div id="home-sample-report" className="mt-6">
-              <ReportShowcase />
-              <div className="mt-4 text-center">
+            <div className="flex flex-wrap items-center gap-x-4">
+              {sampleOpen && (
                 <Button variant="outline" size="sm" className="min-h-[48px] rounded-full px-5 text-[1.125rem]" onClick={closeSample}>
-                  Close sample report
+                  Hide sample report
                 </Button>
-              </div>
+              )}
+              <Link to="/whats-included" className="inline-flex min-h-[48px] items-center font-semibold text-primary underline">
+                See what&rsquo;s included
+              </Link>
             </div>
-          )}
+            <div id="home-sample-report" className="mt-6" hidden={!sampleOpen}>
+              {sampleOpen && (
+                <>
+                  <ReportShowcase />
+                  <div className="mt-4 text-center">
+                    <Button variant="outline" size="sm" className="min-h-[48px] rounded-full px-5 text-[1.125rem]" onClick={closeSample}>
+                      Close sample report
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </section>

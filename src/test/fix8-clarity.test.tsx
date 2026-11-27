@@ -67,18 +67,19 @@ describe("fix8 — clarity: tier wording", () => {
     expect(screen.getAllByRole("link", { name: "See My Price" })).toHaveLength(2);
   });
 
-  it("hero link opens the sample report in one click (audit 17.11)", () => {
+  it("uses one link to open the sample and returns focus when it closes", () => {
     renderPage(<Index />);
-    // 17.11 prelaunch audit supersedes the 16.11 two-click behaviour:
-    // the hero link still points at #sample-report, but clicking it
-    // opens the sample directly instead of only scrolling to the toggle.
     const heroLink = screen.getByRole("link", { name: "See a sample photo report" });
     expect(heroLink).toHaveAttribute("href", "#sample-report");
-    expect(screen.queryByRole("button", { name: "See a sample photo report" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View sample report" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Hide sample report" })).not.toBeInTheDocument();
+    expect(heroLink).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "View sample report" })).not.toBeInTheDocument();
     fireEvent.click(heroLink);
-    expect(screen.getByRole("button", { name: "Hide sample report" })).toBeInTheDocument();
+    expect(heroLink).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("SAMPLE — DEMO ONLY")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Hide sample report" }));
+    expect(heroLink).toHaveFocus();
+    expect(heroLink).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("SAMPLE — DEMO ONLY")).not.toBeInTheDocument();
   });
 
   it("services page states the same tier rule", () => {
