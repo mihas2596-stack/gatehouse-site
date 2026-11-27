@@ -1,13 +1,24 @@
-// Origin checks shared by the API routes.
-// Production origins live in each route's ALLOWED_ORIGINS. Vercel preview
-// deployments of this project (branch URLs and per-deploy URLs) all live
-// under https://gatehouse-site-*.vercel.app — only this project's own
-// previews can carry that prefix (Vercel derives it from the project
-// name), and previews are team-only behind Vercel Authentication, so
-// accepting them does not open the API to arbitrary sites.
+// Shared origin checks and deployment addresses for server-generated links.
+export const PRODUCTION_SITE_ORIGIN = "https://www.gatehousehomecleaning.com";
+
 export function isPreviewOrigin(origin: unknown): boolean {
   if (typeof origin !== "string") return false;
   return /^https:\/\/gatehouse-site-[A-Za-z0-9-]+\.vercel\.app$/.test(origin);
+}
+
+export function configuredPreviewOrigins(): string[] {
+  return [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL]
+    .map((host) => `https://${host ?? ""}`)
+    .filter(isPreviewOrigin);
+}
+
+export function gatehouseSiteOrigin(): string {
+  if (process.env.VERCEL_ENV !== "preview") return PRODUCTION_SITE_ORIGIN;
+  const origins = configuredPreviewOrigins();
+  // Email links should use the stable branch address when it is available.
+  const origin = origins[origins.length - 1];
+  if (!origin) throw new Error("preview_site_origin_unavailable");
+  return origin;
 }
 
 export function isAllowedOrigin(origin: unknown, allowed: readonly string[]): boolean {

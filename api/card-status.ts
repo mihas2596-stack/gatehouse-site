@@ -1,3 +1,4 @@
+import { gatehouseSiteOrigin } from "./_origin.js";
 import { createHmac, timingSafeEqual, randomUUID, createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStrict } from "./_db.js";
 import { emailDate, emailDocument } from "./_email_copy.js";
@@ -507,10 +508,11 @@ async function maybeSendCardSavedEmail(
     : fmtMoney(payload?.first ?? "");
   const service = ownRow?.service || payload?.service || "Standard cleaning";
   const date = ownRow?.visit_date || payload?.date || "";
-  let visitUrl = "https://www.gatehousehomecleaning.com/visit";
+  const siteOrigin = gatehouseSiteOrigin();
+  let visitUrl = `${siteOrigin}/visit`;
   if (payload?.bid) {
     const token = encryptBookingPayload(bookingLinkSecret(secretKey), payload);
-    visitUrl = `https://www.gatehousehomecleaning.com/visit?bt=${token}`;
+    visitUrl = `${siteOrigin}/visit?bt=${token}`;
   }
   const created = latestEvent(ownEvents, "visit_created")?.created_at || ownRow?.created_at;
   const deadline = confirmDeadlineLabel(created && !Number.isNaN(Date.parse(created)) ? new Date(created) : new Date());

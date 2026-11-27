@@ -1,3 +1,4 @@
+import { gatehouseSiteOrigin } from "./_origin.js";
 import { clientVisitLink } from "./_booking_links.js";
 import { emailDate, emailArrivalWindow, emailDocument } from "./_email_copy.js";
 // /api/auto-charge — the server-side 24h timer for "Approve, then pay".
@@ -649,9 +650,9 @@ export default async function handler(req: Req, res: Res) {
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Your cleaning report is ready — a quick look",
-              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your report is ready to review", paragraphs: ["Open your photos and checklist. Choose Approve & pay if everything looks good, or Report an issue if something needs attention.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately. Otherwise automatic payment follows the 24-hour rule unless you report an issue.`], action: { url: `https://www.gatehousehomecleaning.com/report?bt=${token}`, label: "Review my cleaning" } }),
+              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your report is ready to review", paragraphs: ["Open your photos and checklist. Choose Approve & pay if everything looks good, or Report an issue if something needs attention.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately. Otherwise automatic payment follows the 24-hour rule unless you report an issue.`], action: { url: `${gatehouseSiteOrigin()}/report?bt=${token}`, label: "Review my cleaning" } }),
               text:
-                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nYour photo report is ready — please take a quick look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
+                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nYour photo report is ready — please take a quick look.\n\n${gatehouseSiteOrigin()}/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
                 `As agreed, if we don't hear from you by ${deadline}, the visit is charged automatically.\n\nGatehouse Home Cleaning\n`,
             }),
@@ -741,9 +742,9 @@ export default async function handler(req: Req, res: Res) {
               to: [c.email],
               reply_to: "hello@gatehousehomecleaning.com",
               subject: "Reminder: your cleaning report is waiting",
-              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your cleaning report is waiting", paragraphs: ["Please review your photos and checklist. Use Report an issue on your visit page if something was missed; this blocks automatic payment for this visit.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately.`], action: { url: `https://www.gatehousehomecleaning.com/report?bt=${token}`, label: "Review my cleaning" } }),
+              html: emailDocument({ firstName: (c.name || "there").split(/\s+/)[0], heading: "Your cleaning report is waiting", paragraphs: ["Please review your photos and checklist. Use Report an issue on your visit page if something was missed; this blocks automatic payment for this visit.", `Review by ${deadline} (Atlanta time). Approving charges the agreed visit amount immediately.`], action: { url: `${gatehouseSiteOrigin()}/report?bt=${token}`, label: "Review my cleaning" } }),
               text:
-                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\nhttps://www.gatehousehomecleaning.com/report?bt=${token}\n\n` +
+                `Hi ${(c.name || "").trim().split(/\s+/)[0] || "there"},\n\nA quick reminder: your photo report is still waiting for a look.\n\n${gatehouseSiteOrigin()}/report?bt=${token}\n\n` +
                 `If everything looks good, tap Approve. If something isn't right, tap "Report an issue" — that pauses the charge while we make it right.\n\n` +
                 // M4: the reply_to of this reminder is hello@, not the
                 // signed report-reply address, so a reply here does NOT

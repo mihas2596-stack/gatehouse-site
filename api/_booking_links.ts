@@ -1,4 +1,5 @@
 import { createCipheriv, createHash, randomBytes } from "crypto";
+import { gatehouseSiteOrigin } from "./_origin.js";
 
 /** Fresh encrypted link, containing only this visit's verified context. */
 export function clientVisitLink(stripeKey: string, booking: { bid: string; email: string; name?: string }, anchor = ""): string {
@@ -8,5 +9,5 @@ export function clientVisitLink(stripeKey: string, booking: { bid: string; email
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify({ ...booking, name: booking.name ?? "", ts: Math.floor(Date.now() / 1000) })), cipher.final()]);
   const token = `v2.${Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64url")}`;
-  return `https://www.gatehousehomecleaning.com/visit?bt=${token}${anchor}`;
+  return `${gatehouseSiteOrigin()}/visit?bt=${token}${anchor}`;
 }

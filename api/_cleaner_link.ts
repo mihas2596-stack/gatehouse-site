@@ -35,10 +35,10 @@
 // api/cleaner.ts both use it.
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { gatehouseSiteOrigin } from "./_origin.js";
 
 export const CLEANER_LINK_PURPOSE = "cleaner-access";
 export const CLEANER_LINK_VERSION = "v2";
-export const CLEANER_LINK_URL_BASE = "https://www.gatehousehomecleaning.com/cleaner";
 
 /**
  * Candidate secrets for v2 minting/verification, env first. Empty when
@@ -84,7 +84,7 @@ export function mintCleanerLinkV2(secret: string, visitId: string, issuanceId: s
 }
 
 export function cleanerLinkUrl(token: string): string {
-  return `${CLEANER_LINK_URL_BASE}?ct=${token}`;
+  return `${gatehouseSiteOrigin()}/cleaner?ct=${token}`;
 }
 
 export function parseCleanerLinkV2(
