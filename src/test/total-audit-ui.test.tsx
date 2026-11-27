@@ -16,6 +16,17 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     // 16.11 item 6: the identified card is named, never confirmed blind.
     expect(screen.queryByRole("button", { name: /Use Visa ending in ••••4242 for this booking/ })).not.toBeNull();
   });
+  it.each([
+    { path: "/save-card", Page: SaveCard },
+    { path: "/thank-you", Page: ThankYou },
+  ])("offers one card entry action when the saved cards cannot be identified at $path", async ({ path, Page }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      ok: true, booking: { first: "184", has_card: "1", card_state: "card_confirmation_required" },
+    }) }));
+    render(<MemoryRouter initialEntries={[path + "?bt=audit-token"]}><Page /></MemoryRouter>);
+    expect(await screen.findByRole("button", { name: /^Add a card$/ })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /add a different card|use selected card/i })).not.toBeInTheDocument();
+  });
   it("the Change card destination allows a different card for a confirmed visit", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, booking: { ...card, card_confirmed: "1", booking_confirmed: "1", confirmed_date: "2026-11-16", confirmed_window: "morning" } }) }));
     render(<MemoryRouter initialEntries={["/save-card?bt=audit-token"]}><SaveCard /></MemoryRouter>);

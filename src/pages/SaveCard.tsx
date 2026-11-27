@@ -126,6 +126,7 @@ export default function SaveCard() {
   const brand = booking?.card_brand?.replace(/\b\w/g, (c) => c.toUpperCase()) || "";
   const cardIdentified = Boolean(brand && booking?.card_last4);
   const cardOptions = booking?.cards ?? [];
+  const needsNewCardEntry = choice && !cardIdentified && cardOptions.length === 0;
   const cardLabel = cardIdentified ? `${brand} ending in ••••${booking?.card_last4}` : "";
   return (
     <div className="page-shell readable-flow min-h-[80vh] bg-background">
@@ -211,13 +212,13 @@ export default function SaveCard() {
             </div>
           )}
           {choice && !cardIdentified && cardOptions.length > 0 && <Button variant="hero" size="lg" className="w-full mb-3" disabled={busy || !selectedCard} onClick={() => void confirm()}>{busy ? "Confirming…" : "Use selected card"}</Button>}
-          {choice && !cardIdentified && cardOptions.length === 0 && (
+          {needsNewCardEntry && (
             <>
               <p className="mb-4 text-base">We couldn&rsquo;t identify a saved card for this visit. Add a card to continue.</p>
               <Button variant="hero" size="lg" className="w-full mb-3" onClick={() => setEntry(true)}>Add a card</Button>
             </>
           )}
-          {hasCard && !entry && <Button variant={done ? "link" : "outline"} size="lg" className={done ? "underline" : "w-full mb-4"} onClick={() => setEntry(true)}>Add a different card</Button>}
+          {hasCard && !entry && !needsNewCardEntry && <Button variant={done ? "link" : "outline"} size="lg" className={done ? "underline" : "w-full mb-4"} onClick={() => setEntry(true)}>Add a different card</Button>}
           {showForm && <>
             {!blocked && <div className="mb-6"><PaymentSummary showCard /></div>}
             {params.get("canceled") === "1" && <p className="mb-6">Card entry was cancelled. You can try again when you're ready.</p>}
