@@ -23,6 +23,20 @@ describe("additional audit acceptance criteria — intended behavior", () => {
     expect(screen.getByText(/Card: saved ✓ · Visit: confirmed for November 16, 2026/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Add.*card|Change.*card|different card/i })).not.toBeNull();
   });
+  it.each([
+    { path: "/save-card?bt=audit-token&saved=1&session_id=cs_test_audit", Page: SaveCard },
+    { path: "/save-card?bt=audit-token", Page: SaveCard },
+    { path: "/thank-you?bt=audit-token", Page: ThankYou },
+  ])("offers the existing date picker after card save at $path", async ({ path, Page }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({
+      ok: true, verified: true, status: "saved", booking: { ...card, card_confirmed: "1", visit_state: "date_declined" },
+    }) }));
+    render(<MemoryRouter initialEntries={[path]}><Page /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Your requested date isn't available" })).toBeVisible();
+    expect(screen.getByText("Card saved. $0 charged today.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Choose a new date" })).toHaveAttribute("href", "/visit?bt=audit-token#choose-date");
+    expect(screen.queryByText(/No action needed|awaiting confirmation/i)).not.toBeInTheDocument();
+  });
   it("a standalone card save does not claim that a cleaning date is awaiting confirmation", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ json: async () => ({ ok: true, verified: true, status: "saved", booking: null }) }));
     render(<MemoryRouter initialEntries={["/save-card?saved=1&session_id=cs_test_audit"]}><SaveCard /></MemoryRouter>);

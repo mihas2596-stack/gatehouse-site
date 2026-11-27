@@ -764,6 +764,12 @@ const Visit = () => {
       element.scrollIntoView({ block: "start" });
     }
   }, []);
+  const focusDateOptions = useCallback((element: HTMLElement | null) => {
+    if (element && window.location.hash === "#choose-date") {
+      element.focus({ preventScroll: true });
+      element.scrollIntoView({ block: "start" });
+    }
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // G6: a failed refetch must not wipe a loaded visit, and a network
@@ -1361,47 +1367,48 @@ const Visit = () => {
               </div>
             )}
 
-                        {!isPreview && data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-3">Pick one of these dates instead</h2>
-                <div className="flex flex-wrap gap-2">
-                  {data.alt_dates.map((d) => (
-                    <Button key={d} variant="hero" disabled={busy} onClick={() => void post({ action: "accept_alt_date", date: d })}>
-                      {fmtDateUS(d)}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {canReschedule && (
-              <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
-                <h2 className="font-heading text-lg font-bold mb-3">Need a different date?</h2>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="date"
-                    value={proposed}
-                    min={todayET}
-                    onChange={(e) => setProposed(e.target.value)}
-                    className="rounded-xl border border-border bg-background p-3 text-sm"
-                    aria-label="Propose a new date"
-                  />
-                  <Button variant="outline" disabled={busy || !proposed} onClick={() => requestProposedDate()}>
-                    Request this date
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  {data.state === "date_passed"
-                    ? "Your old date has already passed — pick any future date and we'll confirm it within one business day."
-                    : "We confirm or offer the closest alternative within one business day. Your old date stays until the new one is confirmed."}
-                </p>
-                {data.proposed_pending && data.proposed_date && (
-                  <p className="text-sm mt-3" role="status">
-                    You asked for <strong>{fmtDateUS(data.proposed_date)}</strong> — we&apos;re checking it.
-                    {b.confirmed_date ? <> Your confirmed date {fmtDateUS(b.confirmed_date)} stays until the new one is confirmed.</> : " Your request stays as it is until the new date is confirmed."}
-                  </p>
+              <section id="choose-date" aria-label="Choose a new date" tabIndex={-1} ref={focusDateOptions} className="scroll-mt-28">
+                {data.state === "date_declined" && data.alt_dates && data.alt_dates.length > 0 && (
+                  <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                    <h2 className="font-heading text-lg font-bold mb-3">Pick one of these dates instead</h2>
+                    <div className="flex flex-wrap gap-2">
+                      {data.alt_dates.map((d) => (
+                        <Button key={d} variant="hero" disabled={busy} onClick={() => void post({ action: "accept_alt_date", date: d })}>
+                          {fmtDateUS(d)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 )}
-              </div>
+                <div className="rounded-xl border border-border bg-card p-4 mb-6 text-left">
+                  <h2 className="font-heading text-lg font-bold mb-3">Need a different date?</h2>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="date"
+                      value={proposed}
+                      min={todayET}
+                      onChange={(e) => setProposed(e.target.value)}
+                      className="rounded-xl border border-border bg-background p-3 text-sm"
+                      aria-label="Propose a new date"
+                    />
+                    <Button variant="outline" disabled={busy || !proposed} onClick={() => requestProposedDate()}>
+                      Request this date
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {data.state === "date_passed"
+                      ? "Your old date has already passed — pick any future date and we'll confirm it within one business day."
+                      : "We confirm or offer the closest alternative within one business day. Your old date stays until the new one is confirmed."}
+                  </p>
+                  {data.proposed_pending && data.proposed_date && (
+                    <p className="text-sm mt-3" role="status">
+                      You asked for <strong>{fmtDateUS(data.proposed_date)}</strong> — we&apos;re checking it.
+                      {b.confirmed_date ? <> Your confirmed date {fmtDateUS(b.confirmed_date)} stays until the new one is confirmed.</> : " Your request stays as it is until the new date is confirmed."}
+                    </p>
+                  )}
+                </div>
+              </section>
             )}
 
             {canReschedule && (
