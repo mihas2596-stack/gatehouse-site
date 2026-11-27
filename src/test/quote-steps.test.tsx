@@ -167,7 +167,7 @@ describe("quote steps", () => {
     expect(screen.getByText("$0 charged today")).toBeInTheDocument();
     expect(screen.getByText(/Save your card with Stripe/)).toBeInTheDocument();
     expect(screen.getByText("Approve & pay")).toBeInTheDocument();
-    expect(screen.getByText("Report an issue").parentElement).toHaveTextContent(/within those 24 hours to stop automatic payment.*you choose when to approve and pay/i);
+    expect(screen.getByText("Report an issue").parentElement).toHaveTextContent(/within those 24 hours to stop automatic payment.*Your card is charged only if you approve the report\./i);
     expect(screen.getByText("Pending confirmation.")).toBeInTheDocument();
     expect(screen.queryByText(/A report email that bounces blocks/)).not.toBeInTheDocument();
     expect(screen.queryByText(/After your visit we send a status update/)).not.toBeInTheDocument();

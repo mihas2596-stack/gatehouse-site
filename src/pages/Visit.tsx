@@ -587,9 +587,14 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
         </p>
       )}
       {rep.state === "issue_open" && !rep.issue_decision && (
-        <p className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
-          Automatic payment is paused for this visit — the details of your issue are shown above.
-        </p>
+        <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
+          <p>Your card is charged only if you approve the report.</p>
+          {!isPreview && (
+            <Link to={`/report?bt=${encodeURIComponent(bt)}`} className="inline-flex min-h-[44px] items-center font-semibold underline">
+              View report and issue
+            </Link>
+          )}
+        </div>
       )}
       {rep.state === "issue_open" && rep.issue_decision && (
         <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm">
@@ -611,10 +616,10 @@ function ReportSection({ bt, visitState, cleanerName, cleanerPhoto, visitDate, v
             <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />
           ) : (
             <>
-              <Button variant="hero" disabled={busy} onClick={() => void act({ action: "approve" })}>
+              <p id="issue-payment-effect" className="mb-2 text-sm">Approving closes your concern and charges your saved card.</p>
+              <Button variant="hero" aria-describedby="issue-payment-effect" disabled={busy} onClick={() => void act({ action: "approve" })}>
                 {busy ? "Processing payment…" : rep.issue_decision.decision === "payment_requested" && rep.amount ? `Approve & Pay ${rep.amount}` : rep.amount ? `Resolve issue & pay ${rep.amount}` : "Everything is fine now — approve"}
               </Button>
-              <p className="mt-2 text-xs text-muted-foreground">Approving charges your saved card — only your explicit approval charges it now.</p>
             </>
           )}
         </div>

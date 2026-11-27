@@ -57,8 +57,7 @@ describe("report page issue states", () => {
     expect(screen.getByText(/Your payment is paused\. We'll review what happened and reply within one business day\. We aim to provide a decision within 72 hours\./)).toBeInTheDocument();
     expect(screen.getByText(/Nothing will be charged unless you approve the report\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add more details" })).toBeInTheDocument();
-    // The existing resolve-and-pay path stays available.
-    expect(screen.getByRole("button", { name: "Resolve issue & pay $149" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resolve issue & pay $149" })).toHaveAccessibleDescription("Approving closes your concern and charges your saved card.");
     expect(screen.getByText(/You told us/)).toBeInTheDocument();
     expect(screen.getByText(/“Streaks on the floor”/)).toBeInTheDocument();
   });
@@ -73,7 +72,7 @@ describe("report page issue states", () => {
     expect(screen.getByText(/We've reviewed your concern\. Please review our response and approve the report when you're ready to pay\./)).toBeInTheDocument();
     expect(screen.getByText(/Our response:/)).toBeInTheDocument();
     expect(screen.getByText(/“The original amount stays due.”/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve & Pay $149" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve & Pay $149" })).toHaveAccessibleDescription("Approving closes your concern and charges your saved card.");
     expect(screen.getByRole("button", { name: "My issue isn't resolved" })).toBeInTheDocument();
   });
 

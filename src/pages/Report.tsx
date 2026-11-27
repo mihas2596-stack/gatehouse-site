@@ -785,17 +785,17 @@ const Report = () => {
                 </p>
               )}
               <p className="text-base text-foreground mb-6">
-                {isFutureVisit || data.issue_decision?.decision === "payment_requested"
-                  ? "Nothing will be charged until you approve — the automatic charge stays paused for this visit."
-                  : "Nothing will be charged while your issue is open — the automatic charge is paused for this visit and will never run on its own. When you're satisfied, tap below to approve the report — that charges your saved card right away."}
+                Automatic payment stays off for this visit.
               </p>
               {isFutureVisit && <ApprovalDateNotice date={futureApprovalDate} reclean={approvalDateBlock?.reclean} />}
               {!isPreview && !isFutureVisit && (
-              <Button variant="hero" size="lg" disabled={busy} onClick={() => void act("approve")}>
-                {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
-              </Button>
+                <>
+                  <p id="issue-payment-effect" className="mb-3 text-sm text-muted-foreground">Approving closes your concern and charges your saved card.</p>
+                  <Button variant="hero" size="lg" aria-describedby="issue-payment-effect" disabled={busy} onClick={() => void act("approve")}>
+                    {busy ? "Processing payment…" : data.issue_decision?.decision === "payment_requested" && data.amount ? `Approve & Pay ${data.amount}` : data.amount ? `Resolve issue & pay ${data.amount}` : "Everything is fine now — approve"}
+                  </Button>
+                </>
               )}
-              {!isPreview && !isFutureVisit && <p className="mt-3 text-sm text-muted-foreground text-center">Approving charges your saved card — only your explicit approval charges it now.</p>}
             </div>
             <div className="mt-8 text-center">
               {followupMsg && (

@@ -22,7 +22,7 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
             <dt className="font-bold">If something was missed</dt>
             <dd className="mt-1">
               Select <strong>Report an issue</strong> within those 24 hours to stop automatic payment for this visit.
-              Once we resolve the issue, you choose when to approve and pay.
+              Your card is charged only if you approve the report.
             </dd>
           </div>
         </dl>
@@ -36,7 +36,7 @@ export default function PaymentSummary({ showCard = false, compact = false }: { 
       {showCard && <div><dt className="font-semibold">Today: $0</dt><dd className="mt-1 text-base">Save a card for this visit through Stripe, so you won’t need to enter it after cleaning. Gatehouse never sees or stores your full card number.</dd></div>}
       <div><dt className="font-semibold">Review, then pay</dt><dd className="mt-1 text-base">After cleaning, we send your photo report. Choose “Approve &amp; pay” to charge your card.</dd></div>
       <div><dt className="font-semibold">24 hours to review</dt><dd className="mt-1 text-base">You have 24 hours to review your report. If you haven't approved it or reported an issue, we'll charge your card at the next scheduled billing time after that window.</dd></div>
-      <div><dt className="font-semibold">Something missed?</dt><dd className="mt-1 text-base">Use “Report an issue” on your visit page within those 24 hours. Automatic charging stays off for this visit, including after the fix. You approve again to pay.</dd></div>
+      <div><dt className="font-semibold">Something missed?</dt><dd className="mt-1 text-base">Use “Report an issue” on your visit page within those 24 hours to stop automatic payment for this visit. Your card is charged only if you approve the report.</dd></div>
     </dl>
   </section>;
 }
