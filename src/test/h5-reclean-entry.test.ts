@@ -23,6 +23,7 @@ const SECRET = "test-lockbox-4321";
 
 describe("H5: cleanerEntryView reopens entry for a scheduled re-clean", () => {
   beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-25T16:00:00Z"));
     vi.stubEnv("ADMIN_TOKEN", "adm-" + "secret");
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
