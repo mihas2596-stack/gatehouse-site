@@ -101,7 +101,7 @@ describe("owner's issue decision on /visit (idea 2)", () => {
     expect(await screen.findByText(/We've reviewed your concern\. Please review our response and approve the report when you're ready to pay\./)).toBeInTheDocument();
     expect(screen.getByText(/Our response:/)).toBeInTheDocument();
     expect(screen.getByText(/“The original amount stays due.”/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve & Pay $1.50" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve & Pay $1.50" })).toHaveAccessibleDescription("Approving closes your concern and charges your saved card.");
   });
 
   it("re-clean arranged: decision text, re-clean date, Resolve issue & pay", async () => {
@@ -116,16 +116,13 @@ describe("owner's issue decision on /visit (idea 2)", () => {
     expect(screen.getByRole("button", { name: "Resolve issue & pay $1.50" })).toBeInTheDocument();
   });
 
-  it("no decision yet: the paused-payment block, no decision copy", async () => {
+  it("no decision yet: shows the payment rule and links to the report", async () => {
     visitState = "issue_open";
     reportState = "issue_open";
     open();
-    // Cabinets audit (fix 1): the status block comes first ("Issue
-    // received. Automatic payment is paused…") and the amber line
-    // below the card details points at it instead of repeating the
-    // client's words.
     expect(await screen.findByText("Issue received. Automatic payment is paused for this visit.")).toBeInTheDocument();
-    expect(screen.getByText(/Automatic payment is paused for this visit — the details of your issue are shown above\./)).toBeInTheDocument();
+    expect(screen.getByText("Your card is charged only if you approve the report.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "View report and issue" })).toHaveAttribute("href", "/report?bt=test-booking");
     expect(screen.queryByText(/We've reviewed your concern/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Approve & Pay/ })).not.toBeInTheDocument();
   });
