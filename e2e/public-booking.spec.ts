@@ -17,6 +17,10 @@ for (const width of [320, 390, 768, 1440]) {
 
 test("mobile quote is submitted once, survives reload and follows setup to verified confirmation", async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  // Keep the booking path independent of live consent and analytics services.
+  await page.route(/^https?:\/\//, route =>
+    new URL(route.request().url()).origin === baseURL ? route.fallback() : route.abort()
+  );
   const city = "Sugar Hill";
   const token = "fixture-visit";
   let submitted = 0;
