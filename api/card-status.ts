@@ -3,6 +3,7 @@ import { dbConfigured, dbSelect, dbSelectStrict, dbInsert, logEvent, logEventStr
 import { emailDate, emailDocument } from "./_email_copy.js";
 import { notifyOwnerCardReady } from "./_owner_email.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
+import { isVisitDateDeclined } from "./_visit_date.js";
 
 // Booking-scoped truth. The Stripe customer is shared by every booking of
 // one email, so its metadata can describe a DIFFERENT booking than the one
@@ -752,8 +753,6 @@ export default async function handler(req: Req, res: Res) {
           const row = await latestBookingRow(bookingId);
           const events = row ? await bookingEvents(bookingId) : [];
           const cancelled = row?.status === "cancelled" || events.some((e) => e.event === "visit_cancelled");
-          if (cancelled) booking.visit_state = "cancelled";
-          else if (row?.status) booking.visit_state = row.status;
           booking.auto_charge_blocked = row?.issue_ever || row?.issue_open || events.some((e) => e.event === "issue_opened") ? "1" : "";
           const createdAt = latestEvent(events, "visit_created")?.created_at || row?.created_at;
           if (createdAt && !Number.isNaN(Date.parse(createdAt))) booking.confirm_by = confirmDeadlineLabel(new Date(createdAt));
@@ -769,6 +768,13 @@ export default async function handler(req: Req, res: Res) {
           const confirmEv = latestEvent(events, "visit_confirmed");
           const cust = await bookingCardCustomer(revisitKey, bookingId, p.email, row?.stripe_customer_id);
           const boundCust = cust?.metadata.gh_booking_id === bookingId || (cust && row?.stripe_customer_id === cust.id) ? cust : null;
+          const declined = row
+            ? !row.report_sent_at && row.status !== "paid" && row.status !== "refunded"
+              && isVisitDateDeclined(latestEvent(events, "date_proposed"), confirmEv)
+            : boundCust?.metadata["gh_state"] === "date_declined";
+          if (cancelled) booking.visit_state = "cancelled";
+          else if (declined) booking.visit_state = "date_declined";
+          else if (row?.status) booking.visit_state = row.status;
           if (cust) {
             if (cust.email && cust.email.toLowerCase() !== p.email.toLowerCase()) throw new Error("identity_mismatch");
             const selectedId = latestEvent(events, "card_confirmed")?.detail?.["payment_method_id"];
@@ -815,12 +821,12 @@ export default async function handler(req: Req, res: Res) {
           if (vcEv?.detail && typeof vcEv.detail["first_service"] === "string" && vcEv.detail["first_service"]) {
             booking.first_service = vcEv.detail["first_service"] as string;
           }
-          if (confirmEv && !cancelled) {
+          if (confirmEv && !cancelled && !declined) {
             booking.booking_confirmed = "1";
             const d = confirmEv.detail ?? {};
             if (typeof d["date"] === "string" && d["date"]) booking.confirmed_date = d["date"];
             if (typeof d["window"] === "string" && d["window"]) booking.confirmed_window = d["window"];
-          } else if (!row && !cancelled && boundCust?.metadata["gh_state"] !== "cancelled" && boundCust?.metadata["gh_booking_confirmed"] === "1") {
+          } else if (!row && !cancelled && !declined && boundCust?.metadata["gh_state"] !== "cancelled" && boundCust?.metadata["gh_booking_confirmed"] === "1") {
             booking.booking_confirmed = "1";
             if (boundCust.metadata["gh_confirmed_date"]) booking.confirmed_date = boundCust.metadata["gh_confirmed_date"];
             if (boundCust.metadata["gh_confirmed_window"]) booking.confirmed_window = boundCust.metadata["gh_confirmed_window"];

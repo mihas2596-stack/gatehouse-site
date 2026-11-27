@@ -26,7 +26,7 @@ import { ownerNotificationEmail, ownerPanelUrl } from "./_owner_email.js";
 import { issueStateFrom, everWaivedDecision, timerBlockReason } from "./_payment_basis.js";
 import { pickCustomerByEmail, pickCard, confirmedPaymentMethodId, resolveCustomerByRowId } from "./_stripe_customer.js";
 import { listCustomerCards } from "./card-status.js";
-import { visitDateStartNYMs } from "./_visit_date.js";
+import { isVisitDateDeclined, visitDateStartNYMs } from "./_visit_date.js";
 import {
   ENTRY_METHODS, clientEntryView, deleteAccess, loadAccess, saveAccess, saveAccessNote,
   type ClientEntryView, type EntryMethod,
@@ -260,8 +260,7 @@ function buildEffectiveMeta(row: BookingRow, events: BookingEvent[], paymentMeth
   // alt_dates, no row flag): without this mapping the row override
   // would hide the offered dates and the client could never accept
   // one. A later confirmation wins over an older decline.
-  const declined = Boolean(proposedEv && typeof proposedEv.detail?.["alt_dates"] === "string"
-    && (!confirmEv || confirmEv.created_at < proposedEv.created_at));
+  const declined = isVisitDateDeclined(proposedEv, confirmEv);
   // M5: surface a failed charge after reload, like api/report.ts.
   const failedEv = latestEvent(events, "payment_failed");
   const succeededEv = latestEvent(events, "payment_succeeded");

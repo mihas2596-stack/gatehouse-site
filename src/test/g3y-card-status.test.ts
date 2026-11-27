@@ -144,6 +144,39 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(
 
 const get = () => ({ method: "GET", headers: {}, query: { bt: mintToken() } });
 
+describe("visit date on the card status screen", () => {
+  it.each([
+    { name: "an active decline", confirmedAt: "2026-11-15T10:00:00Z", state: "date_declined", confirmed: undefined },
+    { name: "a later confirmation", confirmedAt: "2026-11-17T10:00:00Z", state: "confirmed", confirmed: "1" },
+  ])("reports $name without changing the saved card", async ({ confirmedAt, state, confirmed }) => {
+    dbRow = { id: "row-g3y-1", booking_id: BID, status: "confirmed", amount_cents: 2190, visit_date: "2026-11-24" };
+    dbEvents = [
+      { event: "card_confirmed", detail: { payment_method_id: "pm_123" }, created_at: "2026-11-18T10:00:00Z" },
+      { event: "date_proposed", detail: { alt_dates: "2026-11-24" }, created_at: "2026-11-16T10:00:00Z" },
+      { event: "visit_confirmed", detail: { date: "2026-11-24" }, created_at: confirmedAt },
+    ];
+    const res = response();
+    await handler(get() as never, res as never);
+    expect(res.code).toBe(200);
+    const booking = res.body.booking as Record<string, string>;
+    expect(booking.visit_state).toBe(state);
+    expect(booking.booking_confirmed).toBe(confirmed);
+    expect(booking.card_confirmed).toBe("1");
+    expect(stripePosts).toHaveLength(0);
+  });
+
+  it.each([
+    { binding: BID, state: "date_declined" },
+    { binding: "another-booking", state: undefined },
+  ])("reads a legacy decline only for the matching booking ($binding)", async ({ binding, state }) => {
+    customerMetadata = { gh_booking_id: binding, gh_state: "date_declined" };
+    const res = response();
+    await handler(get() as never, res as never);
+    expect(res.code).toBe(200);
+    expect((res.body.booking as Record<string, string>).visit_state).toBe(state);
+  });
+});
+
 describe("G3: more than 10 cards — the booking's own card is never dropped", () => {
   it("finds a cached card sitting on page 2 of the list (old limit=10 missed it)", async () => {
     customerMetadata = { gh_state: "awaiting_card", gh_payment_method: TARGET };

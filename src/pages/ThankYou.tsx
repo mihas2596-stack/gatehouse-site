@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ChooseNewVisitDate from "@/components/ChooseNewVisitDate";
 import SEO from "@/components/SEO";
 import { formatDateLong } from "@/lib/utils";
 import { resolveLinkToken } from "@/lib/tokenStrip";
@@ -384,6 +385,9 @@ const ThankYou = () => {
 
   // State C — card saved (visit not yet confirmed, or confirmed).
   if (card.kind === "saved" || card.kind === "confirmed") {
+    if (card.booking?.visit_state === "date_declined") {
+      return shell(<ChooseNewVisitDate bookingToken={bt} />);
+    }
     return shell(
       <>
         <div className="text-center">

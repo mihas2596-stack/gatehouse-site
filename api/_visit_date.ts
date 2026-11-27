@@ -38,6 +38,14 @@ type JournalLike = {
   detail: Record<string, unknown> | null;
 };
 
+// A proposal with alternatives records that the requested date was declined.
+// A newer confirmation supersedes it.
+type DatedJournalEvent = JournalLike & { created_at: string };
+export function isVisitDateDeclined(proposal: DatedJournalEvent | null, confirmation: DatedJournalEvent | null): boolean {
+  return Boolean(proposal && typeof proposal.detail?.["alt_dates"] === "string"
+    && (!confirmation || confirmation.created_at < proposal.created_at));
+}
+
 // The confirmed date from the journal: the latest visit_confirmed
 // event's `date` detail (the owner-confirmed, possibly rescheduled,
 // date). Events are newest-first, so the first match is the latest

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ChooseNewVisitDate from "@/components/ChooseNewVisitDate";
 import PaymentSummary from "@/components/PaymentSummary";
 import SEO from "@/components/SEO";
 import { formatDateLong, formatArrivalWindow } from "@/lib/utils";
@@ -142,7 +143,9 @@ export default function SaveCard() {
           </>}
           {done && !bt && <Button asChild variant="hero" size="lg"><Link to="/quote">See price & request a cleaning</Link></Button>}
           {bt && <p className="mt-6"><Link className="underline" to={visitLink}>View my visit</Link></p>}
-        </> : <>
+        </> : done && bt && booking?.visit_state === "date_declined" ? (
+          <ChooseNewVisitDate bookingToken={bt} />
+        ) : <>
           {done ? <CheckCircle className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" /> : <CreditCard className="mx-auto mb-6 h-12 w-12 text-sage-foreground" aria-hidden="true" />}
           <h1 className="font-heading text-3xl font-bold mb-4">{entry ? "Save a card for this visit" : choice ? "Choose a card for this visit" : awaitingConfirmation ? "Cleaning request received" : done ? "Card saved" : "Save a card for this visit"}</h1>
           {done && (
