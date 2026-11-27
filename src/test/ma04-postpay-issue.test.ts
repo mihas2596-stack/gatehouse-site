@@ -221,6 +221,31 @@ describe("MA-04/MA-05: post-payment complaint sets the row flags", () => {
     expect(dbRows[0]["issue_ever"]).toBe(true);
   });
 
+  it("only confirms the first complaint after its details are recorded", async () => {
+    failEventPost = true;
+    const body = { reason: "The floor still has streaks", room: "Kitchen" };
+    expect((await postIssue(body)).code).toBe(502);
+    expect(resendCalls).toHaveLength(0);
+    failEventPost = false;
+    expect((await postIssue(body)).code).toBe(200);
+    expect(dbEvents.filter(event => event.event === "postpay_issue")).toHaveLength(1);
+    expect(resendCalls).toHaveLength(1);
+    expect(dbRows[0].status).toBe("paid");
+  });
+
+  it("preserves a retry if the complaint still cannot reach the owner queue", async () => {
+    failPatch = true;
+    const body = { reason: "Please review the photograph", room: "Kitchen", photo: JPEG_B64 };
+    expect((await postIssue(body)).code).toBe(502);
+    expect((await postIssue(body)).code).toBe(502);
+    expect(resendCalls).toHaveLength(0);
+    expect(dbPhotos).toHaveLength(0);
+    failPatch = false;
+    expect((await postIssue(body)).body.followup_recorded).toBe(true);
+    expect(dbRows[0].issue_open).toBe(true);
+    expect(dbPhotos).toHaveLength(1);
+  });
+
   it("a photo is stored with kind client (retention-protected by the flags)", async () => {
     const issue = await postIssue({ reason: "found a crack", room: "Kitchen", photo: JPEG_B64 });
     expect(issue.code).toBe(200);

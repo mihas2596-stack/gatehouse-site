@@ -312,7 +312,7 @@ const Report = () => {
           // A follow-up on an already-open issue was recorded by the
           // server (journal + owner email) — confirm it and clear the
           // fields instead of silently closing the form.
-          setFollowupMsg("Thanks — we've added this to your open issue and emailed the team. We'll reply within one business day.");
+          setFollowupMsg("Thanks — we've added this to your open issue. We'll reply within one business day.");
           setFollowupOpen(false);
           setIssueText("");
           setIssueRoom("");

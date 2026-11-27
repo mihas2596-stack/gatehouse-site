@@ -225,7 +225,7 @@ describe("MB-05/MB-32: cleaner checklist revision + stale conflicts", () => {
   let posts: Record<string, unknown>[];
   let reads: number;
   let saveBehaviour: "stale" | "ok";
-  let submitBehaviour: "stale" | "ok";
+  let submitBehaviour: "stale" | "ok" | "offline";
 
   beforeEach(() => {
     posts = []; reads = 0; saveBehaviour = "stale"; submitBehaviour = "stale";
@@ -241,6 +241,7 @@ describe("MB-05/MB-32: cleaner checklist revision + stale conflicts", () => {
         return { ok: true, json: async () => ({ ok: true, checklist_revision: "rev-2" }) };
       }
       if (body["action"] === "submit") {
+        if (submitBehaviour === "offline") throw new Error("offline");
         if (submitBehaviour === "stale") return { ok: false, status: 409, json: async () => ({ ok: false, error: "checklist_stale", checklist_revision: "rev-2" }) };
         return { ok: true, json: async () => ({ ok: true }) };
       }
@@ -266,6 +267,19 @@ describe("MB-05/MB-32: cleaner checklist revision + stale conflicts", () => {
     // Stale offers a reload, not the generic "Not saved — Retry".
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reload to see the latest version/ })).toBeInTheDocument();
+  });
+
+  it("rechecks the saved report without resubmitting after a lost response", async () => {
+    saveBehaviour = "ok";
+    submitBehaviour = "offline";
+    openCleaner();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Counters wiped" }));
+    await screen.findByText("All changes saved.");
+    const before = reads;
+    fireEvent.click(screen.getByRole("button", { name: "Finish & send report" }));
+    expect(await screen.findByText(/we don't know whether the report was sent/)).toBeVisible();
+    expect(reads).toBeGreaterThan(before);
+    expect(posts.filter(p => p.action === "submit")).toHaveLength(1);
   });
 
   it("a stale submit names the conflict and offers the reload, not a re-send", async () => {
