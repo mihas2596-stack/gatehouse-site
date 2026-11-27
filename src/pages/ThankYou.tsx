@@ -177,6 +177,8 @@ const ThankYou = () => {
         // explicit confirm — once per booking (the bt token is hashed
         // inside trackFunnel, never stored or sent).
         trackFunnel("gh_card_saved", { form_type: "quote" }, bt);
+      } else if (res.status === 409 && data.error === "visit_cancelled") {
+        setCard({ kind: "cancelled" });
       } else if (data.error === "card_unavailable") {
         // The chosen card disappeared between the list and the
         // confirm: re-read the list and say so.
@@ -203,12 +205,16 @@ const ThankYou = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bt, ...(setupAttempt ? { request_id: setupAttempt } : {}) }),
       });
-      const data = (await res.json()) as { ok?: boolean; url?: string };
+      const data = (await res.json()) as { ok?: boolean; url?: string; error?: string };
       if (res.ok && data.ok && typeof data.url === "string") {
         window.location.href = data.url;
         return;
       }
-      setStartError(true);
+      if (res.status === 409 && data.error === "visit_cancelled") {
+        setCard({ kind: "cancelled" });
+      } else {
+        setStartError(true);
+      }
       setStarting(false);
     } catch {
       setStartError(true);
