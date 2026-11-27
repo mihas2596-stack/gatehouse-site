@@ -95,6 +95,7 @@ export default async function handler(req: Req, res: Res) {
     return json(200, { ok: true, session: mintOwnerSessionToken(ADMIN_TOKEN, nowSec) });
   }
   if (!ADMIN_TOKEN || !RESEND_API_KEY) {
+    console.warn(JSON.stringify({ requestId, step: "owner_login_email_unconfigured" }));
     return json(500, { ok: false, error: "server_error" });
   }
 
@@ -112,11 +113,16 @@ export default async function handler(req: Req, res: Res) {
     // Throttle check failed — continue; the panel needs the DB anyway.
   }
 
-  const token = mintOwnerLoginToken(ADMIN_TOKEN, Math.floor(Date.now() / 1000));
-  const link = new URL(ownerPanelUrl(typeof body.visit === "string" ? body.visit : null));
-  link.hash = new URLSearchParams({ ol: token }).toString();
+  const emailFailed = (providerStatus?: number) => {
+    console.warn(JSON.stringify({ requestId, step: "owner_login_email_failed", providerStatus }));
+    return json(500, { ok: false, error: "email_failed" });
+  };
 
   try {
+    const token = mintOwnerLoginToken(ADMIN_TOKEN, Math.floor(Date.now() / 1000));
+    const link = new URL(ownerPanelUrl(typeof body.visit === "string" ? body.visit : null));
+    link.hash = new URLSearchParams({ ol: token }).toString();
+
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -128,10 +134,10 @@ export default async function handler(req: Req, res: Res) {
       }),
       signal: AbortSignal.timeout(15000),
     });
-    if (!r.ok) return json(500, { ok: false, error: "email_failed" });
+    if (!r.ok) return emailFailed(r.status);
     await logEvent(null, null, "owner", "owner_login_link_sent");
   } catch {
-    return json(500, { ok: false, error: "email_failed" });
+    return emailFailed();
   }
   return json(200, { ok: true });
 }

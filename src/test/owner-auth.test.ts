@@ -151,4 +151,23 @@ describe("owner-auth handler", () => {
     const r = await callAuth({ method: "POST", headers: {}, body: { action: "send" } });
     expect(r.body.ok).toBe(true);
   });
+
+  it("records a mail service rejection without exposing credentials or the sign-in link", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubEnv("SUPABASE_URL", "");
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401 } as Response);
+      const r = await callAuth({ method: "POST", headers: {}, body: { action: "send" } });
+      expect(r.status).toBe(500);
+      expect(r.body).toMatchObject({ ok: false, error: "email_failed" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(warn.mock.calls[0][0]))).toEqual({
+        requestId: r.body.requestId,
+        step: "owner_login_email_failed",
+        providerStatus: 401,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

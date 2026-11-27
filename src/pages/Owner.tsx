@@ -335,7 +335,7 @@ const Owner = () => {
   const [verifyingLogin, setVerifyingLogin] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
-  const [linkMsg, setLinkMsg] = useState("");
+  const [linkStatus, setLinkStatus] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [visits, setVisits] = useState<Visit[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1352,20 +1352,25 @@ const Owner = () => {
           <Button
             variant="hero"
             className="w-full"
+            disabled={linkStatus === "sending"}
             onClick={async () => {
-              setLinkMsg("");
+              setLinkStatus("sending");
               try {
                 const r = await fetch("/api/owner-auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send", visit: requestedVisitId }) });
                 const j = await r.json();
-                setLinkMsg(j?.ok ? "Check the owner inbox for a login link. If you requested one in the last 5 minutes, use that email and reopen your request." : "Couldn't send the link — try again in a minute.");
-              } catch {
-                setLinkMsg("Couldn't send the link — try again in a minute.");
-              }
+                if (r.ok && j?.ok) {
+                  setLinkStatus("sent");
+                  return;
+                }
+              } catch { /* The token form is available when email sign-in fails. */ }
+              setLinkStatus("failed");
+              setShowTokenForm(true);
             }}
           >
-            Send login link to my email
+            {linkStatus === "sending" ? "Sending sign-in link…" : "Send login link to my email"}
           </Button>
-          {linkMsg && <p className="text-sm mt-3">{linkMsg}</p>}
+          {linkStatus === "sent" && <p className="text-sm mt-3" role="status">Check the owner inbox for a login link. If you requested one in the last 5 minutes, use that email and reopen your request.</p>}
+          {linkStatus === "failed" && <p className="text-sm text-destructive mt-3" role="alert">We couldn’t send the sign-in link. Use your admin token or try email again.</p>}
           {!showTokenForm ? (
             <button type="button" className="text-sm underline text-muted-foreground mt-4" onClick={() => setShowTokenForm(true)}>
               Use admin token instead
@@ -1377,6 +1382,7 @@ const Owner = () => {
                 className="w-full border border-border rounded-lg px-3 py-2 mb-3 bg-background"
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
+                aria-label="Admin token"
                 placeholder="ADMIN_TOKEN"
               />
               <Button

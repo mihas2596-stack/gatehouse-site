@@ -26,7 +26,7 @@ function requestPath(id: string) {
 
 // Run the real email-link handler in the test process; only delivery and persistence are fixtures.
 // The URL is taken from the actual login email body and opened in a separate browser context.
-async function login(body: Record<string, unknown>) {
+async function login(body: Record<string, unknown>, mailStatus: number) {
   const originalFetch = globalThis.fetch;
   const owned = ["ADMIN_TOKEN", "RESEND_API_KEY", "SUPABASE_URL"] as const;
   const previous = owned.map(key => process.env[key]);
@@ -39,6 +39,7 @@ async function login(body: Record<string, unknown>) {
     delete process.env.SUPABASE_URL;
     globalThis.fetch = async (url, init) => {
       if (url !== "https://api.resend.com/emails") throw new Error("Unexpected mail fixture request");
+      if (mailStatus !== 200) return Response.json({}, { status: mailStatus });
       sentLink = JSON.parse(String(init?.body)).text.match(/https:\/\/[^\s]+/)[0];
       return Response.json({ id: "fixture-email" });
     };
@@ -58,13 +59,13 @@ async function login(body: Record<string, unknown>) {
   }
 }
 
-async function attachFixtures(context: BrowserContext, list = records) {
+async function attachFixtures(context: BrowserContext, list = records, mailStatus = 200) {
   const seen = { loginUrl: "", detailReads: 0 };
   await context.route("**/api/**", async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/api/owner-auth") {
-      const result = await login(request.postDataJSON());
+      const result = await login(request.postDataJSON(), mailStatus);
       if (result.sentLink) seen.loginUrl = result.sentLink;
       return route.fulfill({ status: result.code, json: result.payload });
     }
@@ -114,6 +115,25 @@ test("mobile owner opens the linked record after email sign-in in a fresh browse
   } finally {
     await initial.close();
     await signedIn.close();
+  }
+});
+
+test("mobile owner opens the same request with an admin token when email fails", async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 } });
+  try {
+    const seen = await attachFixtures(context, [other], 401);
+    const tab = await context.newPage();
+    await tab.goto(requestPath(first.id));
+    await tab.getByRole("button", { name: "Send login link to my email" }).click();
+    await expect(tab.getByRole("alert")).toContainText("We couldn’t send the sign-in link");
+    expect(seen.detailReads).toBe(0);
+    await tab.getByLabel("Admin token").fill(secret);
+    await tab.getByRole("button", { name: "Open with admin token" }).click();
+    await expect(tab.getByRole("heading", { name: first.client_name })).toBeVisible();
+    expect(new URL(tab.url()).searchParams.get("visit")).toBe(first.id);
+    expect(seen.detailReads).toBe(1);
+  } finally {
+    await context.close();
   }
 });
 
